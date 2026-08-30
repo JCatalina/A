@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A股高胜率技术指标与多维支撑压力位量化分析系统</title>
+    <!-- Google Fonts 现代金融字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css?v=2.0.3">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 顶部导航与大盘指数条 -->
+        <header class="app-header">
+            <div class="header-left">
+                <div class="logo-box">
+                    <div class="logo-glow"></div>
+                    <span class="logo-icon">⚡</span>
+                    <div class="logo-text">
+                        <span class="brand-title">A-QUANT MASTER</span>
+                        <span class="brand-subtitle">多维支撑压力·大概率预测决策系统</span>
+                    </div>
+                </div>
+
+                <!-- 页面视图切换 Tab -->
+                <div class="nav-view-switch">
+                    <button class="nav-tab active" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
+                    <button class="nav-tab" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
+                </div>
+            </div>
+
+            <!-- 大盘指数条 -->
+            <div class="market-ticker" id="marketTicker">
+                <div class="ticker-loading">正在同步市场大盘指数...</div>
+            </div>
+
+            <div class="header-right">
+                <!-- 股票搜索框 -->
+                <div class="search-box-wrapper" id="headerSearchWrapper">
+                    <input type="text" id="stockSearchInput" placeholder="输入代码 / 拼音 (如 600519, 宁德时代)..." autocomplete="off">
+                    <button class="search-btn" id="searchBtn">🔍 检索分析</button>
+                    <div class="search-dropdown" id="searchDropdown"></div>
+                </div>
+                <!-- 盘后全市场扫描按钮 -->
+                <button class="scan-action-btn" id="runScanBtn">
+                    <span class="scan-pulse"></span>
+                    🚀 盘后批量全扫描
+                </button>
+                <!-- 主题切换按钮 -->
+                <button class="theme-toggle-btn" id="themeToggleBtn" title="切换深色/明亮模式">
+                    🌓 切换模式
+                </button>
+            </div>
+        </header>
+
+        <!-- 扫描进度通知条 (隐藏状态) -->
+        <div class="scan-progress-bar-wrap" id="scanProgressWrap" style="display: none;">
+            <div class="progress-info">
+                <span id="scanStatusText">正在执行全A股多线程高胜率策略深度扫描...</span>
+                <span id="scanPercentText">0%</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill" id="scanProgressFill" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <!-- 主内容工作区 1: 个股看板 (左右双分栏) -->
+        <main class="main-workspace active-view" id="stockWorkspace">
+            
+            <!-- 左侧核心分析看板 (占 70% 宽) -->
+            <section class="left-chart-panel">
+                <!-- 个股主状态卡片 -->
+                <div class="stock-summary-bar" id="stockSummaryBar">
+                    <div class="stock-name-tag">
+                        <h1 class="stock-title" id="stockTitle">贵州茅台</h1>
+                        <span class="stock-code-badge" id="stockCodeBadge">600519.SH</span>
+                        <span class="stock-industry-badge" id="stockIndustryBadge">白酒</span>
+                    </div>
+                    <div class="stock-price-box">
+                        <span class="current-price" id="currentPrice">--</span>
+                        <span class="change-pct-badge" id="changePct">--%</span>
+                    </div>
+                    <div class="stock-metrics-group">
+                        <div class="metric-item">
+                            <span class="m-label">换手率</span>
+                            <span class="m-val" id="metricTurnover">--%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="m-label">获利盘比例</span>
+                            <span class="m-val" id="metricProfitRatio">--%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="m-label">90%筹码集中度</span>
+                            <span class="m-val" id="metricConc90">--%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="m-label">周K大趋势</span>
+                            <span class="m-val highlight" id="metricWeeklyTrend">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 图表控制与副图切换栏 -->
+                <div class="chart-toolbar">
+                    <div class="period-toggle-group">
+                        <button class="tab-btn active" data-period="daily">日K线 (短线波段)</button>
+                        <button class="tab-btn" data-period="weekly">周K线 (中线大势)</button>
+                    </div>
+                    <div class="indicator-layers-group">
+                        <label class="layer-checkbox"><input type="checkbox" id="layerSupport" checked> <span>🟢 强支撑带(S1-S3)</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerResistance" checked> <span>🔴 强压力带(R1-R3)</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerBoll" checked> <span>布林通道</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerChips" checked> <span>右侧筹码直方图</span></label>
+                    </div>
+                    <div class="subchart-toggle-group">
+                        <span class="sub-label">副图:</span>
+                        <button class="sub-btn active" data-sub="MACD">MACD背离</button>
+                        <button class="sub-btn" data-sub="KDJ">KDJ动量</button>
+                        <button class="sub-btn" data-sub="VOL">成交量</button>
+                    </div>
+                </div>
+
+                <!-- K线与筹码分布图表容器 -->
+                <div class="charts-master-container">
+                    <div class="kline-viewport" id="klineChart"></div>
+                    <!-- 筹码分布横向侧挂图 -->
+                    <div class="chips-viewport" id="chipsChart"></div>
+                </div>
+
+                <!-- 关键支撑/压力带共振明细表 -->
+                <div class="levels-detail-card">
+                    <div class="card-header-sm">
+                        <span class="header-icon">🎯</span>
+                        <span class="header-title">多维支撑位与压力位共振解析矩阵</span>
+                        <span class="header-tip">（基于筹码密集峰、大周期生命线、前高低结构、缺口与黄金分割共振聚类）</span>
+                    </div>
+                    <div class="levels-grid" id="levelsGrid">
+                        <!-- 动态填充支撑与压力条目 -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- 右侧决策与智能选股面板 (占 30% 宽) -->
+            <aside class="right-decision-panel">
+                
+                <!-- 1. AI与量化走势概率预测罗盘 -->
+                <div class="glass-card prediction-compass-card">
+                    <div class="card-header">
+                        <span class="header-badge">PROBABILITY</span>
+                        <h2>大概率走势与胜率预测</h2>
+                    </div>
+
+                    <!-- 胜率概率主展示 -->
+                    <div class="probability-hero-box">
+                        <div class="prob-dial-wrap">
+                            <div class="prob-gauge" id="probGaugeChart"></div>
+                            <div class="prob-score-center">
+                                <span class="prob-number" id="bullishProbNum">--</span>
+                                <span class="prob-unit">%</span>
+                                <span class="prob-subtext">多头胜率期望</span>
+                            </div>
+                        </div>
+
+                        <!-- 交易信号胶囊 -->
+                        <div class="signal-capsule" id="signalCapsule">
+                            <div class="signal-icon" id="signalIcon">⭐</div>
+                            <div class="signal-info">
+                                <div class="signal-title" id="signalTitle">正在计算中...</div>
+                                <div class="signal-desc" id="signalDesc">综合多维技术特征计算中</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 历史回测胜率对比栏 -->
+                    <div class="historical-backtest-box">
+                        <div class="ht-title">📊 历史相似形态回测胜率（最近2年）：</div>
+                        <div class="ht-grid">
+                            <div class="ht-col">
+                                <span class="ht-lbl">5日上涨胜率</span>
+                                <span class="ht-val" id="htWin5d">--%</span>
+                            </div>
+                            <div class="ht-col">
+                                <span class="ht-lbl">10日突破胜率</span>
+                                <span class="ht-val highlight" id="htWin10d">--%</span>
+                            </div>
+                            <div class="ht-col">
+                                <span class="ht-lbl">20日波段胜率</span>
+                                <span class="ht-val" id="htWin20d">--%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 四维量化评分雷达图 -->
+                    <div class="radar-chart-container" id="radarChart"></div>
+                </div>
+
+                <!-- 2. 结构化量化交易计划卡 (Trade Plan) -->
+                <div class="glass-card trade-plan-card">
+                    <div class="card-header">
+                        <span class="header-badge cyan">PLAN</span>
+                        <h2>结构化量化交易计划</h2>
+                    </div>
+                    <div class="plan-content" id="planContent">
+                        <div class="plan-row">
+                            <span class="plan-label">🎯 建议建仓区间:</span>
+                            <span class="plan-val font-mono green" id="planEntry">-- ~ --</span>
+                        </div>
+                        <div class="plan-row">
+                            <span class="plan-label">🚀 目标止盈位 (R1):</span>
+                            <span class="plan-val font-mono cyan" id="planTp1">-- (<span id="planTp1Gain">--%</span>)</span>
+                        </div>
+                        <div class="plan-row">
+                            <span class="plan-label">🛡️ 极限防守止损 (S1):</span>
+                            <span class="plan-val font-mono red" id="planSl">-- (<span id="planSlRisk">--%</span>)</span>
+                        </div>
+                        <div class="plan-row divider">
+                            <span class="plan-label">⚖️ 期望盈亏比 (R:R):</span>
+                            <span class="plan-val highlight-gold" id="planRr">-- : 1 (<span id="planRrQuality">--</span>)</span>
+                        </div>
+                        <div class="plan-row">
+                            <span class="plan-label">⏱️ 建议持仓周期:</span>
+                            <span class="plan-val" id="planPeriod">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. 高胜率选股雷达池 (Screener Radar) -->
+                <div class="glass-card screener-card">
+                    <div class="card-header">
+                        <span class="header-badge gold">SCREENER</span>
+                        <h2>高胜率选股雷达池</h2>
+                    </div>
+
+                    <!-- 策略切换标签 -->
+                    <div class="screener-tabs">
+                        <button class="sc-tab active" data-strategy="ALL">全部高胜率</button>
+                        <button class="sc-tab" data-strategy="SUPPORT_PULLBACK">回踩强支撑</button>
+                        <button class="sc-tab" data-strategy="BREAKOUT_PRESSURE">放量突破</button>
+                        <button class="sc-tab" data-strategy="MAIN_WAVE_TREND">中线主升浪</button>
+                    </div>
+
+                    <!-- 选股列表 -->
+                    <div class="screener-list" id="screenerList">
+                        <div class="screener-loading">正在载入高胜率标的...</div>
+                    </div>
+                </div>
+
+            </aside>
+        </main>
+
+        <!-- 主内容工作区 2: 大盘多周期指数研判 (Macro Index Workspace) -->
+        <main class="index-macro-workspace" id="indexWorkspace" style="display: none;">
+            
+            <!-- 顶部指数选择胶囊栏 -->
+            <div class="macro-index-nav">
+                <div class="index-capsule-tabs" id="indexCapsuleTabs">
+                    <button class="index-capsule-btn active" data-symbol="sh000001">📊 上证指数</button>
+                    <button class="index-capsule-btn" data-symbol="sz399006">🚀 创业板指</button>
+                    <button class="index-capsule-btn" data-symbol="sh000688">⚙️ 科创50</button>
+                    <button class="index-capsule-btn" data-symbol="sz399001">📈 深证成指</button>
+                </div>
+                <div class="index-status-summary-tag" id="macroIndexStatusTag">
+                    <span class="idx-name" id="macroIndexName">上证指数</span>
+                    <span class="idx-price" id="macroIndexPrice">--</span>
+                    <span class="idx-chg" id="macroIndexChg">--%</span>
+                    <span class="idx-sub" id="macroIndexDesc">A股核心风向标/大盘主板</span>
+                </div>
+            </div>
+
+            <!-- 核心结论大卡片 (与用户截图对齐) -->
+            <div class="macro-conclusion-card">
+                <div class="card-header-row">
+                    <div class="header-left-title">
+                        <span class="dot-indicator"></span>
+                        <h2>◎ 核心研判结论</h2>
+                    </div>
+                    <div class="header-right-meta" id="macroUpdateMeta">当前数据实时多周期同步</div>
+                </div>
+
+                <!-- 正式操作许可大文字框 -->
+                <div class="op-license-box">
+                    <div class="op-license-sub">正式操作许可</div>
+                    <div class="op-license-main" id="opLicenseMain">大方向不明，先观望</div>
+                    <div class="op-license-desc" id="opLicenseDesc">完整周线当前方向不明确；短周期信号不能代替大方向，当前建议先观望。</div>
+                    <div class="op-license-pos" id="opLicensePos">
+                        <span>建议总体仓位:</span>
+                        <strong class="highlight-gold" id="opPosText">30% ~ 50%</strong>
+                    </div>
+                </div>
+
+                <!-- 结论四维度解析条目 (卡片矩阵) -->
+                <div class="conclusion-points-grid">
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">大级别方向 · 已完成周期</span>
+                            <h3 id="macroPoint1Title">中期方向暂不明确</h3>
+                        </div>
+                        <p class="point-text" id="macroPoint1Content">最近完整周线处于中枢震荡阶段，周线均线未见大级别极端发散。大周期位置辅助判断为周线中性，不单独触发激进买卖。</p>
+                    </div>
+
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">当前时点 · 日线与30/60分钟</span>
+                            <h3 id="macroPoint2Title">30分钟和60分钟仍偏强，关注日线确认</h3>
+                        </div>
+                        <p class="point-text" id="macroPoint2Content">短周期分时偏强但尚未完全升级为日线大级别反弹确认，当前不把分时脉冲解释为大级别反转。</p>
+                    </div>
+
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">相较上一收盘</span>
+                            <h3 id="macroPoint3Title">方向分较上一交易日微幅改善</h3>
+                        </div>
+                        <p class="point-text" id="macroPoint3Content">短线价格斜率与动能略有企稳迹象，形成中线未突破前不改变正式操作许可。</p>
+                    </div>
+
+                    <div class="point-card highlight-card">
+                        <div class="point-header">
+                            <span class="point-badge green">下一步等待与防守底线</span>
+                            <h3 id="macroPoint4Title">等待大级别放量突破或回踩企稳</h3>
+                        </div>
+                        <p class="point-text" id="macroPoint4Content">完整周线重新转为偏上之前，即使分钟线反弹也只按弱势修复对待；严格防守下方关键支撑带。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 大盘多维支撑位与压力位矩阵 -->
+            <div class="macro-levels-banner">
+                <div class="macro-levels-col support">
+                    <div class="macro-level-title">🟢 大盘核心支撑价格带 (下探低吸/防守线)</div>
+                    <div class="macro-level-items" id="macroSupportItems">
+                        <!-- 动态填充支撑 -->
+                    </div>
+                </div>
+                <div class="macro-levels-col resistance">
+                    <div class="macro-level-title">🔴 大盘核心压力价格带 (冲高止盈/遇阻区)</div>
+                    <div class="macro-level-items" id="macroResistanceItems">
+                        <!-- 动态填充压力 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 多周期研判对比四联卡片 (30分钟 / 60分钟 / 日线 / 周线) -->
+            <div class="periods-quad-container">
+                <div class="section-title-bar">
+                    <span class="title-icon">📊</span>
+                    <h2>指数多周期结构剖析与理解矩阵</h2>
+                    <span class="title-sub">（30分钟捕捉超短节奏，60分钟确认盘中延续，日线决定波段，周线定战略仓位）</span>
+                </div>
+                <div class="periods-quad-grid" id="periodsQuadGrid">
+                    <!-- 动态生成 30分钟、60分钟、日线、周线 卡片 -->
+                </div>
+            </div>
+
+            <!-- 大盘K线图表视窗 -->
+            <div class="macro-chart-box">
+                <div class="macro-chart-toolbar">
+                    <span class="m-chart-title">大盘指数多周期走势图</span>
+                    <div class="m-period-btns">
+                        <button class="m-btn active" data-scale="240">日K线</button>
+                        <button class="m-btn" data-scale="1200">周K线</button>
+                        <button class="m-btn" data-scale="60">60分钟</button>
+                        <button class="m-btn" data-scale="30">30分钟</button>
+                    </div>
+                </div>
+                <div class="macro-kline-container" id="macroKlineChart" style="width: 100%; height: 480px; min-height: 480px;"></div>
+            </div>
+
+        </main>
+
+    </div>
+
+    <!-- 前端业务脚本 -->
+    <script src="/static/app.js?v=2.0.4"></script>
+</body>
+</html>
