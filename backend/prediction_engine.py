@@ -291,11 +291,12 @@ class PredictionEngine:
         cost_pct = PredictionEngine.TRANSACTION_COST_PCT * 2  # 双向成本
         expected_gain_pct = round((tp_1 - current_price) / current_price * 100 - cost_pct, 2)
         expected_loss_pct = round((current_price - stop_loss) / current_price * 100 + cost_pct, 2)
-        
-        if expected_loss_pct > 0:
-            rr_ratio = round(max(expected_gain_pct, 0) / expected_loss_pct, 2)
+
+        # v2.2 修复: 止损价≥现价(破位跳空场景)或盈利空间为负时，盈亏比置零而非硬编码3.0
+        if expected_loss_pct > 0 and expected_gain_pct > 0:
+            rr_ratio = round(expected_gain_pct / expected_loss_pct, 2)
         else:
-            rr_ratio = 3.0
+            rr_ratio = 0.0
 
         trade_plan = {
             "entry_range": [entry_low, entry_high],
@@ -305,7 +306,7 @@ class PredictionEngine:
             "stop_loss": stop_loss,
             "stop_loss_risk": f"-{expected_loss_pct:.1f}%",
             "rr_ratio": rr_ratio,
-            "rr_quality": "极佳 (≥3:1)" if rr_ratio >= 3.0 else ("良好 (≥2:1)" if rr_ratio >= 2.0 else "一般 (<2:1)"),
+            "rr_quality": "异常（止损位≥现价或无盈利空间，禁止入场）" if rr_ratio <= 0 else ("极佳 (≥3:1)" if rr_ratio >= 3.0 else ("良好 (≥2:1)" if rr_ratio >= 2.0 else "一般 (<2:1)")),
             "holding_period": "3 ~ 8 个交易日 (短线波段)" if bullish_prob >= 70 else "1 ~ 3 个月 (中线波段)",
             "stop_loss_method": "ATR动态止损 + 固定比例取保守值"
         }
@@ -398,10 +399,11 @@ class PredictionEngine:
     ) -> Dict[str, Any]:
         """
         在历史K线中回测相似形态的上涨概率统计
-        P0改进：
+        v2.2 改进：
         1. 数据不足时返回 insufficient_data 而非虚假高胜率
-        2. 严格使用收盘价判断胜负
+        2. 路径依赖止损模拟：持仓期间盘中低点触碰 2×ATR 动态止损线则视为止损出局(亏损)
         3. 扣除交易成本
+        4. 样本去重叠间隔提升至 10 根K线，降低 10日/20日窗口自相关
         """
         cost = PredictionEngine.TRANSACTION_COST_PCT * 2  # 双向成本 ~1%
 
@@ -430,12 +432,16 @@ class PredictionEngine:
 
         df = df.copy()
         closes = df['close'].values
+        lows = df['low'].values
         ma20 = df['ma_20'].values
         kdj_j = df['kdj_j'].values
+        atrs = df['atr'].values if 'atr' in df.columns else np.full(len(df), 0.0)
 
         n = len(df)
         samples = []
-        last_sample_i = -100  # 样本去重叠: 相邻触发点至少间隔5根K线，降低自相关导致的置信度虚高
+        # v2.2: 样本去重叠间隔从5提升至10根K线，降低10日/20日持仓窗口的自相关
+        MIN_SAMPLE_GAP = 10
+        last_sample_i = -100
 
         # 遍历历史数据（预留最后20天用于验证）
         for i in range(30, n - 20):
@@ -456,16 +462,31 @@ class PredictionEngine:
                 if df['ma_60'].iloc[i] > df['ma_20'].iloc[i]:
                     match = False
 
-            if match and (i - last_sample_i) >= 5:
-                # 记录未来 5, 10, 20 天的表现 (严格使用收盘价, 扣除交易成本)
-                gain_5d = (closes[i+5] - p) / p * 100 - cost
-                gain_10d = (closes[i+10] - p) / p * 100 - cost
-                gain_20d = (closes[i+20] - p) / p * 100 - cost
+            if match and (i - last_sample_i) >= MIN_SAMPLE_GAP:
+                # v2.2 路径依赖止损模拟: 持仓期间若盘中最低价触碰动态止损线则视为止损出局
+                atr_i = float(atrs[i]) if pd.notna(atrs[i]) and atrs[i] > 0 else p * 0.02
+                stop_loss_price = p - 2.0 * atr_i
+
+                def _path_aware_gain(horizon: int) -> float:
+                    """路径依赖收益: 先检查持仓期间是否触碰止损，再按终点结算"""
+                    for t in range(1, horizon + 1):
+                        if i + t >= n:
+                            break
+                        if lows[i + t] <= stop_loss_price:
+                            # 盘中触碰止损线，以止损价结算 (实际滑点可能更差)
+                            return (stop_loss_price - p) / p * 100 - cost
+                    # 未触碰止损，按终点收盘价结算
+                    end_idx = min(i + horizon, n - 1)
+                    return (closes[end_idx] - p) / p * 100 - cost
+
+                gain_5d = _path_aware_gain(5)
+                gain_10d = _path_aware_gain(10)
+                gain_20d = _path_aware_gain(20)
 
                 samples.append({
-                    "win_5d": gain_5d > 0,      # 严格: 5日收盘价扣费后为正
-                    "win_10d": gain_10d > 0,     # 严格: 10日收盘价扣费后为正
-                    "win_20d": gain_20d > 0,     # 严格: 20日收盘价扣费后为正
+                    "win_5d": gain_5d > 0,
+                    "win_10d": gain_10d > 0,
+                    "win_20d": gain_20d > 0,
                     "gain_10d": gain_10d
                 })
                 last_sample_i = i

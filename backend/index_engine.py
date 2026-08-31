@@ -203,10 +203,15 @@ class IndexEngine:
         slope_text = f"{slope_sign}{slope:.2f} ATR/根"
 
         # 2. 计算方向分 G (-1.0 到 +1.0)
+        # v2.2: 将MA20/MA60位置判定从离散阶跃改为ATR标准化的连续平滑函数
+        # 消除价格在均线附近窄幅波动时方向分抖动±0.60的问题
         prev_hist = float(prev_row.get("macd_hist", 0) or 0)
         g_score = 0.0
-        if c > ma20: g_score += 0.3
-        if ma20 > ma60: g_score += 0.2
+        atr_smooth = max(atr, c * 0.005)  # 防零保护
+        # MA20: 连续平滑评分 [-0.30, +0.30], 远离MA20时趋近满分
+        g_score += 0.30 * float(np.tanh((c - ma20) / (0.5 * atr_smooth)))
+        # MA60: 连续平滑评分 [-0.20, +0.20]
+        g_score += 0.20 * float(np.tanh((ma20 - ma60) / (0.5 * atr_smooth)))
         if hist > 0 and hist >= prev_hist:
             g_score += 0.25  # 红柱且发散(柱体抬升)
         elif hist > 0:
@@ -215,9 +220,7 @@ class IndexEngine:
         if kdj_j < 30: g_score += 0.1 # 超卖酝酿
         elif kdj_j > 90: g_score -= 0.15 # 超买
 
-        # 负向扣分
-        if c < ma20: g_score -= 0.3
-        if ma20 < ma60: g_score -= 0.2
+        # 负向扣分: MACD绿柱 (MA20/MA60负向已包含在tanh连续评分中)
         if hist < 0: g_score -= 0.25
 
         g_score = max(-0.95, min(0.95, g_score))

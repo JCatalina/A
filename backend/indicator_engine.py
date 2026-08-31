@@ -311,7 +311,10 @@ class IndicatorEngine:
     def detect_macd_divergence(df: pd.DataFrame) -> Dict[str, Any]:
         """
         智能检测 MACD 顶底背离
-        改进：同时检测DIF的局部极值点，而不仅用收盘价极值
+        v2.2 改进：
+        - 同时检测DIF的局部极值点，而不仅用收盘价极值
+        - 修复前视偏误：对最后2根K线采用左侧单边确认（仅需左侧3根K线），
+          不再要求右侧未来数据验证，消除信号延迟2-3天的问题
         """
         if len(df) < 30:
             return {"bullish_divergence": False, "bearish_divergence": False, "detail": "数据样本不足"}
@@ -320,66 +323,90 @@ class IndicatorEngine:
         closes = sub['close'].values
         difs = sub['macd_dif'].values
         dates = sub['date'].values
+        n_sub = len(sub)
 
         # DIF 显著变化阈值随个股价格尺度自适应: max(0.03, 0.05 × ATR)
-        # (固定0.03对高价股是噪声、对低价股永远达不到)
         atr_last = float(df['atr'].iloc[-1]) if 'atr' in df.columns and pd.notna(df['atr'].iloc[-1]) else 0.0
         dif_eps = max(0.03, 0.05 * atr_last)
-        MIN_PIVOT_GAP = 5  # 双底/双顶两个极值点至少间隔5根K线，避免相邻极值误判
+        MIN_PIVOT_GAP = 5
 
         bullish_div = False
         bearish_div = False
         bullish_detail = ""
         bearish_detail = ""
 
-        # 底背离：同时检测价格双底和DIF局部极低点
-        # 步骤1：找价格的局部极小值
-        price_min_indices = []
-        for i in range(2, len(sub) - 2):
-            if closes[i] <= min(closes[max(0, i-3):i+4]):
-                price_min_indices.append(i)
+        # v2.2: 统一的极值点检测，包含左侧单边确认（解决前视偏误）
+        def _find_pivots_min(values):
+            """找局部极小值：完整确认(前后各3根) + 末端左侧单边确认"""
+            pivots = []
+            # 完整双侧确认区域: [2, n-3)
+            for i in range(2, n_sub - 2):
+                if values[i] <= min(values[max(0, i-3):i+4]):
+                    pivots.append((i, True))  # (index, is_confirmed)
+            # v2.2 末端左侧单边确认: 最后2根K线仅用左侧3根验证
+            for i in range(max(2, n_sub - 2), n_sub):
+                left_window = values[max(0, i-3):i]
+                if len(left_window) > 0 and values[i] <= min(left_window):
+                    # 确保不与已确认极值重复
+                    if not pivots or pivots[-1][0] != i:
+                        pivots.append((i, False))  # 未完全确认
+            return pivots
 
-        # 步骤2：找DIF的局部极小值
-        dif_min_indices = []
-        for i in range(2, len(sub) - 2):
-            if difs[i] <= min(difs[max(0, i-3):i+4]):
-                dif_min_indices.append(i)
+        def _find_pivots_max(values):
+            """找局部极大值：完整确认(前后各3根) + 末端左侧单边确认"""
+            pivots = []
+            for i in range(2, n_sub - 2):
+                if values[i] >= max(values[max(0, i-3):i+4]):
+                    pivots.append((i, True))
+            for i in range(max(2, n_sub - 2), n_sub):
+                left_window = values[max(0, i-3):i]
+                if len(left_window) > 0 and values[i] >= max(left_window):
+                    if not pivots or pivots[-1][0] != i:
+                        pivots.append((i, False))
+            return pivots
 
-        # 底背离判定：价格创新低但DIF极值抬高
-        if len(price_min_indices) >= 2:
-            i2 = price_min_indices[-1]
-            i1_candidates = [i for i in price_min_indices[:-1] if i2 - i >= MIN_PIVOT_GAP]
+        # 底背离检测
+        price_min_pivots = _find_pivots_min(closes)
+        if len(price_min_pivots) >= 2:
+            i2, i2_confirmed = price_min_pivots[-1]
+            i1_candidates = [(idx, conf) for idx, conf in price_min_pivots[:-1]
+                             if i2 - idx >= MIN_PIVOT_GAP]
             if i1_candidates:
-                i1 = i1_candidates[-1]
-                # 找到对应的DIF极小值（在价格极值附近±3根K线范围内）
-                dif_at_p1 = min(difs[max(0, i1-3):min(len(difs), i1+4)])
-                dif_at_p2 = min(difs[max(0, i2-3):min(len(difs), i2+4)])
-                # 价格创新低或持平，但DIF极值显著抬高
-                if closes[i2] <= closes[i1] * 1.01 and dif_at_p2 > dif_at_p1 + dif_eps:
+                i1, _ = i1_candidates[-1]
+                dif_at_p1 = min(difs[max(0, i1-3):min(n_sub, i1+4)])
+                # 对末端未确认极值，DIF搜索范围仅用左侧
+                if i2_confirmed:
+                    dif_at_p2 = min(difs[max(0, i2-3):min(n_sub, i2+4)])
+                else:
+                    dif_at_p2 = min(difs[max(0, i2-3):i2+1])
+                # 未确认极值使用更严格的阈值（×1.5），降低假阳性
+                effective_eps = dif_eps * 1.5 if not i2_confirmed else dif_eps
+                if closes[i2] <= closes[i1] * 1.01 and dif_at_p2 > dif_at_p1 + effective_eps:
                     bullish_div = True
-                    bullish_detail = f"日K底背离：{dates[i2]} 价格探底 {closes[i2]:.2f} 与 {dates[i1]} ({closes[i1]:.2f}) 形成双底，DIF动量背离走强 ({dif_at_p2:.3f} > {dif_at_p1:.3f})"
+                    confirm_tag = "" if i2_confirmed else "（待确认）"
+                    bullish_detail = (f"日K底背离{confirm_tag}：{dates[i2]} 价格探底 {closes[i2]:.2f} "
+                                      f"与 {dates[i1]} ({closes[i1]:.2f}) 形成双底，"
+                                      f"DIF动量背离走强 ({dif_at_p2:.3f} > {dif_at_p1:.3f})")
 
-        # 顶背离：价格创新高但DIF极值降低
-        price_max_indices = []
-        for i in range(2, len(sub) - 2):
-            if closes[i] >= max(closes[max(0, i-3):i+4]):
-                price_max_indices.append(i)
-
-        dif_max_indices = []
-        for i in range(2, len(sub) - 2):
-            if difs[i] >= max(difs[max(0, i-3):i+4]):
-                dif_max_indices.append(i)
-
-        if len(price_max_indices) >= 2:
-            j2 = price_max_indices[-1]
-            j1_candidates = [j for j in price_max_indices[:-1] if j2 - j >= MIN_PIVOT_GAP]
+        # 顶背离检测
+        price_max_pivots = _find_pivots_max(closes)
+        if len(price_max_pivots) >= 2:
+            j2, j2_confirmed = price_max_pivots[-1]
+            j1_candidates = [(idx, conf) for idx, conf in price_max_pivots[:-1]
+                             if j2 - idx >= MIN_PIVOT_GAP]
             if j1_candidates:
-                j1 = j1_candidates[-1]
-                dif_at_j1 = max(difs[max(0, j1-3):min(len(difs), j1+4)])
-                dif_at_j2 = max(difs[max(0, j2-3):min(len(difs), j2+4)])
-                if closes[j2] >= closes[j1] * 0.99 and dif_at_j2 < dif_at_j1 - dif_eps:
+                j1, _ = j1_candidates[-1]
+                dif_at_j1 = max(difs[max(0, j1-3):min(n_sub, j1+4)])
+                if j2_confirmed:
+                    dif_at_j2 = max(difs[max(0, j2-3):min(n_sub, j2+4)])
+                else:
+                    dif_at_j2 = max(difs[max(0, j2-3):j2+1])
+                effective_eps = dif_eps * 1.5 if not j2_confirmed else dif_eps
+                if closes[j2] >= closes[j1] * 0.99 and dif_at_j2 < dif_at_j1 - effective_eps:
                     bearish_div = True
-                    bearish_detail = f"日K顶背离：{dates[j2]} 价格冲高 {closes[j2]:.2f} 但DIF动能衰减 ({dif_at_j2:.3f} < {dif_at_j1:.3f})"
+                    confirm_tag = "" if j2_confirmed else "（待确认）"
+                    bearish_detail = (f"日K顶背离{confirm_tag}：{dates[j2]} 价格冲高 {closes[j2]:.2f} "
+                                      f"但DIF动能衰减 ({dif_at_j2:.3f} < {dif_at_j1:.3f})")
 
         return {
             "bullish_divergence": bullish_div,

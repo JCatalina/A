@@ -178,7 +178,7 @@ class ClusterEngine:
 
     @staticmethod
     def _cluster_levels(items: List[Dict[str, Any]], tolerance_pct: float, is_support: bool) -> List[Dict[str, Any]]:
-        """聚类算法：将相近价格合并为一个价格带"""
+        """聚类算法：将相近价格合并为一个价格带（v2.2: 增加最大绝对跨度约束防止链式滚雪球）"""
         if not items:
             return []
 
@@ -189,8 +189,14 @@ class ClusterEngine:
 
         for item in items[1:]:
             prev_center = sum(x["price"] for x in current_cluster) / len(current_cluster)
-            # 判断是否在容差范围内
-            if abs(item["price"] - prev_center) / prev_center <= tolerance_pct:
+            # v2.2: 除了检查与均值中心的相对距离，还限制聚类的绝对最大跨度
+            # 防止连续分布的候选价格(如每两个相距1.3%)链式合并为跨度远超容差的巨型Cluster
+            anchor_price = current_cluster[0]["price"]
+            max_span = anchor_price * tolerance_pct * 2  # 最大绝对跨度 = 2倍容差
+            within_tolerance = abs(item["price"] - prev_center) / prev_center <= tolerance_pct
+            within_max_span = abs(item["price"] - anchor_price) <= max_span
+
+            if within_tolerance and within_max_span:
                 current_cluster.append(item)
             else:
                 clusters.append(current_cluster)
