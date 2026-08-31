@@ -13,10 +13,14 @@ class ClusterEngine:
         current_price: float,
         indicators_daily: Dict[str, Any],
         indicators_weekly: Optional[Dict[str, Any]] = None,
-        tolerance_pct: float = 0.015
+        tolerance_pct: float = 0.015,
+        indicators_60m: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        聚类计算多维支撑带与压力带
+        聚类计算多维支撑带与压力带 (v2.3 全面升级)
+        - 覆盖日线、周线全级别均线体系与 60分钟分时共振
+        - 消除盲区死区，确保临界均线不丢失
+        - 完整标注 S1~S5 与 R1~R5
         """
         if current_price <= 0:
             return {"supports": [], "resistances": [], "nearest_support": None, "nearest_resistance": None}
@@ -32,11 +36,12 @@ class ClusterEngine:
 
         last_row = df_d.iloc[-1]
 
-        # 1. 均线系统候选
+        # 1. 日K均线系统候选 (补充MA30)
         ma_weights = {
             "ma_5": (8, "日线MA5"),
             "ma_10": (12, "日线MA10"),
             "ma_20": (20, "日线MA20(月线生命线)"),
+            "ma_30": (22, "日线MA30(中期防守线)"),
             "ma_60": (28, "日线MA60(中线生命线)"),
             "ma_120": (25, "日线MA120(半年线)"),
             "ma_250": (30, "日线MA250(牛熊年线)"),
@@ -54,17 +59,24 @@ class ClusterEngine:
                     "category": "MA_CHANNEL"
                 })
 
-        # 2. 周K线关键均线
+        # 2. 周K线全级别关键均线 (v2.3 扩充周MA5/10/30/120/250/中轨)
         if indicators_weekly:
             df_w = indicators_weekly.get("df", pd.DataFrame())
             if not df_w.empty:
                 last_w = df_w.iloc[-1]
-                for w_key, label, weight in [
+                weekly_mas = [
+                    ("ma_5", "周线MA5(短线进攻线)", 18),
+                    ("ma_10", "周线MA10(短线波段线)", 20),
                     ("ma_20", "周线MA20(大级别主升生命线)", 30),
+                    ("ma_30", "周线MA30(中期趋势线)", 25),
                     ("ma_60", "周线MA60(大级别强支撑/压力)", 32),
+                    ("ma_120", "周线MA120(超大级别半年线)", 30),
+                    ("ma_250", "周线MA250(超大级别牛熊年线)", 32),
                     ("boll_lower", "周线布林下轨", 22),
-                    ("boll_upper", "周线布林上轨", 22)
-                ]:
+                    ("boll_upper", "周线布林上轨", 22),
+                    ("boll_mid", "周线布林中轨", 18)
+                ]
+                for w_key, label, weight in weekly_mas:
                     if w_key in last_w and pd.notna(last_w[w_key]) and last_w[w_key] > 0:
                         raw_candidates.append({
                             "price": float(last_w[w_key]),
@@ -73,7 +85,27 @@ class ClusterEngine:
                             "category": "WEEKLY_MA"
                         })
 
-        # 3. 筹码分布候选
+        # 3. 60分钟分时波段共振候选 (v2.3 新增)
+        if indicators_60m:
+            df_60 = indicators_60m.get("df", pd.DataFrame())
+            if not df_60.empty:
+                last_60 = df_60.iloc[-1]
+                for m60_key, label, weight in [
+                    ("ma_20", "60分MA20(分时波段线)", 14),
+                    ("ma_60", "60分MA60(分时生命线)", 20),
+                    ("ma_120", "60分MA120(分时半年线)", 22),
+                    ("boll_lower", "60分布林下轨", 14),
+                    ("boll_upper", "60分布林上轨", 14)
+                ]:
+                    if m60_key in last_60 and pd.notna(last_60[m60_key]) and last_60[m60_key] > 0:
+                        raw_candidates.append({
+                            "price": float(last_60[m60_key]),
+                            "weight": weight,
+                            "source": label,
+                            "category": "INTRADAY_60M"
+                        })
+
+        # 4. 筹码分布候选
         poc = chips_d.get("poc", 0)
         if poc > 0:
             raw_candidates.append({
@@ -106,7 +138,7 @@ class ClusterEngine:
                 "category": "CHIPS"
             })
 
-        # 4. 形态几何候选（前高前低、缺口、斐波那契）
+        # 5. 形态几何候选（前高前低、缺口、斐波那契）
         for sh in struct_d.get("swing_highs", []):
             raw_candidates.append({
                 "price": sh["price"],
@@ -147,9 +179,10 @@ class ClusterEngine:
                     "category": "FIBONACCI"
                 })
 
-        # 区分支撑（< current_price）与压力（> current_price）
-        supports_raw = [c for c in raw_candidates if c["price"] < current_price * 0.998]
-        resistances_raw = [c for c in raw_candidates if c["price"] > current_price * 1.002]
+        # 区分支撑（<= current_price * 0.9995）与压力（>= current_price * 1.0005）
+        # v2.3 修复: 消除 0.4% 死区，临近现价 0.05% 的均线/结构位不再被双向丢弃
+        supports_raw = [c for c in raw_candidates if c["price"] <= current_price * 0.9995]
+        resistances_raw = [c for c in raw_candidates if c["price"] >= current_price * 1.0005]
 
         # 聚类处理
         supports = ClusterEngine._cluster_levels(supports_raw, tolerance_pct, is_support=True)
@@ -159,10 +192,10 @@ class ClusterEngine:
         supports.sort(key=lambda x: x["center_price"], reverse=True)
         resistances.sort(key=lambda x: x["center_price"], reverse=False)
 
-        # 标记 S1, S2, S3 与 R1, R2, R3
-        for idx, s in enumerate(supports[:4]):
+        # 标记 S1~S5 与 R1~R5 (v2.3 修复: 完整打标前5级，消除None缺失)
+        for idx, s in enumerate(supports[:5]):
             s["label"] = f"S{idx + 1}"
-        for idx, r in enumerate(resistances[:4]):
+        for idx, r in enumerate(resistances[:5]):
             r["label"] = f"R{idx + 1}"
 
         nearest_s = supports[0] if supports else None

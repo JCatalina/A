@@ -261,7 +261,7 @@ class IndicatorEngine:
                     "price": round(float(low_i), 2)
                 })
 
-        # 2. 跳空缺口识别 (Gaps)
+        # 2. 跳空缺口识别 (Gaps) - v2.3 优化：将阈值从0.5%调整为0.2%，精准捕获大盘指数与个股的关键未补缺口
         gaps = []
         for i in range(1, len(df)):
             curr_low = df['low'].iloc[i]
@@ -270,7 +270,7 @@ class IndicatorEngine:
             prev_low = df['low'].iloc[i-1]
 
             # 向上跳空缺口 (支撑)
-            if curr_low > prev_high * 1.005: # 涨幅缺口 > 0.5%
+            if curr_low > prev_high * 1.002: # 涨幅缺口 > 0.2% (大盘指数如8-12点跳空均有效识别)
                 # 检查后续是否已被完全回补
                 future_lows = df['low'].iloc[i+1:]
                 filled = np.any(future_lows <= prev_high) if len(future_lows) > 0 else False
@@ -282,7 +282,7 @@ class IndicatorEngine:
                     "filled": bool(filled)
                 })
             # 向下跳空缺口 (阻力)
-            elif curr_high < prev_low * 0.995:
+            elif curr_high < prev_low * 0.998: # 跌幅缺口 > 0.2%
                 future_highs = df['high'].iloc[i+1:]
                 filled = np.any(future_highs >= prev_low) if len(future_highs) > 0 else False
                 gaps.append({

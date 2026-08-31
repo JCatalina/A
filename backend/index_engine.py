@@ -330,11 +330,11 @@ class IndexEngine:
 
         meta = INDEX_META_MAP[symbol]
 
-        # 1. 获取四大周期K线
+        # 1. 获取四大周期K线 (v2.3: 日K扩充至250根覆盖完整1年宏观周期，周K扩充至120根)
         df_30m = self.fetch_index_kline(symbol, scale="30", count=100)
         df_60m = self.fetch_index_kline(symbol, scale="60", count=100)
-        df_daily = self.fetch_index_kline(symbol, scale="240", count=180)
-        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=80)
+        df_daily = self.fetch_index_kline(symbol, scale="240", count=250)
+        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=120)
 
         if df_daily.empty:
             return {}
@@ -347,7 +347,7 @@ class IndexEngine:
             current_price = float(df_daily["close"].iloc[-1])
             change_pct = round(float(df_daily["change_pct"].iloc[-1]), 2)
 
-        # 2. 计算各周期全套指标与支撑/压力价格带
+        # 2. 计算各周期全套指标与支撑/压力价格带 (v2.3: 引入 60分钟分时波段共振)
         ind_daily = IndicatorEngine.calculate_all_indicators(df_daily)
         ind_weekly = IndicatorEngine.calculate_all_indicators(df_weekly) if not df_weekly.empty else None
         ind_60m = IndicatorEngine.calculate_all_indicators(df_60m) if not df_60m.empty else None
@@ -357,7 +357,8 @@ class IndexEngine:
             current_price=current_price,
             indicators_daily=ind_daily,
             indicators_weekly=ind_weekly,
-            tolerance_pct=0.012
+            tolerance_pct=0.012,
+            indicators_60m=ind_60m
         )
 
         # 3. 分析四大周期结构
@@ -371,11 +372,13 @@ class IndexEngine:
         g_weekly = float(period_weekly["direction_score"])
         g_60m = float(period_60m["direction_score"])
 
-        nearest_s = clustered_levels.get("nearest_support")
-        nearest_r = clustered_levels.get("nearest_resistance")
+        supports = clustered_levels.get("supports", [])
+        resistances = clustered_levels.get("resistances", [])
 
-        s1_price = nearest_s["center_price"] if nearest_s else round(current_price * 0.985, 2)
-        r1_price = nearest_r["center_price"] if nearest_r else round(current_price * 1.025, 2)
+        s1_price = supports[0]["center_price"] if len(supports) > 0 else round(current_price * 0.985, 2)
+        s2_price = supports[1]["center_price"] if len(supports) > 1 else round(s1_price * 0.98, 2)
+        r1_price = resistances[0]["center_price"] if len(resistances) > 0 else round(current_price * 1.025, 2)
+        r2_price = resistances[1]["center_price"] if len(resistances) > 1 else round(r1_price * 1.02, 2)
 
         # 核心操作许可判定
         if g_weekly >= 0.2 and g_daily >= 0.2:
@@ -399,7 +402,9 @@ class IndexEngine:
             op_color = IDX_COLOR_GOLD
             suggested_pos = "30% ~ 50% (中性防御)"
 
-        # 结构化核心结论段落
+        # 结构化核心结论段落 (v2.3: 联动多级支撑/压力)
+        s1_star = supports[0].get("stars", 3) if len(supports) > 0 else 3
+        r1_star = resistances[0].get("stars", 3) if len(resistances) > 0 else 3
         conclusion = {
             "op_license": op_license,
             "op_license_desc": op_license_desc,
@@ -413,7 +418,7 @@ class IndexEngine:
                 "title": "当前时点 (日线与30/60分钟)",
                 "content": f"30分钟 ({period_30m['direction_score']}) 与 60分钟 ({period_60m['direction_score']}) 当前处于【{period_60m['status_tag']}】。"
                            f"{'短周期动量偏强，但仍需日线级别放量确认升级；' if g_60m > 0 else '短周期动量偏弱，目前没有明显转强信号；'}"
-                           f"日线下方关键第一防守支撑位于 {s1_price:.2f} 点。"
+                           f"日线核心第1支撑 S1 位于 {s1_price:.2f} 点 ({s1_star}星)，次级防守底线 S2 位于 {s2_price:.2f} 点。"
             },
             "compare_prev": {
                 "title": "相较上一收盘对比",
@@ -422,8 +427,8 @@ class IndexEngine:
             },
             "next_step": {
                 "title": "下一步观察与操作等待",
-                "content": f"1. 向上观察能否有效放量突破第一阻力带 {r1_price:.2f} 点；"
-                           f"2. 向下紧盯关键支撑带 {s1_price:.2f} 点的承接强度，若跌破需下调仓位防守；"
+                "content": f"1. 向上观察能否有效放量突破第一阻力带 R1 {r1_price:.2f} 点 ({r1_star}星)，次级压力 R2 位于 {r2_price:.2f} 点；"
+                           f"2. 向下紧盯关键支撑带 S1 {s1_price:.2f} 点与极限防守底线 S2 {s2_price:.2f} 点的承接强度，若跌破需下调仓位防守；"
                            f"3. 保持'大周期定仓位、小周期找节拍'的纪律，不盲目追涨杀跌。"
             }
         }
