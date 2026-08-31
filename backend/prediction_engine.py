@@ -24,7 +24,9 @@ class PredictionEngine:
         核心预测与交易决策算法
         """
         df_daily_calc = indicators_daily.get("df", df_daily)
-        if df_daily_calc.empty or len(df_daily_calc) < 30:
+        # 门槛与回测一致(60根): 不足60根时 MA60 恒为NaN、趋势维度无法计算，
+        # 输出的概率缺乏趋势信息支撑，宁可不出结果也不给出半残预测 (次新股保护)
+        if df_daily_calc.empty or len(df_daily_calc) < 60:
             return {}
 
         current_price = float(df_daily_calc['close'].iloc[-1])
@@ -197,9 +199,13 @@ class PredictionEngine:
         )
 
         # 结合历史胜率加权调整最终上涨概率
+        # 融合权重按样本量置信度缩放: 样本<30个时按比例降低胜率话语权，
+        # 避免极小样本(如5个样本100%胜率)以50%权重扭曲最终预测；≥30个样本时达到文档约定的0.5
         if backtest_result["status"] == "sufficient_data":
             win_rate_10d = backtest_result["win_rate_10d"]
-            bullish_prob = round(float(composite_score * 0.5 + win_rate_10d * 0.5), 1)
+            n_samples = backtest_result.get("sample_count", 0)
+            bt_weight = 0.5 * min(1.0, n_samples / 30.0)
+            bullish_prob = round(float(composite_score * (1 - bt_weight) + win_rate_10d * bt_weight), 1)
         else:
             # 数据不足时仅使用综合评分，不虚构胜率
             bullish_prob = round(float(composite_score), 1)
@@ -254,13 +260,30 @@ class PredictionEngine:
             stop_loss = round(current_price - 2.5 * atr_val, 2)
 
         # 目标止盈价格 (第一目标位与第二目标位)
-        if nearest_r:
+        # 成本经济学下限: 双向成本1%, 距现价<3%的目标净收益<2%, 而止损侧风险普遍>=3%,
+        # 结构上不可能达到有效盈亏比; 且横盘期 MA5/MA10/布林上轨常在现价上方<1.5%挤成
+        # 3星簇(纯权重堆叠), 星级单独不足以区分微阻力与有效目标
+        MIN_TP1_DIST_PCT = 3.0
+        far_r = [r for r in resistances
+                 if (r["center_price"] - current_price) / current_price * 100 >= MIN_TP1_DIST_PCT]
+        strong_far = [r for r in far_r if r.get("stars", 0) >= 3]
+
+        if strong_far:
+            tp_1 = round(strong_far[0]["center_price"], 2)
+        elif far_r:
+            tp_1 = round(far_r[0]["center_price"], 2)
+        elif nearest_r:
             tp_1 = round(nearest_r["center_price"], 2)
         else:
             tp_1 = round(current_price * 1.08, 2)
 
-        if len(resistances) >= 2:
-            tp_2 = round(resistances[1]["center_price"], 2)
+        # TP2 取 TP1 之后的下一个有效目标(优先强压力带)；无则 TP1 上方 6%
+        next_cands = [r for r in far_r if r["center_price"] > tp_1 * 1.001]
+        next_strong = [r for r in next_cands if r.get("stars", 0) >= 3]
+        if next_strong:
+            tp_2 = round(next_strong[0]["center_price"], 2)
+        elif next_cands:
+            tp_2 = round(next_cands[0]["center_price"], 2)
         else:
             tp_2 = round(tp_1 * 1.06, 2)
 

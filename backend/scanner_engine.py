@@ -43,8 +43,9 @@ class ScannerEngine:
                 stock_info = next((s for s in all_stocks if s["code"] == code), None)
 
             # 1. 获取日K线 (默认250根，内部已合并当日实时快照)
+            #    <60根(次新股)直接放弃: 趋势/回测维度无法计算，输出只会误导
             df_daily = self.fetcher.get_kline(code, period="daily", count=250)
-            if df_daily.empty or len(df_daily) < 25:
+            if df_daily.empty or len(df_daily) < 60:
                 return None
 
             # 2. 获取周K线 (默认80根)
