@@ -18,6 +18,13 @@ INDEX_META_MAP = {
     "sh000688": {"name": "科创50", "symbol": "sh000688", "desc": "硬科技/芯片半导体核心"}
 }
 
+# 状态色使用 hex 而非 CSS 变量：前端需在色值后拼接透明度(如 + '15')，CSS 变量无法参与字符串拼接
+IDX_COLOR_GREEN = "#00F5A0"
+IDX_COLOR_CYAN = "#00D2FF"
+IDX_COLOR_RED = "#FF3366"
+IDX_COLOR_GOLD = "#FFAA00"
+IDX_COLOR_DIM = "#64748b"
+
 class IndexEngine:
     """
     大盘各大核心指数多周期（30分、60分、日K、周K）深度研判引擎
@@ -40,9 +47,15 @@ class IndexEngine:
             parts = resp.text.strip().split("~")
             if len(parts) >= 35:
                 price = float(parts[3]) if parts[3] else 0.0
+                if price <= 0:
+                    return None
                 open_p = float(parts[5]) if parts[5] else price
                 high = float(parts[33]) if parts[33] else price
                 low = float(parts[34]) if parts[34] else price
+                # 零值防御：未开盘/异常时接口返回 "0.00"
+                if open_p <= 0: open_p = price
+                if high <= 0: high = max(price, open_p)
+                if low <= 0: low = min(price, open_p)
                 chg = float(parts[32]) if parts[32] else 0.0
                 vol = float(parts[6]) * 100 if parts[6] else 0.0
                 amount = float(parts[37]) * 10000 if len(parts) > 37 and parts[37] else 0.0
@@ -115,8 +128,7 @@ class IndexEngine:
                             "low": l,
                             "volume": v,
                             "amount": v * ((o + c) / 2),
-                            "change_pct": chg_pct,
-                            "turnover": 1.0
+                            "change_pct": chg_pct
                         })
                     df = pd.DataFrame(rows)
         except Exception as e:
@@ -136,8 +148,7 @@ class IndexEngine:
                         "low": rt.get("low", rt["close"]),
                         "volume": rt["volume"],
                         "amount": rt.get("amount", 0),
-                        "change_pct": rt["change_pct"],
-                        "turnover": 1.0
+                        "change_pct": rt["change_pct"]
                     }
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 else:
@@ -157,7 +168,7 @@ class IndexEngine:
             return {
                 "period_name": period_name,
                 "status_tag": "数据加载中",
-                "status_color": "var(--color-text-dim)",
+                "status_color": IDX_COLOR_DIM,
                 "rebound_cond": 0.0,
                 "pullback_risk": 0.0,
                 "direction_score": "+0.00",
@@ -192,10 +203,14 @@ class IndexEngine:
         slope_text = f"{slope_sign}{slope:.2f} ATR/根"
 
         # 2. 计算方向分 G (-1.0 到 +1.0)
+        prev_hist = float(prev_row.get("macd_hist", 0) or 0)
         g_score = 0.0
         if c > ma20: g_score += 0.3
         if ma20 > ma60: g_score += 0.2
-        if hist > 0: g_score += 0.25
+        if hist > 0 and hist >= prev_hist:
+            g_score += 0.25  # 红柱且发散(柱体抬升)
+        elif hist > 0:
+            g_score += 0.10  # 红柱但收敛
         if dif > dea: g_score += 0.15
         if kdj_j < 30: g_score += 0.1 # 超卖酝酿
         elif kdj_j > 90: g_score -= 0.15 # 超买
@@ -209,23 +224,23 @@ class IndexEngine:
         g_sign = "+" if g_score >= 0 else ""
         g_text = f"{g_sign}{g_score:.2f}"
 
-        # 3. 反弹条件与回调风险分 (0 - 30)
-        rebound_cond = round(max(0.0, (40.0 - kdj_j) * 0.4) if kdj_j < 40 else 0.0, 1)
+        # 3. 反弹条件与回调风险分 (0 - 30，双向钳制)
+        rebound_cond = round(min(30.0, max(0.0, (40.0 - kdj_j) * 0.4)), 1)
         pullback_risk = round(min(28.0, max(5.0, (kdj_j - 40.0) * 0.35 + (slope * 5 if slope > 0 else 0))), 1)
 
         # 4. 状态标签
         if g_score >= 0.3:
             status_tag = "上行延续"
-            status_color = "var(--neon-green)"
+            status_color = IDX_COLOR_GREEN
         elif g_score >= 0.1:
             status_tag = "震荡偏强"
-            status_color = "var(--neon-cyan)"
+            status_color = IDX_COLOR_CYAN
         elif g_score <= -0.3:
             status_tag = "空头承压"
-            status_color = "var(--neon-red)"
+            status_color = IDX_COLOR_RED
         else:
             status_tag = "震荡结构"
-            status_color = "var(--neon-gold)"
+            status_color = IDX_COLOR_GOLD
 
         # 5. 技术形态描述
         macd_desc = "MACD零轴上·红柱放大" if hist > 0 and dif >= 0 else (
@@ -363,22 +378,22 @@ class IndexEngine:
         if g_weekly >= 0.2 and g_daily >= 0.2:
             op_license = "多头顺势，逢低做多"
             op_license_desc = "周线与日线多周期共振向上，大方向确立，持股待涨或在小级别回踩强支撑时积极低吸。"
-            op_color = "var(--neon-green)"
+            op_color = IDX_COLOR_GREEN
             suggested_pos = "70% ~ 85% (重仓顺势)"
         elif g_weekly >= 0.1 and g_60m > 0:
             op_license = "震荡蓄势，区间波段"
             op_license_desc = "大级别方向维持震荡偏强，分时线探底企稳，可在关键支撑位附近分批逢低布局。"
-            op_color = "var(--neon-cyan)"
+            op_color = IDX_COLOR_CYAN
             suggested_pos = "50% ~ 65% (适度波段)"
         elif g_weekly < 0 and g_daily < 0:
             op_license = "空头承压，防守观望"
             op_license_desc = "大级别处于空头压制状态，未见明确止跌信号，分时反弹仅视作技术修复，严格控制仓位。"
-            op_color = "var(--neon-red)"
+            op_color = IDX_COLOR_RED
             suggested_pos = "10% ~ 30% (轻仓防守)"
         else:
             op_license = "大方向不明，先观望"
             op_license_desc = "完整周线当前方向不明确；短周期信号不能代替大方向，当前建议耐心观望等待大级别确认。"
-            op_color = "var(--neon-gold)"
+            op_color = IDX_COLOR_GOLD
             suggested_pos = "30% ~ 50% (中性防御)"
 
         # 结构化核心结论段落

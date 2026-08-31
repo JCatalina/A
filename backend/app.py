@@ -9,20 +9,19 @@ from fastapi.responses import FileResponse, JSONResponse
 from data_fetcher import DataFetcher
 from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
 
 app = FastAPI(
     title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="1.0.0"
+    version="2.1.0"
 )
 
-# 允许跨域
+# 允许跨域 (allow_origins=["*"] 与 credentials 不兼容，本地单机部署关闭凭证)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -112,10 +111,10 @@ def get_screener_results(strategy: str = Query("ALL")):
         all_res = scanner_engine.last_results["ALL"]
         res = [r for r in all_res if strategy in r.get("matched_strategies", [])]
     
-    # 如果还没有扫描结果，自动快速分析标的池并按高胜率过滤
+    # 如果还没有扫描结果，自动分析核心标的池并按统一策略匹配条件过滤 (标记为演示数据)
     if not res:
         demo_codes = [
-            "600519", "300750", "300308", "002594", "300033", 
+            "600519", "300750", "300308", "002594", "300033",
             "601127", "002475", "600900", "002460", "300274",
             "601899", "600028", "002230", "601138"
         ]
@@ -123,25 +122,9 @@ def get_screener_results(strategy: str = Query("ALL")):
         for c in demo_codes:
             stk_res = scanner_engine.analyze_single_stock(c)
             if stk_res:
-                pred = stk_res.get("prediction", {})
-                prob = pred.get("bullish_probability", 50)
-                sig_type = pred.get("signal_type", "")
-                
-                # 使用与正式扫描一致的策略匹配条件
-                matched = []
-                if sig_type == "BUY_SUPPORT_PULLBACK" and prob >= 70:
-                    matched.append("SUPPORT_PULLBACK")
-                if sig_type == "BUY_BREAKOUT" and prob >= 70:
-                    matched.append("BREAKOUT_PRESSURE")
-                if "主升多头" in pred.get("weekly_trend_text", "") and prob >= 70:
-                    matched.append("MAIN_WAVE_TREND")
-                if pred.get("radar_scores", {}).get("momentum", 50) >= 70:
-                    matched.append("OVERSOLD_DIVERGENCE")
-                if not matched and prob >= 60:
-                    matched.append("SUPPORT_PULLBACK")
-                
-                stk_res["matched_strategies"] = matched
-                stk_res["is_demo"] = True  # 标记为demo数据，非真实扫描结果
+                # 与正式扫描完全一致的严格策略匹配，不放水
+                stk_res["matched_strategies"] = ScannerEngine.match_strategies(stk_res)
+                stk_res["is_demo"] = True  # 标记为演示数据(未执行全市场扫描)，前端需展示对应角标
                 demo_results.append(stk_res)
 
         # 胜率从高到低排序
@@ -166,4 +149,4 @@ if os.path.exists(FRONTEND_DIR):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False)

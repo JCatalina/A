@@ -29,7 +29,6 @@ class PredictionEngine:
 
         current_price = float(df_daily_calc['close'].iloc[-1])
         last_d = df_daily_calc.iloc[-1]
-        prev_d = df_daily_calc.iloc[-2]
 
         chips_d = indicators_daily.get("chips", {})
         divergences = indicators_daily.get("divergences", {})
@@ -162,8 +161,8 @@ class PredictionEngine:
             r_price = nearest_r["center_price"]
             r_dist_pct = (r_price - current_price) / current_price * 100
 
-        # 如果距离支撑位在 0% ~ 2.5% 以内，且是高星级支撑，位置极佳
-        if nearest_s and 0 <= s_dist_pct <= 2.8:
+        # 如果距离支撑位在 0% ~ 2.5% 以内，且是高星级支撑，位置极佳 (与文档/扫描器口径一致)
+        if nearest_s and 0 <= s_dist_pct <= 2.5:
             position_score += 25 + (nearest_s.get("stars", 3) - 3) * 5
         elif nearest_s and s_dist_pct < 0:
             # 跌破支撑
@@ -244,10 +243,11 @@ class PredictionEngine:
         if nearest_s:
             entry_low = round(nearest_s["center_price"] * 0.992, 2)
             entry_high = round(max(current_price * 1.003, nearest_s["center_price"] * 1.015), 2)
-            # ATR动态止损: 取 S1下沿2.5% 与 entry-2×ATR 中更宽松者
+            # ATR动态止损: 取 S1下沿2.5% 与 entry-2×ATR 中更保守者
+            # (保守 = 止损价更高 = 单笔风险敞口更小)
             fixed_sl = nearest_s["center_price"] * 0.975
             atr_sl = entry_low - 2.0 * atr_val
-            stop_loss = round(min(fixed_sl, atr_sl), 2)  # 取更保守的止损
+            stop_loss = round(max(fixed_sl, atr_sl), 2)
         else:
             entry_low = round(current_price * 0.985, 2)
             entry_high = round(current_price * 1.005, 2)
@@ -393,6 +393,18 @@ class PredictionEngine:
                 "avg_gain_pct": None
             }
 
+        # 退化防护: 三个相似条件全部未激活时，"相似形态"退化为全样本统计，结果无意义
+        if not any([is_near_support, is_oversold, is_uptrend]):
+            return {
+                "status": "insufficient_data",
+                "message": "当前时点未激活任何相似形态条件(回踩支撑/超卖/多头趋势)，无法定义相似样本",
+                "sample_count": 0,
+                "win_rate_5d": None,
+                "win_rate_10d": None,
+                "win_rate_20d": None,
+                "avg_gain_pct": None
+            }
+
         df = df.copy()
         closes = df['close'].values
         ma20 = df['ma_20'].values
@@ -400,6 +412,7 @@ class PredictionEngine:
 
         n = len(df)
         samples = []
+        last_sample_i = -100  # 样本去重叠: 相邻触发点至少间隔5根K线，降低自相关导致的置信度虚高
 
         # 遍历历史数据（预留最后20天用于验证）
         for i in range(30, n - 20):
@@ -420,7 +433,7 @@ class PredictionEngine:
                 if df['ma_60'].iloc[i] > df['ma_20'].iloc[i]:
                     match = False
 
-            if match:
+            if match and (i - last_sample_i) >= 5:
                 # 记录未来 5, 10, 20 天的表现 (严格使用收盘价, 扣除交易成本)
                 gain_5d = (closes[i+5] - p) / p * 100 - cost
                 gain_10d = (closes[i+10] - p) / p * 100 - cost
@@ -432,6 +445,7 @@ class PredictionEngine:
                     "win_20d": gain_20d > 0,     # 严格: 20日收盘价扣费后为正
                     "gain_10d": gain_10d
                 })
+                last_sample_i = i
 
         if not samples or len(samples) < 5:
             return {

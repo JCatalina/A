@@ -1047,6 +1047,18 @@ body.light-theme .sc-tab.active {
     border-radius: 3px;
 }
 
+/* 选股卡片: 演示数据角标 (未执行全市场扫描的核心池预分析) */
+.sc-demo-tag {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--neon-gold);
+    border: 1px solid rgba(255, 183, 3, 0.45);
+    background: rgba(255, 183, 3, 0.12);
+    padding: 1px 5px;
+    border-radius: 3px;
+    cursor: help;
+}
+
 .sc-price-line {
     font-size: 11px;
     color: var(--color-text-dim);

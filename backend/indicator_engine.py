@@ -77,7 +77,9 @@ class IndicatorEngine:
         # 7. 成交量均线
         df['vol_ma5'] = df['volume'].rolling(window=5).mean()
         df['vol_ma10'] = df['volume'].rolling(window=10).mean()
-        df['vol_ratio'] = df['volume'] / (df['vol_ma5'] + 1e-9)
+        # 量比口径: 当日成交量 / 前5日均量(不含当日)，避免当日量稀释分母
+        df['vol_ma5_prev'] = df['vol_ma5'].shift(1)
+        df['vol_ratio'] = (df['volume'] / (df['vol_ma5_prev'] + 1e-9)).fillna(1.0)
 
         # 8. 背离检测 (Divergence) — 改进：同时检测DIF极值点
         divergences = IndicatorEngine.detect_macd_divergence(df)
@@ -100,12 +102,45 @@ class IndicatorEngine:
         }
 
     @staticmethod
-    def calculate_chip_distribution(df: pd.DataFrame, bins: int = 100, lookback: int = 120) -> Dict[str, Any]:
+    def _inject_chips(chip_density: np.ndarray, price_bins: np.ndarray, bin_centers: np.ndarray,
+                      row: pd.Series, amount: float) -> None:
+        """在 [low, high] 内以四价均值为顶点的三角分布注入筹码 amount"""
+        if amount <= 0:
+            return
+        h = row['high']
+        l = row['low']
+        avg_p = (row['open'] + row['close'] + h + l) / 4.0
+
+        def _fallback_point():
+            idx = np.searchsorted(price_bins, avg_p) - 1
+            idx = np.clip(idx, 0, len(chip_density) - 1)
+            chip_density[idx] += amount
+
+        if h <= l:
+            _fallback_point()
+            return
+        mask = (bin_centers >= l) & (bin_centers <= h)
+        if not np.any(mask):
+            _fallback_point()
+            return
+        span = max(h - l, 0.01)
+        weights = 1.0 - np.abs(bin_centers[mask] - avg_p) / span
+        weights = np.maximum(weights, 0.1)
+        weights /= np.sum(weights)
+        chip_density[mask] += amount * weights
+
+    @staticmethod
+    def calculate_chip_distribution(df: pd.DataFrame, bins: int = 100, lookback: int = 250) -> Dict[str, Any]:
         """
         基于历史换手率与三角分布的筹码衰减分布模型
+        - 个股: 使用真实换手率进行衰减注入（回看250个交易日）
+        - 无换手率数据(如指数): 退化为按成交量加权的 Volume Profile（无衰减）
         """
+        empty = {"bins": [], "poc": 0, "peaks": [], "profit_ratio": 50,
+                 "concentration_70": 0, "range_70": [], "concentration_90": 0,
+                 "range_90": [], "is_single_peak": False}
         if df.empty or len(df) < 5:
-            return {"bins": [], "poc": 0, "profit_ratio": 50, "concentration_90": 0, "concentration_70": 0}
+            return empty
 
         sub_df = df.iloc[-lookback:].copy()
         min_p = sub_df['low'].min()
@@ -119,43 +154,31 @@ class IndicatorEngine:
         bin_centers = (price_bins[:-1] + price_bins[1:]) / 2
         chip_density = np.zeros(bins)
 
-        # 遍历历史K线，按换手率进行衰减累加（过滤涨跌停日的权重）
+        # 换手率列有效性判断：缺失或恒定(如指数填充值)则退化为成交量分布
+        use_turnover = ('turnover' in sub_df.columns
+                        and sub_df['turnover'].nunique(dropna=True) > 1)
+        avg_vol = float(sub_df['volume'].mean()) if not use_turnover else 0.0
+
+        # 遍历历史K线，按换手率进行衰减累加（涨跌停日降权）
         for _, row in sub_df.iterrows():
-            turnover = min(max(row.get('turnover', 2.0) / 100.0, 0.005), 0.5) # 换手率衰减因子
-            # 衰减历史筹码
-            chip_density *= (1.0 - turnover)
+            if use_turnover:
+                turnover = min(max(row.get('turnover', 2.0) / 100.0, 0.005), 0.5)  # 换手率衰减因子
+                # 衰减历史筹码
+                chip_density *= (1.0 - turnover)
+            else:
+                # 成交量分布模式: 以相对量能为注入权重，不做时间衰减
+                turnover = float(row['volume']) / (avg_vol + 1e-9)
 
             # 涨跌停日降权：涨跌停日的筹码分布不可靠，降低注入权重
             is_limit = row.get('is_limit_up', False) or row.get('is_limit_down', False)
             inject_weight = 0.3 if is_limit else 1.0
 
-            # 新增筹码分布：在 [low, high] 之间呈三角分布（以 (open+close+high+low)/4 为均值）
-            h = row['high']
-            l = row['low']
-            avg_p = (row['open'] + row['close'] + h + l) / 4.0
-            
-            if h <= l:
-                idx = np.searchsorted(price_bins, avg_p) - 1
-                idx = np.clip(idx, 0, bins - 1)
-                chip_density[idx] += turnover
-            else:
-                # 三角权重分布 (涨跌停日降权注入)
-                mask = (bin_centers >= l) & (bin_centers <= h)
-                if np.any(mask):
-                    span = max(h - l, 0.01)
-                    weights = 1.0 - np.abs(bin_centers[mask] - avg_p) / span
-                    weights = np.maximum(weights, 0.1)
-                    weights /= np.sum(weights)
-                    chip_density[mask] += turnover * weights * inject_weight
-                else:
-                    idx = np.searchsorted(price_bins, avg_p) - 1
-                    idx = np.clip(idx, 0, bins - 1)
-                    chip_density[idx] += turnover * inject_weight
+            IndicatorEngine._inject_chips(chip_density, price_bins, bin_centers, row,
+                                          turnover * inject_weight)
 
         # 归一化
         total_chips = np.sum(chip_density) + 1e-9
         chip_density_ratio = chip_density / total_chips
-
         # 寻找主筹码峰 POC (Point of Control)
         poc_idx = np.argmax(chip_density_ratio)
         poc_price = round(float(bin_centers[poc_idx]), 2)
@@ -206,7 +229,7 @@ class IndicatorEngine:
             "range_70": [low_70, high_70],
             "concentration_90": conc_90,
             "range_90": [low_90, high_90],
-            "is_single_peak": conc_90 < 12.0 # 集中度低于12%通常为单峰高度控盘
+            "is_single_peak": conc_90 < 10.0 # 集中度低于10%为单峰高度控盘 (与评分引擎阈值一致)
         }
 
     @staticmethod
@@ -298,6 +321,12 @@ class IndicatorEngine:
         difs = sub['macd_dif'].values
         dates = sub['date'].values
 
+        # DIF 显著变化阈值随个股价格尺度自适应: max(0.03, 0.05 × ATR)
+        # (固定0.03对高价股是噪声、对低价股永远达不到)
+        atr_last = float(df['atr'].iloc[-1]) if 'atr' in df.columns and pd.notna(df['atr'].iloc[-1]) else 0.0
+        dif_eps = max(0.03, 0.05 * atr_last)
+        MIN_PIVOT_GAP = 5  # 双底/双顶两个极值点至少间隔5根K线，避免相邻极值误判
+
         bullish_div = False
         bearish_div = False
         bullish_detail = ""
@@ -318,14 +347,17 @@ class IndicatorEngine:
 
         # 底背离判定：价格创新低但DIF极值抬高
         if len(price_min_indices) >= 2:
-            i1, i2 = price_min_indices[-2], price_min_indices[-1]
-            # 找到对应的DIF极小值（在价格极值附近±3根K线范围内）
-            dif_at_p1 = min(difs[max(0, i1-3):min(len(difs), i1+4)])
-            dif_at_p2 = min(difs[max(0, i2-3):min(len(difs), i2+4)])
-            # 价格创新低或持平，但DIF极值显著抬高
-            if closes[i2] <= closes[i1] * 1.01 and dif_at_p2 > dif_at_p1 + 0.03:
-                bullish_div = True
-                bullish_detail = f"日K底背离：{dates[i2]} 价格探底 {closes[i2]:.2f} 与 {dates[i1]} ({closes[i1]:.2f}) 形成双底，DIF动量背离走强 ({dif_at_p2:.3f} > {dif_at_p1:.3f})"
+            i2 = price_min_indices[-1]
+            i1_candidates = [i for i in price_min_indices[:-1] if i2 - i >= MIN_PIVOT_GAP]
+            if i1_candidates:
+                i1 = i1_candidates[-1]
+                # 找到对应的DIF极小值（在价格极值附近±3根K线范围内）
+                dif_at_p1 = min(difs[max(0, i1-3):min(len(difs), i1+4)])
+                dif_at_p2 = min(difs[max(0, i2-3):min(len(difs), i2+4)])
+                # 价格创新低或持平，但DIF极值显著抬高
+                if closes[i2] <= closes[i1] * 1.01 and dif_at_p2 > dif_at_p1 + dif_eps:
+                    bullish_div = True
+                    bullish_detail = f"日K底背离：{dates[i2]} 价格探底 {closes[i2]:.2f} 与 {dates[i1]} ({closes[i1]:.2f}) 形成双底，DIF动量背离走强 ({dif_at_p2:.3f} > {dif_at_p1:.3f})"
 
         # 顶背离：价格创新高但DIF极值降低
         price_max_indices = []
@@ -339,12 +371,15 @@ class IndicatorEngine:
                 dif_max_indices.append(i)
 
         if len(price_max_indices) >= 2:
-            j1, j2 = price_max_indices[-2], price_max_indices[-1]
-            dif_at_j1 = max(difs[max(0, j1-3):min(len(difs), j1+4)])
-            dif_at_j2 = max(difs[max(0, j2-3):min(len(difs), j2+4)])
-            if closes[j2] >= closes[j1] * 0.99 and dif_at_j2 < dif_at_j1 - 0.03:
-                bearish_div = True
-                bearish_detail = f"日K顶背离：{dates[j2]} 价格冲高 {closes[j2]:.2f} 但DIF动能衰减 ({dif_at_j2:.3f} < {dif_at_j1:.3f})"
+            j2 = price_max_indices[-1]
+            j1_candidates = [j for j in price_max_indices[:-1] if j2 - j >= MIN_PIVOT_GAP]
+            if j1_candidates:
+                j1 = j1_candidates[-1]
+                dif_at_j1 = max(difs[max(0, j1-3):min(len(difs), j1+4)])
+                dif_at_j2 = max(difs[max(0, j2-3):min(len(difs), j2+4)])
+                if closes[j2] >= closes[j1] * 0.99 and dif_at_j2 < dif_at_j1 - dif_eps:
+                    bearish_div = True
+                    bearish_detail = f"日K顶背离：{dates[j2]} 价格冲高 {closes[j2]:.2f} 但DIF动能衰减 ({dif_at_j2:.3f} < {dif_at_j1:.3f})"
 
         return {
             "bullish_divergence": bullish_div,
@@ -384,19 +419,17 @@ class IndicatorEngine:
         best_wave_high = float(sub_highs[global_max_idx])
         best_wave_low = float(sub_lows[global_min_idx])
 
-        # 判断主方向
-        is_uptrend = global_min_idx < global_max_idx
+        # 判断主方向 (np.argmax 返回 numpy int，比较结果需转回原生 bool 以便 JSON 序列化)
+        is_uptrend = bool(global_min_idx < global_max_idx)
 
-        # 如果波段太小 (振幅<5%), 尝试扩大窗口
+        # 如果波段太小 (振幅<5%), 扩大搜索窗口到全部历史数据重新寻找主波段
         wave_pct = (best_wave_high - best_wave_low) / (best_wave_low + 1e-9) * 100
-        if wave_pct < 5.0 and n > 60:
-            # 回退到最近60根
-            sub60 = df.iloc[-60:]
-            max_idx_60 = sub60['high'].idxmax()
-            min_idx_60 = sub60['low'].idxmin()
-            best_wave_high = float(df['high'].loc[max_idx_60])
-            best_wave_low = float(df['low'].loc[min_idx_60])
-            is_uptrend = min_idx_60 < max_idx_60
+        if wave_pct < 5.0 and n > lookback:
+            global_max_idx_full = int(np.argmax(highs))
+            global_min_idx_full = int(np.argmin(lows))
+            best_wave_high = float(highs[global_max_idx_full])
+            best_wave_low = float(lows[global_min_idx_full])
+            is_uptrend = bool(global_min_idx_full < global_max_idx_full)
 
         diff = best_wave_high - best_wave_low
         fib_levels = {}
@@ -421,25 +454,30 @@ class IndicatorEngine:
 
         last = df.iloc[-1]
         vol = float(last.get('volume', 0))
-        vol_ma5 = float(last.get('vol_ma5', vol))
         chg = float(last.get('change_pct', 0))
 
-        vol_ratio = vol / (vol_ma5 + 1e-9)
+        # 量比口径: vol_ratio 已在指标计算中定义为 当日量/前5日均量(不含当日)
+        vol_ratio = float(last.get('vol_ratio', 1.0) or 1.0)
 
-        # 放量突破: Vol >= 1.8 × VolMA5 且涨幅 > 2%
+        # 放量突破: Vol >= 1.8 × 前5日均量 且涨幅 > 2%
         is_volume_breakout = vol_ratio >= 1.8 and chg > 2.0
 
-        # 缩量回踩: Vol < 0.65 × VolMA5 且跌幅较小
+        # 缩量回踩: Vol < 0.65 × 前5日均量 且跌幅较小
         is_shrink_pullback = vol_ratio < 0.65 and -3.0 < chg < 0.5
 
-        # 量价背离检测 (近3天)
+        # 量价背离检测 (近3日: 当前 vs 3个交易日前)
         volume_price_divergence = None
-        if len(df) >= 5:
-            recent_3 = df.iloc[-3:]
-            price_up = float(recent_3['close'].iloc[-1]) > float(recent_3['close'].iloc[0])
-            vol_down = float(recent_3['volume'].iloc[-1]) < float(recent_3['volume'].iloc[0]) * 0.75
-            price_down = float(recent_3['close'].iloc[-1]) < float(recent_3['close'].iloc[0])
-            vol_up = float(recent_3['volume'].iloc[-1]) > float(recent_3['volume'].iloc[0]) * 1.3
+        if len(df) >= 4:
+            recent = df.iloc[-4:]
+            close_first = float(recent['close'].iloc[0])
+            close_last = float(recent['close'].iloc[-1])
+            vol_first = float(recent['volume'].iloc[0])
+            vol_last = float(recent['volume'].iloc[-1])
+
+            price_up = close_last > close_first
+            vol_down = vol_last < vol_first * 0.75
+            price_down = close_last < close_first
+            vol_up = vol_last > vol_first * 1.3
 
             if price_up and vol_down:
                 volume_price_divergence = "bearish_vp_divergence"  # 放量滞涨→警惕
@@ -448,11 +486,11 @@ class IndicatorEngine:
             elif price_down and vol_down:
                 volume_price_divergence = "bullish_vp_divergence"  # 缩量下跌→卖压耗尽
 
-        # 连续放量天数
+        # 连续放量天数 (vol_ratio 已排除当日口径，>1.5 计为放量)
         consecutive_heavy_vol = 0
         for i in range(len(df) - 1, max(len(df) - 6, -1), -1):
             r = df.iloc[i]
-            if float(r.get('volume', 0)) > float(r.get('vol_ma5', 1)) * 1.5:
+            if float(r.get('vol_ratio', 1.0) or 0) > 1.5:
                 consecutive_heavy_vol += 1
             else:
                 break

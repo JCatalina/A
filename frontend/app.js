@@ -254,25 +254,36 @@ async function loadStockAnalysis(code, period = currentPeriod, autoScroll = true
  */
 function renderStockSummary(data) {
     document.getElementById("stockTitle").innerText = data.name;
-    document.getElementById("stockCodeBadge").innerText = `${data.code}.SH/SZ`;
+    document.getElementById("stockCodeBadge").innerText = formatCodeBadge(data.code);
     document.getElementById("stockIndustryBadge").innerText = data.industry || "主板";
-    
+
     const priceEl = document.getElementById("currentPrice");
     const chgEl = document.getElementById("changePct");
     const isUp = data.change_pct >= 0;
-    
+
     priceEl.innerText = data.price.toFixed(2);
     priceEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
-    
+
     chgEl.innerText = `${isUp ? '+' : ''}${data.change_pct.toFixed(2)}%`;
     chgEl.className = `change-pct-badge ${isUp ? 'up' : 'down'}`;
     chgEl.style.background = isUp ? "rgba(0, 245, 160, 0.15)" : "rgba(255, 51, 102, 0.15)";
     chgEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
 
-    document.getElementById("metricTurnover").innerText = `${data.turnover.toFixed(2)}%`;
-    document.getElementById("metricProfitRatio").innerText = `${data.chips.profit_ratio || 50}%`;
-    document.getElementById("metricConc90").innerText = `${data.chips.concentration_90 || 15}%`;
-    document.getElementById("metricWeeklyTrend").innerText = data.prediction?.weekly_trend_text || "多头主升";
+    // 无数据时显示 "--" 而非乐观默认值，避免误导
+    document.getElementById("metricTurnover").innerText = data.turnover != null ? `${data.turnover.toFixed(2)}%` : "--%";
+    document.getElementById("metricProfitRatio").innerText = data.chips?.profit_ratio != null ? `${data.chips.profit_ratio}%` : "--%";
+    document.getElementById("metricConc90").innerText = data.chips?.concentration_90 != null ? `${data.chips.concentration_90}%` : "--%";
+    document.getElementById("metricWeeklyTrend").innerText = data.prediction?.weekly_trend_text || "数据不足";
+}
+
+/**
+ * 由证券代码推导市场后缀: 6/9/5开头沪市, 4/8/92开头北交所, 其余深市
+ */
+function formatCodeBadge(code) {
+    const c = String(code || "");
+    if (c.startsWith(("4")) || c.startsWith("8") || c.startsWith("92")) return `${c}.BJ`;
+    if (c.startsWith("6") || c.startsWith("9") || c.startsWith("5")) return `${c}.SH`;
+    return `${c}.SZ`;
 }
 
 /**
@@ -544,6 +555,7 @@ function renderChipsDistribution(chips, currentPrice) {
     const prices = bins.map(b => b.price);
     const ratios = bins.map(b => b.ratio);
     const poc = chips.poc;
+    const maxRatio = ratios.length ? Math.max(...ratios) : 0;
 
     const option = {
         backgroundColor: 'transparent',
@@ -573,7 +585,8 @@ function renderChipsDistribution(chips, currentPrice) {
             type: 'bar',
             data: bins.map(b => {
                 const isProfit = b.price <= currentPrice;
-                const isPoc = Math.abs(b.price - poc) < 0.2;
+                // POC = 筹码占比最大的价位 (与后端 argmax 口径一致，避免固定0.2元容差在高/低价股上失效)
+                const isPoc = b.ratio > 0 && b.ratio === maxRatio;
                 let color = isProfit ? 'rgba(0, 245, 160, 0.45)' : 'rgba(255, 51, 102, 0.45)';
                 if (isPoc) color = 'rgba(255, 183, 3, 0.9)'; // POC 金黄高亮
                 return {
@@ -648,11 +661,27 @@ function renderPredictionAndPlan(data) {
     capsule.style.background = `${pred.signal_color || '#00F5A0'}15`;
     sigIcon.innerText = prob >= 70 ? "🚀" : (prob <= 40 ? "⚠️" : "⚖️");
 
-    // 3. 历史回测胜率
+    // 3. 历史回测胜率 (样本不足时如实显示，绝不虚构默认值)
     const ht = pred.historical_backtest || {};
-    document.getElementById("htWin5d").innerText = `${ht.win_rate_5d || 70}%`;
-    document.getElementById("htWin10d").innerText = `${ht.win_rate_10d || 75}%`;
-    document.getElementById("htWin20d").innerText = `${ht.win_rate_20d || 78}%`;
+    const htInsufficient = ht.status !== "sufficient_data";
+    const htBox = document.querySelector(".historical-backtest-box");
+    if (htInsufficient) {
+        document.getElementById("htWin5d").innerText = "样本不足";
+        document.getElementById("htWin10d").innerText = "样本不足";
+        document.getElementById("htWin20d").innerText = "样本不足";
+        document.getElementById("htWin5d").style.fontSize = "11px";
+        document.getElementById("htWin10d").style.fontSize = "11px";
+        document.getElementById("htWin20d").style.fontSize = "11px";
+        if (htBox) htBox.title = ht.message || "相似形态样本不足，无法计算有效胜率";
+    } else {
+        document.getElementById("htWin5d").innerText = `${ht.win_rate_5d}%`;
+        document.getElementById("htWin10d").innerText = `${ht.win_rate_10d}%`;
+        document.getElementById("htWin20d").innerText = `${ht.win_rate_20d}%`;
+        document.getElementById("htWin5d").style.fontSize = "";
+        document.getElementById("htWin10d").style.fontSize = "";
+        document.getElementById("htWin20d").style.fontSize = "";
+        if (htBox) htBox.title = `有效相似样本 ${ht.sample_count} 个 (扣双边交易成本后统计)`;
+    }
 
     // 4. 四维雷达图
     if (radarChartInst && pred.radar_scores) {
@@ -776,14 +805,24 @@ async function loadScreenerResults(strategy) {
         const res = await fetch(`/api/screener/results?strategy=${strategy}`);
         const json = await res.json();
         if (json.data && json.data.length > 0) {
+            // 策略标签映射 (覆盖四大策略全部分支)
+            const strategyTagMap = {
+                "SUPPORT_PULLBACK": "回踩支撑",
+                "BREAKOUT_PRESSURE": "放量突破",
+                "MAIN_WAVE_TREND": "主升浪",
+                "OVERSOLD_DIVERGENCE": "超跌背离"
+            };
+
             listEl.innerHTML = json.data.map(item => {
                 const pred = item.prediction || {};
                 const prob = pred.bullish_probability || 50;
                 const plan = pred.trade_plan || {};
-                const tag = item.matched_strategies?.[0] === 'SUPPORT_PULLBACK' ? '回踩支撑' : 
-                           (item.matched_strategies?.[0] === 'BREAKOUT_PRESSURE' ? '放量突破' : '主升浪');
+                const tag = strategyTagMap[item.matched_strategies?.[0]] || "综合共振";
 
-                const displayName = STOCK_NAMES[item.code] || (item.name && !item.name.includes("") ? item.name : `标的 ${item.code}`);
+                // 演示数据(未执行全市场扫描)显式标注，不与真实扫描结果混淆
+                const demoBadge = item.is_demo ? '<span class="sc-demo-tag" title="演示数据: 服务启动后的核心标的池预分析，非全市场扫描结果">演示</span>' : '';
+
+                const displayName = STOCK_NAMES[item.code] || item.name || `标的 ${item.code}`;
 
                 return `
                     <div class="screener-item-card" data-code="${item.code}">
@@ -792,14 +831,15 @@ async function loadScreenerResults(strategy) {
                                 <span class="stock-cn-name">${displayName}</span>
                                 <span class="sc-code">${item.code}</span>
                                 <span class="sc-strategy-tag">${tag}</span>
+                                ${demoBadge}
                             </div>
                             <div class="sc-price-line">
-                                现价: <strong class="sc-price-num">${item.price ? item.price.toFixed(2) : '--'}</strong> 
+                                现价: <strong class="sc-price-num">${item.price ? item.price.toFixed(2) : '--'}</strong>
                                 <span class="sc-chg-num ${item.change_pct >= 0 ? 'up' : 'down'}">(${item.change_pct >= 0 ? '+' : ''}${item.change_pct}%)</span>
                             </div>
                         </div>
                         <div class="sc-info-right">
-                            <div class="sc-prob-val">${prob.toFixed(0)}% 胜率</div>
+                            <div class="sc-prob-val">${prob.toFixed(0)}% 多头期望</div>
                             <div class="sc-rr-val">R:R ${plan.rr_ratio || 3.0}:1</div>
                         </div>
                     </div>
@@ -1143,7 +1183,8 @@ function renderMacroKlineChart(klineData, levels) {
 
                 params.forEach(p => {
                     if (p.seriesType === 'candlestick') {
-                        const o = p.data[1], c = p.data[2], l = p.data[3], h = p.data[4];
+                        // ECharts 蜡烛图 data 为原始数组 [open, close, low, high]
+                        const o = p.data[0], c = p.data[1], l = p.data[2], h = p.data[3];
                         const isUp = c >= o;
                         const chgPct = o > 0 ? ((c - o) / o * 100).toFixed(2) : '0.00';
                         resHtml += `
@@ -1286,20 +1327,27 @@ async function triggerMarketScan() {
 
     try {
         await fetch(`/api/screener/run?strategy=ALL&limit=120`, { method: "POST" });
-        
-        // 轮询进度
-        const timer = setInterval(async () => {
-            const res = await fetch("/api/screener/status");
-            const st = await res.json();
-            fill.style.width = `${st.progress}%`;
-            txt.innerText = `${st.progress}%`;
 
-            if (!st.is_scanning && st.progress >= 100) {
+        // 轮询进度：后端已在 finally 中保证状态复位，这里只要 is_scanning=false 即结束，
+        // 同时对轮询失败做保护，避免定时器泄漏
+        const timer = setInterval(async () => {
+            try {
+                const res = await fetch("/api/screener/status");
+                const st = await res.json();
+                fill.style.width = `${st.progress}%`;
+                txt.innerText = `${st.progress}%`;
+
+                if (!st.is_scanning) {
+                    clearInterval(timer);
+                    setTimeout(() => {
+                        wrap.style.display = "none";
+                        loadScreenerResults(currentScreenerStrategy);
+                    }, 1000);
+                }
+            } catch (pollErr) {
+                console.error("Scan poll error", pollErr);
                 clearInterval(timer);
-                setTimeout(() => {
-                    wrap.style.display = "none";
-                    loadScreenerResults(currentScreenerStrategy);
-                }, 1000);
+                wrap.style.display = "none";
             }
         }, 1200);
     } catch (e) {
