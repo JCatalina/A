@@ -9,6 +9,7 @@ let currentPeriod = "daily";
 let currentSubchart = "MACD";
 let currentStockData = null;
 let currentScreenerStrategy = "ALL";
+let scanActive = false;   // 盘后扫描进行中标记：期间雷达池不再发请求，避免演示数据与真实扫描竞争
 
 // 大盘研判视图状态
 let currentMacroSymbol = "sh000001";
@@ -799,6 +800,13 @@ const STOCK_NAMES = {
  */
 async function loadScreenerResults(strategy) {
     const listEl = document.getElementById("screenerList");
+
+    // 扫描进行中：不请求结果池(避免触发后端演示数据填充与真实扫描竞争)，显示等待提示
+    if (scanActive) {
+        listEl.innerHTML = '<div class="screener-loading">🚀 全市场扫描进行中，完成后将自动刷新本雷达池...</div>';
+        return;
+    }
+
     listEl.innerHTML = '<div class="screener-loading">正在匹配高胜率共振标的...</div>';
 
     try {
@@ -1313,6 +1321,8 @@ function renderMacroKlineChart(klineData, levels) {
 
 /**
  * 触发盘后批量扫描选股
+ * 联动约定：扫描期间 scanActive=true，雷达池挂起请求；轮询需确认"见过运行态"后才允许判定完成，
+ * 杜绝 POST 返回后后台任务尚未调度、首拍即 is_scanning=false 导致的过早收场。
  */
 async function triggerMarketScan() {
     const wrap = document.getElementById("scanProgressWrap");
@@ -1320,39 +1330,64 @@ async function triggerMarketScan() {
     const txt = document.getElementById("scanPercentText");
 
     if (!wrap || !fill || !txt) return;
+    if (scanActive) return; // 已有扫描在跑，避免重复触发
 
+    scanActive = true;
     wrap.style.display = "block";
     fill.style.width = "0%";
     txt.innerText = "0%";
+    loadScreenerResults(currentScreenerStrategy); // 立即挂起雷达池并显示扫描中提示
+
+    const finish = (ok) => {
+        scanActive = false;
+        clearInterval(timer);
+        if (ok) {
+            setTimeout(() => {
+                wrap.style.display = "none";
+                loadScreenerResults(currentScreenerStrategy);
+            }, 1000);
+        } else {
+            wrap.style.display = "none";
+            loadScreenerResults(currentScreenerStrategy);
+        }
+    };
+
+    let timer = null;
+    let sawRunning = false;   // 必须先观察到 is_scanning=true (或进度>0) 才允许判定"完成"
+    let polls = 0;
 
     try {
-        await fetch(`/api/screener/run?strategy=ALL&limit=120`, { method: "POST" });
+        const startRes = await fetch(`/api/screener/run?strategy=ALL&limit=120`, { method: "POST" });
+        const startJson = await startRes.json().catch(() => ({}));
+        if (startJson.status === "running") {
+            sawRunning = true; // 后端明确告知已在运行
+        }
 
-        // 轮询进度：后端已在 finally 中保证状态复位，这里只要 is_scanning=false 即结束，
-        // 同时对轮询失败做保护，避免定时器泄漏
-        const timer = setInterval(async () => {
+        timer = setInterval(async () => {
+            polls += 1;
             try {
                 const res = await fetch("/api/screener/status");
                 const st = await res.json();
+                if (st.is_scanning || st.progress > 0) sawRunning = true;
+
                 fill.style.width = `${st.progress}%`;
                 txt.innerText = `${st.progress}%`;
 
-                if (!st.is_scanning) {
-                    clearInterval(timer);
-                    setTimeout(() => {
-                        wrap.style.display = "none";
-                        loadScreenerResults(currentScreenerStrategy);
-                    }, 1000);
+                if (sawRunning && !st.is_scanning) {
+                    finish(true); // 真实扫描结束，刷新雷达池
+                } else if (!sawRunning && polls >= 30) {
+                    // 安全阀：36秒内从未观察到运行态(任务未被调度/服务异常)，放弃等待
+                    console.warn("Scan never observed running, giving up");
+                    finish(false);
                 }
             } catch (pollErr) {
                 console.error("Scan poll error", pollErr);
-                clearInterval(timer);
-                wrap.style.display = "none";
+                finish(false);
             }
         }, 1200);
     } catch (e) {
         console.error("Scan trigger error", e);
-        wrap.style.display = "none";
+        finish(false);
     }
 }
 

@@ -99,38 +99,20 @@ def get_screener_status():
 
 @app.get("/api/screener/results")
 def get_screener_results(strategy: str = Query("ALL")):
-    """获取最新选股结果"""
-    res = scanner_engine.last_results.get(strategy, [])
-    # 检查 res 中的数据是否有有效中文名称，如果没有则重新生成
-    if res and (not res[0].get("name") or res[0].get("name") == res[0].get("code") or str(res[0].get("name")).isdigit()):
-        res = []
-        scanner_engine.last_results = {}
+    """
+    获取最新选股结果。
+    联动约定：扫描结果只存于 last_results["ALL"]（全量命中），本接口按策略实时过滤，
+    保证"全部/单策略"各视图与最新一次扫描严格一致；无任何结果时填充演示数据(带 is_demo 标记)。
+    """
+    all_res = scanner_engine.last_results.get("ALL", [])
+    if not all_res:
+        # 线程安全 + 与真实扫描互斥：扫描中/已完成时内部直接返回，不会触发演示分析
+        all_res = scanner_engine.ensure_demo_results()
 
-    if not res and strategy != "ALL" and "ALL" in scanner_engine.last_results:
-        # 从 ALL 中过滤
-        all_res = scanner_engine.last_results["ALL"]
+    if strategy == "ALL":
+        res = all_res
+    else:
         res = [r for r in all_res if strategy in r.get("matched_strategies", [])]
-    
-    # 如果还没有扫描结果，自动分析核心标的池并按统一策略匹配条件过滤 (标记为演示数据)
-    if not res:
-        demo_codes = [
-            "600519", "300750", "300308", "002594", "300033",
-            "601127", "002475", "600900", "002460", "300274",
-            "601899", "600028", "002230", "601138"
-        ]
-        demo_results = []
-        for c in demo_codes:
-            stk_res = scanner_engine.analyze_single_stock(c)
-            if stk_res:
-                # 与正式扫描完全一致的严格策略匹配，不放水
-                stk_res["matched_strategies"] = ScannerEngine.match_strategies(stk_res)
-                stk_res["is_demo"] = True  # 标记为演示数据(未执行全市场扫描)，前端需展示对应角标
-                demo_results.append(stk_res)
-
-        # 胜率从高到低排序
-        demo_results.sort(key=lambda x: x["prediction"].get("bullish_probability", 0), reverse=True)
-        scanner_engine.last_results["ALL"] = demo_results
-        res = demo_results if strategy == "ALL" else [r for r in demo_results if strategy in r.get("matched_strategies", [])]
 
     return {
         "status": "success",

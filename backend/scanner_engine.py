@@ -1,5 +1,6 @@
 import logging
 import concurrent.futures
+import threading
 from typing import Dict, List, Any, Optional
 import pandas as pd
 
@@ -9,6 +10,13 @@ from cluster_engine import ClusterEngine
 from prediction_engine import PredictionEngine
 
 logger = logging.getLogger(__name__)
+
+# 无任何扫描结果时的演示标的池（服务启动后的核心池预分析，结果标记 is_demo）
+DEMO_CODES = [
+    "600519", "300750", "300308", "002594", "300033",
+    "601127", "002475", "600900", "002460", "300274",
+    "601899", "600028", "002230", "601138"
+]
 
 
 class ScannerEngine:
@@ -21,6 +29,8 @@ class ScannerEngine:
         self.last_results = {}
         self.is_scanning = False
         self.scan_progress = 0
+        self.has_scan_results = False          # 是否已产生过真实扫描结果（防止演示数据反向覆盖）
+        self._demo_lock = threading.Lock()     # 演示数据填充互斥锁（避免并发请求重复分析/惊群）
 
     def analyze_single_stock(self, code: str, stock_info: Optional[Dict[str, Any]] = None, period: str = "daily") -> Optional[Dict[str, Any]]:
         """
@@ -192,7 +202,12 @@ class ScannerEngine:
         """
         批量扫描股票池并按高胜率策略筛选
         strategy: 'ALL', 'SUPPORT_PULLBACK', 'BREAKOUT_PRESSURE', 'MAIN_WAVE_TREND', 'OVERSOLD_DIVERGENCE'
+        结果统一以全量命中列表写入 last_results["ALL"]，读取路径按策略实时过滤，
+        保证"全部/单策略"各视图与最新一次扫描严格一致（不再按 strategy 分键存储产生新旧错位）。
         """
+        if self.is_scanning:
+            return self.last_results.get("ALL", [])
+
         self.is_scanning = True
         self.scan_progress = 0
         results: List[Dict[str, Any]] = []
@@ -228,8 +243,7 @@ class ScannerEngine:
                             matched = ScannerEngine.match_strategies(res)
                             if matched:
                                 res["matched_strategies"] = matched
-                                if strategy == "ALL" or strategy in matched:
-                                    results.append(res)
+                                results.append(res)
                     except Exception as e:
                         logger.warning(f"Scan stock error: {e}")
 
@@ -242,9 +256,49 @@ class ScannerEngine:
                 reverse=True
             )
 
-            self.last_results[strategy] = results
+            if strategy != "ALL":
+                return [r for r in results if strategy in r.get("matched_strategies", [])]
             return results
         finally:
+            # 即使中途异常，已完成的部分结果同样有效，落盘保留
+            if results:
+                # 整体替换：清除所有旧键(含演示数据)，全部视图统一以最新一次扫描为准
+                self.last_results = {"ALL": results}
+                self.has_scan_results = True
             # 无论正常结束还是异常中断，务必复位扫描状态，避免前端无限轮询、后续扫描被锁死
             self.scan_progress = 100
             self.is_scanning = False
+
+    def ensure_demo_results(self) -> List[Dict[str, Any]]:
+        """
+        无任何扫描结果时填充演示数据（核心池预分析，标记 is_demo）。
+        线程安全 + 双重检查：
+        - 真实扫描进行中/已完成时直接返回现有结果，绝不触发演示分析；
+        - 并发请求共用一次演示分析（互斥锁），杜绝惊群；
+        - 提交前再次校验，保证演示数据永远不会覆盖等待期间完成的真实扫描结果。
+        """
+        if self.has_scan_results or self.is_scanning:
+            return self.last_results.get("ALL", [])
+
+        with self._demo_lock:
+            # 双检：等锁期间真实扫描可能已经启动/完成
+            if self.has_scan_results or self.is_scanning:
+                return self.last_results.get("ALL", [])
+            if self.last_results.get("ALL"):
+                return self.last_results["ALL"]  # 演示数据已就绪，直接复用
+
+            demo_results = []
+            for c in DEMO_CODES:
+                stk_res = self.analyze_single_stock(c)
+                if stk_res:
+                    # 与正式扫描完全一致的严格策略匹配，不放水
+                    stk_res["matched_strategies"] = ScannerEngine.match_strategies(stk_res)
+                    stk_res["is_demo"] = True  # 前端展示"演示"角标
+                    demo_results.append(stk_res)
+
+            demo_results.sort(key=lambda x: x["prediction"].get("bullish_probability", 0), reverse=True)
+
+            # 提交前终检：若等待期间真实扫描已完成/启动，丢弃演示数据
+            if not self.has_scan_results and not self.is_scanning:
+                self.last_results = {"ALL": demo_results}
+            return self.last_results.get("ALL", [])
