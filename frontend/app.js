@@ -51,11 +51,11 @@ function initCharts() {
     const radarDom = document.getElementById("radarChart");
     const macroKlineDom = document.getElementById("macroKlineChart");
 
-    if (klineDom) klineChartInst = echarts.init(klineDom, 'dark');
-    if (chipsDom) chipsChartInst = echarts.init(chipsDom, 'dark');
-    if (gaugeDom) probGaugeInst = echarts.init(gaugeDom, 'dark');
-    if (radarDom) radarChartInst = echarts.init(radarDom, 'dark');
-    if (macroKlineDom) macroKlineChartInst = echarts.init(macroKlineDom, 'dark');
+    if (klineDom) klineChartInst = echarts.init(klineDom);
+    if (chipsDom) chipsChartInst = echarts.init(chipsDom);
+    if (gaugeDom) probGaugeInst = echarts.init(gaugeDom);
+    if (radarDom) radarChartInst = echarts.init(radarDom);
+    if (macroKlineDom) macroKlineChartInst = echarts.init(macroKlineDom);
 
     window.addEventListener("resize", () => {
         klineChartInst?.resize();
@@ -172,23 +172,6 @@ function bindEvents() {
             currentScreenerStrategy = e.target.dataset.strategy;
             loadScreenerResults(currentScreenerStrategy);
         });
-    });
-
-    // 主题切换 (深色 / 亮色)
-    document.getElementById("themeToggleBtn")?.addEventListener("click", () => {
-        document.body.classList.toggle("light-theme");
-        const isLight = document.body.classList.contains("light-theme");
-        const btn = document.getElementById("themeToggleBtn");
-        if (btn) {
-            btn.innerText = isLight ? "🌙 深色模式" : "☀️ 亮色模式";
-        }
-        setTimeout(() => {
-            klineChartInst?.resize();
-            chipsChartInst?.resize();
-            probGaugeInst?.resize();
-            radarChartInst?.resize();
-            macroKlineChartInst?.resize();
-        }, 100);
     });
 
     // 盘后全市场扫描按钮
@@ -312,7 +295,7 @@ function renderKlineAndSubchart(data) {
             markLines.push({
                 yAxis: s.center_price,
                 lineStyle: {
-                    color: '#00F5A0',
+                    color: '#059669',
                     type: 'dashed',
                     width: s.stars >= 4 ? 2 : 1
                 },
@@ -320,9 +303,9 @@ function renderKlineAndSubchart(data) {
                     show: true,
                     formatter: `${s.label || 'S'} 强支撑 ${s.center_price.toFixed(2)} (⭐${s.stars})`,
                     position: 'insideEndBottom',
-                    color: '#00F5A0',
+                    color: '#059669',
                     fontSize: 11,
-                    backgroundColor: 'rgba(0, 245, 160, 0.15)',
+                    backgroundColor: 'rgba(5, 150, 105, 0.12)',
                     padding: [2, 6],
                     borderRadius: 3
                 }
@@ -330,7 +313,7 @@ function renderKlineAndSubchart(data) {
             // 支撑价格带
             if (s.price_range && s.price_range.length === 2) {
                 markAreas.push([
-                    { yAxis: s.price_range[0], itemStyle: { color: 'rgba(0, 245, 160, 0.07)' } },
+                    { yAxis: s.price_range[0], itemStyle: { color: 'rgba(5, 150, 105, 0.08)' } },
                     { yAxis: s.price_range[1] }
                 ]);
             }
@@ -342,7 +325,7 @@ function renderKlineAndSubchart(data) {
             markLines.push({
                 yAxis: r.center_price,
                 lineStyle: {
-                    color: '#FF3366',
+                    color: '#dc2626',
                     type: 'dashed',
                     width: r.stars >= 4 ? 2 : 1
                 },
@@ -350,9 +333,9 @@ function renderKlineAndSubchart(data) {
                     show: true,
                     formatter: `${r.label || 'R'} 强压力 ${r.center_price.toFixed(2)} (⭐${r.stars})`,
                     position: 'insideEndTop',
-                    color: '#FF3366',
+                    color: '#dc2626',
                     fontSize: 11,
-                    backgroundColor: 'rgba(255, 51, 102, 0.15)',
+                    backgroundColor: 'rgba(220, 38, 38, 0.12)',
                     padding: [2, 6],
                     borderRadius: 3
                 }
@@ -360,7 +343,7 @@ function renderKlineAndSubchart(data) {
             // 压力价格带
             if (r.price_range && r.price_range.length === 2) {
                 markAreas.push([
-                    { yAxis: r.price_range[0], itemStyle: { color: 'rgba(255, 51, 102, 0.07)' } },
+                    { yAxis: r.price_range[0], itemStyle: { color: 'rgba(220, 38, 38, 0.08)' } },
                     { yAxis: r.price_range[1] }
                 ]);
             }
@@ -373,7 +356,7 @@ function renderKlineAndSubchart(data) {
         gridIndex: 1,
         splitNumber: 3,
         axisLabel: { color: '#64748b', fontSize: 10 },
-        splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.04)' } }
+        splitLine: { lineStyle: { color: '#f1f5f9' } }
     };
 
     if (currentSubchart === "MACD") {
@@ -389,7 +372,7 @@ function renderKlineAndSubchart(data) {
                 data: hist.map(val => ({
                     value: val,
                     itemStyle: {
-                        color: val >= 0 ? '#00F5A0' : '#FF3366',
+                        color: val >= 0 ? '#059669' : '#dc2626',
                         opacity: 0.85
                     }
                 }))
@@ -401,7 +384,7 @@ function renderKlineAndSubchart(data) {
                 yAxisIndex: 1,
                 data: dif,
                 showSymbol: false,
-                lineStyle: { color: '#00D2FF', width: 1.5 }
+                lineStyle: { color: '#0284c7', width: 1.5 }
             },
             {
                 name: 'DEA',
@@ -410,14 +393,14 @@ function renderKlineAndSubchart(data) {
                 yAxisIndex: 1,
                 data: dea,
                 showSymbol: false,
-                lineStyle: { color: '#FFB703', width: 1.5 }
+                lineStyle: { color: '#d97706', width: 1.5 }
             }
         ];
     } else if (currentSubchart === "KDJ") {
         subSeries = [
-            { name: 'K', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_k), showSymbol: false, lineStyle: { color: '#00D2FF', width: 1.2 } },
-            { name: 'D', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_d), showSymbol: false, lineStyle: { color: '#FFB703', width: 1.2 } },
-            { name: 'J', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_j), showSymbol: false, lineStyle: { color: '#FF3366', width: 1.5 } }
+            { name: 'K', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_k), showSymbol: false, lineStyle: { color: '#0284c7', width: 1.2 } },
+            { name: 'D', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_d), showSymbol: false, lineStyle: { color: '#d97706', width: 1.2 } },
+            { name: 'J', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: rawK.map(k => k.kdj_j), showSymbol: false, lineStyle: { color: '#dc2626', width: 1.5 } }
         ];
     } else if (currentSubchart === "VOL") {
         subSeries = [{
@@ -427,7 +410,7 @@ function renderKlineAndSubchart(data) {
             yAxisIndex: 1,
             data: rawK.map((k, i) => ({
                 value: k.volume,
-                itemStyle: { color: k.close >= k.open ? '#00F5A0' : '#FF3366' }
+                itemStyle: { color: k.close >= k.open ? '#059669' : '#dc2626' }
             }))
         }];
     }
@@ -437,10 +420,12 @@ function renderKlineAndSubchart(data) {
         animation: false,
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'cross', lineStyle: { color: 'rgba(255, 255, 255, 0.3)' } },
-            backgroundColor: 'rgba(15, 23, 42, 0.92)',
-            borderColor: 'rgba(255, 255, 255, 0.1)',
-            textStyle: { color: '#f8fafc', fontSize: 12 }
+            axisPointer: { type: 'cross', lineStyle: { color: 'rgba(15, 23, 42, 0.35)', type: 'dashed' } },
+            backgroundColor: 'rgba(255, 255, 255, 0.98)',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            extraCssText: 'box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); border-radius: 8px;',
+            textStyle: { color: '#0f172a', fontSize: 12 }
         },
         axisPointer: { link: [{ xAxisIndex: 'all' }] },
         grid: [
@@ -452,7 +437,7 @@ function renderKlineAndSubchart(data) {
                 type: 'category',
                 data: dates,
                 boundaryGap: true,
-                axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+                axisLine: { lineStyle: { color: '#cbd5e1' } },
                 axisLabel: { show: false },
                 splitLine: { show: false }
             },
@@ -461,7 +446,7 @@ function renderKlineAndSubchart(data) {
                 gridIndex: 1,
                 data: dates,
                 boundaryGap: true,
-                axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+                axisLine: { lineStyle: { color: '#cbd5e1' } },
                 axisLabel: { color: '#64748b', fontSize: 10 },
                 splitLine: { show: false }
             }
@@ -470,8 +455,8 @@ function renderKlineAndSubchart(data) {
             {
                 scale: true,
                 position: 'right',
-                axisLabel: { color: '#94a3b8', fontSize: 11 },
-                splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.04)' } }
+                axisLabel: { color: '#64748b', fontSize: 11 },
+                splitLine: { lineStyle: { color: '#f1f5f9' } }
             },
             subYAxis
         ],
@@ -484,10 +469,10 @@ function renderKlineAndSubchart(data) {
                 type: 'candlestick',
                 data: kValues,
                 itemStyle: {
-                    color: '#00F5A0',
-                    color0: '#FF3366',
-                    borderColor: '#00F5A0',
-                    borderColor0: '#FF3366'
+                    color: '#059669',
+                    color0: '#dc2626',
+                    borderColor: '#059669',
+                    borderColor0: '#dc2626'
                 },
                 markLine: {
                     symbol: ['none', 'none'],
@@ -503,7 +488,7 @@ function renderKlineAndSubchart(data) {
                 data: ma5,
                 smooth: true,
                 showSymbol: false,
-                lineStyle: { color: '#f1f5f9', width: 1 }
+                lineStyle: { color: '#2563eb', width: 1.5 }
             },
             {
                 name: 'MA20',
@@ -511,7 +496,7 @@ function renderKlineAndSubchart(data) {
                 data: ma20,
                 smooth: true,
                 showSymbol: false,
-                lineStyle: { color: '#FFB703', width: 1.5 }
+                lineStyle: { color: '#d97706', width: 1.5 }
             },
             {
                 name: 'MA60',
@@ -519,7 +504,7 @@ function renderKlineAndSubchart(data) {
                 data: ma60,
                 smooth: true,
                 showSymbol: false,
-                lineStyle: { color: '#00D2FF', width: 1.5 }
+                lineStyle: { color: '#7c3aed', width: 1.5 }
             },
             ...(layers.boll ? [
                 {
@@ -528,7 +513,7 @@ function renderKlineAndSubchart(data) {
                     data: bollUpper,
                     smooth: true,
                     showSymbol: false,
-                    lineStyle: { color: 'rgba(255, 255, 255, 0.25)', width: 1, type: 'dashed' }
+                    lineStyle: { color: 'rgba(100, 116, 139, 0.5)', width: 1.2, type: 'dashed' }
                 },
                 {
                     name: '布林下轨',
@@ -536,7 +521,7 @@ function renderKlineAndSubchart(data) {
                     data: bollLower,
                     smooth: true,
                     showSymbol: false,
-                    lineStyle: { color: 'rgba(255, 255, 255, 0.25)', width: 1, type: 'dashed' }
+                    lineStyle: { color: 'rgba(100, 116, 139, 0.5)', width: 1.2, type: 'dashed' }
                 }
             ] : []),
             ...subSeries
@@ -563,9 +548,14 @@ function renderChipsDistribution(chips, currentPrice) {
         animation: false,
         tooltip: {
             trigger: 'axis',
+            backgroundColor: 'rgba(255, 255, 255, 0.98)',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            extraCssText: 'box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); border-radius: 8px;',
+            textStyle: { color: '#0f172a', fontSize: 12 },
             formatter: (params) => {
                 const p = params[0];
-                return `价位: ${p.name}元<br/>筹码占比: ${p.value}%`;
+                return `价位: <strong>${p.name}元</strong><br/>筹码占比: <strong style="color:var(--neon-green)">${p.value}%</strong>`;
             }
         },
         grid: { left: 5, right: 10, top: 25, bottom: 20 },
@@ -588,8 +578,8 @@ function renderChipsDistribution(chips, currentPrice) {
                 const isProfit = b.price <= currentPrice;
                 // POC = 筹码占比最大的价位 (与后端 argmax 口径一致，避免固定0.2元容差在高/低价股上失效)
                 const isPoc = b.ratio > 0 && b.ratio === maxRatio;
-                let color = isProfit ? 'rgba(0, 245, 160, 0.45)' : 'rgba(255, 51, 102, 0.45)';
-                if (isPoc) color = 'rgba(255, 183, 3, 0.9)'; // POC 金黄高亮
+                let color = isProfit ? 'rgba(5, 150, 105, 0.65)' : 'rgba(220, 38, 38, 0.65)';
+                if (isPoc) color = 'rgba(217, 119, 6, 0.95)'; // POC 金黄高亮
                 return {
                     value: b.ratio,
                     itemStyle: { color: color, borderRadius: [0, 2, 2, 0] }
@@ -627,9 +617,9 @@ function renderPredictionAndPlan(data) {
                     lineStyle: {
                         width: 12,
                         color: [
-                            [0.4, '#FF3366'],
-                            [0.65, '#FFB703'],
-                            [1, '#00F5A0']
+                            [0.4, '#dc2626'],
+                            [0.65, '#d97706'],
+                            [1, '#059669']
                         ]
                     }
                 },
@@ -638,7 +628,7 @@ function renderPredictionAndPlan(data) {
                     length: '65%',
                     width: 6,
                     offsetCenter: [0, '-10%'],
-                    itemStyle: { color: '#fff' }
+                    itemStyle: { color: '#0f172a' }
                 },
                 axisTick: { show: false },
                 splitLine: { show: false },
@@ -659,7 +649,7 @@ function renderPredictionAndPlan(data) {
     sigTitle.innerText = pred.signal_title || "量化信号分析中";
     sigDesc.innerText = pred.signal_action || "等待触发";
     capsule.style.borderColor = pred.signal_color || "var(--neon-green)";
-    capsule.style.background = `${pred.signal_color || '#00F5A0'}15`;
+    capsule.style.background = `${pred.signal_color || '#059669'}15`;
     sigIcon.innerText = prob >= 70 ? "🚀" : (prob <= 40 ? "⚠️" : "⚖️");
 
     // 3. 历史回测胜率 (样本不足时如实显示，绝不虚构默认值)
@@ -698,19 +688,22 @@ function renderPredictionAndPlan(data) {
                 ],
                 radius: '65%',
                 center: ['50%', '50%'],
-                splitArea: { show: false },
-                splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
-                axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.15)' } },
-                axisName: { color: '#94a3b8', fontSize: 11 }
+                splitArea: { 
+                    show: true, 
+                    areaStyle: { color: ['rgba(241, 245, 249, 0.4)', 'rgba(255, 255, 255, 0.6)'] } 
+                },
+                splitLine: { lineStyle: { color: '#e2e8f0' } },
+                axisLine: { lineStyle: { color: '#cbd5e1' } },
+                axisName: { color: '#1e293b', fontSize: 11, fontWeight: 'bold' }
             },
             series: [{
                 type: 'radar',
                 data: [{
                     value: [scores.trend, scores.chips, scores.momentum, scores.position],
                     name: '量化特征评分',
-                    areaStyle: { color: 'rgba(0, 245, 160, 0.3)' },
-                    lineStyle: { color: '#00F5A0', width: 2 },
-                    itemStyle: { color: '#00F5A0' }
+                    areaStyle: { color: 'rgba(5, 150, 105, 0.2)' },
+                    lineStyle: { color: '#059669', width: 2 },
+                    itemStyle: { color: '#059669' }
                 }]
             }]
         };
@@ -996,7 +989,7 @@ function renderMacroHeader(data) {
     // 动态展示最新实时时间戳
     const updateMetaEl = document.getElementById("macroUpdateMeta");
     if (updateMetaEl) {
-        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#fff; font-family:var(--font-mono);">${data.update_time || new Date().toLocaleString()}</strong>`;
+        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.update_time || new Date().toLocaleString()}</strong>`;
     }
 }
 
@@ -1123,7 +1116,7 @@ function renderMacroKlineChart(klineData, levels) {
     if (!macroKlineDom) return;
 
     if (!macroKlineChartInst) {
-        macroKlineChartInst = echarts.init(macroKlineDom, 'dark');
+        macroKlineChartInst = echarts.init(macroKlineDom);
     }
 
     // 动态更新标题上的周期标识
@@ -1131,7 +1124,7 @@ function renderMacroKlineChart(klineData, levels) {
     const chartTitleEl = document.querySelector(".m-chart-title");
     if (chartTitleEl) {
         const curScaleName = scaleNameMap[currentMacroScale] || "日K线";
-        chartTitleEl.innerHTML = `大盘指数多周期走势图 <span style="font-size:12px; color:var(--neon-cyan); font-weight:700; margin-left:8px; background:rgba(0,210,255,0.12); padding:2px 8px; border-radius:4px; border:1px solid rgba(0,210,255,0.3);">[${curScaleName}]</span>`;
+        chartTitleEl.innerHTML = `大盘指数多周期走势图 <span style="font-size:12px; color:var(--neon-cyan); font-weight:700; margin-left:8px; background:rgba(2,132,199,0.12); padding:2px 8px; border-radius:4px; border:1px solid rgba(2,132,199,0.3);">[${curScaleName}]</span>`;
     }
 
     if (!klineData || klineData.length === 0) {
@@ -1157,8 +1150,15 @@ function renderMacroKlineChart(klineData, levels) {
         levels.supports.forEach(s => {
             markLines.push({
                 yAxis: s.center_price,
-                lineStyle: { color: '#00F5A0', type: 'dashed', width: 1.5 },
-                label: { show: true, formatter: `${s.label} 支撑 ${s.center_price.toFixed(0)}`, color: '#00F5A0' }
+                lineStyle: { color: '#059669', type: 'dashed', width: 1.5 },
+                label: { 
+                    show: true, 
+                    formatter: `${s.label} 支撑 ${s.center_price.toFixed(0)}`, 
+                    color: '#059669',
+                    backgroundColor: 'rgba(5, 150, 105, 0.12)',
+                    padding: [2, 6],
+                    borderRadius: 3
+                }
             });
         });
     }
@@ -1166,8 +1166,15 @@ function renderMacroKlineChart(klineData, levels) {
         levels.resistances.forEach(r => {
             markLines.push({
                 yAxis: r.center_price,
-                lineStyle: { color: '#FF3366', type: 'dashed', width: 1.5 },
-                label: { show: true, formatter: `${r.label} 压力 ${r.center_price.toFixed(0)}`, color: '#FF3366' }
+                lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+                label: { 
+                    show: true, 
+                    formatter: `${r.label} 压力 ${r.center_price.toFixed(0)}`, 
+                    color: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.12)',
+                    padding: [2, 6],
+                    borderRadius: 3
+                }
             });
         });
     }
@@ -1177,47 +1184,48 @@ function renderMacroKlineChart(klineData, levels) {
         animation: false,
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'cross', lineStyle: { color: 'rgba(255, 255, 255, 0.3)' } },
-            backgroundColor: 'rgba(15, 23, 42, 0.95)',
-            borderColor: 'rgba(255, 255, 255, 0.1)',
-            textStyle: { color: '#f8fafc', fontSize: 12 },
+            axisPointer: { type: 'cross', lineStyle: { color: 'rgba(15, 23, 42, 0.35)', type: 'dashed' } },
+            backgroundColor: 'rgba(255, 255, 255, 0.98)',
+            borderColor: '#e2e8f0',
+            borderWidth: 1,
+            extraCssText: 'box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); border-radius: 8px;',
+            textStyle: { color: '#0f172a', fontSize: 12 },
             formatter: function(params) {
                 if (!params || params.length === 0) return '';
                 const dateStr = params[0].axisValue;
                 const curScaleName = scaleNameMap[currentMacroScale] || "日K线";
-                let resHtml = `<div style="font-weight:800; color:var(--neon-cyan); margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:3px;">
-                    ${dateStr} <span style="font-size:11px; color:#94a3b8; font-weight:normal;">(${curScaleName})</span>
+                let resHtml = `<div style="font-weight:800; color:var(--neon-cyan); margin-bottom:4px; border-bottom:1px solid #e2e8f0; padding-bottom:3px;">
+                    ${dateStr} <span style="font-size:11px; color:#64748b; font-weight:normal;">(${curScaleName})</span>
                 </div>`;
 
                 params.forEach(p => {
                     if (p.seriesType === 'candlestick') {
-                        // ECharts 蜡烛图 data 为原始数组 [open, close, low, high]
                         const o = p.data[0], c = p.data[1], l = p.data[2], h = p.data[3];
                         const isUp = c >= o;
                         const chgPct = o > 0 ? ((c - o) / o * 100).toFixed(2) : '0.00';
                         resHtml += `
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:2px 0;">
-                                <span style="color:#94a3b8">开 / 收:</span>
-                                <span style="font-family:var(--font-mono); color:${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${o.toFixed(2)} / ${c.toFixed(2)} (${isUp ? '+' : ''}${chgPct}%)</span>
+                                <span style="color:#64748b">开 / 收:</span>
+                                <span style="font-family:var(--font-mono); font-weight:700; color:${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${o.toFixed(2)} / ${c.toFixed(2)} (${isUp ? '+' : ''}${chgPct}%)</span>
                             </div>
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:2px 0;">
-                                <span style="color:#94a3b8">高 / 低:</span>
-                                <span style="font-family:var(--font-mono);">${h.toFixed(2)} / ${l.toFixed(2)}</span>
+                                <span style="color:#64748b">高 / 低:</span>
+                                <span style="font-family:var(--font-mono); font-weight:600; color:#0f172a;">${h.toFixed(2)} / ${l.toFixed(2)}</span>
                             </div>
                         `;
                     } else if (p.seriesType === 'line' && p.value !== undefined && p.value !== null) {
                         resHtml += `
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:1px 0; font-size:11px;">
-                                <span style="color:${p.color}">● ${p.seriesName}:</span>
-                                <span style="font-family:var(--font-mono);">${typeof p.value === 'number' ? p.value.toFixed(2) : p.value}</span>
+                                <span style="color:${p.color}; font-weight:600;">● ${p.seriesName}:</span>
+                                <span style="font-family:var(--font-mono); font-weight:600; color:#0f172a;">${typeof p.value === 'number' ? p.value.toFixed(2) : p.value}</span>
                             </div>
                         `;
                     } else if (p.seriesType === 'bar' && p.value !== undefined) {
                         const val = typeof p.value === 'object' ? p.value.value : p.value;
                         resHtml += `
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:1px 0; font-size:11px;">
-                                <span style="color:${p.color}">■ ${p.seriesName}:</span>
-                                <span style="font-family:var(--font-mono); color:${val >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${typeof val === 'number' ? val.toFixed(3) : val}</span>
+                                <span style="color:${p.color}; font-weight:600;">■ ${p.seriesName}:</span>
+                                <span style="font-family:var(--font-mono); font-weight:700; color:${val >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${typeof val === 'number' ? val.toFixed(3) : val}</span>
                             </div>
                         `;
                     }
@@ -1235,6 +1243,7 @@ function renderMacroKlineChart(klineData, levels) {
                 type: 'category',
                 data: dates,
                 boundaryGap: true,
+                axisLine: { lineStyle: { color: '#cbd5e1' } },
                 axisLabel: { show: false },
                 splitLine: { show: false }
             },
@@ -1243,6 +1252,7 @@ function renderMacroKlineChart(klineData, levels) {
                 gridIndex: 1,
                 data: dates,
                 boundaryGap: true,
+                axisLine: { lineStyle: { color: '#cbd5e1' } },
                 axisLabel: { 
                     color: '#64748b', 
                     fontSize: 10,
@@ -1263,15 +1273,15 @@ function renderMacroKlineChart(klineData, levels) {
             {
                 scale: true,
                 position: 'right',
-                axisLabel: { color: '#94a3b8', fontSize: 11 },
-                splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.04)' } }
+                axisLabel: { color: '#64748b', fontSize: 11 },
+                splitLine: { lineStyle: { color: '#f1f5f9' } }
             },
             {
                 gridIndex: 1,
                 scale: true,
                 splitNumber: 2,
                 axisLabel: { color: '#64748b', fontSize: 10 },
-                splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.04)' } }
+                splitLine: { lineStyle: { color: '#f1f5f9' } }
             }
         ],
         dataZoom: [
@@ -1283,21 +1293,21 @@ function renderMacroKlineChart(klineData, levels) {
                 type: 'candlestick',
                 data: kValues,
                 itemStyle: {
-                    color: '#00F5A0',
-                    color0: '#FF3366',
-                    borderColor: '#00F5A0',
-                    borderColor0: '#FF3366'
+                    color: '#059669',
+                    color0: '#dc2626',
+                    borderColor: '#059669',
+                    borderColor0: '#dc2626'
                 },
                 markLine: markLines.length > 0 ? {
                     symbol: ['none', 'none'],
                     data: markLines
                 } : undefined
             },
-            { name: 'MA5', type: 'line', data: ma5, smooth: true, showSymbol: false, lineStyle: { color: '#f1f5f9', width: 1 } },
-            { name: 'MA20', type: 'line', data: ma20, smooth: true, showSymbol: false, lineStyle: { color: '#FFB703', width: 1.5 } },
-            { name: 'MA60', type: 'line', data: ma60, smooth: true, showSymbol: false, lineStyle: { color: '#00D2FF', width: 1.5 } },
-            { name: '布林上轨', type: 'line', data: bollUpper, smooth: true, showSymbol: false, lineStyle: { color: 'rgba(255, 255, 255, 0.25)', width: 1, type: 'dashed' } },
-            { name: '布林下轨', type: 'line', data: bollLower, smooth: true, showSymbol: false, lineStyle: { color: 'rgba(255, 255, 255, 0.25)', width: 1, type: 'dashed' } },
+            { name: 'MA5', type: 'line', data: ma5, smooth: true, showSymbol: false, lineStyle: { color: '#2563eb', width: 1.5 } },
+            { name: 'MA20', type: 'line', data: ma20, smooth: true, showSymbol: false, lineStyle: { color: '#d97706', width: 1.5 } },
+            { name: 'MA60', type: 'line', data: ma60, smooth: true, showSymbol: false, lineStyle: { color: '#7c3aed', width: 1.5 } },
+            { name: '布林上轨', type: 'line', data: bollUpper, smooth: true, showSymbol: false, lineStyle: { color: 'rgba(100, 116, 139, 0.5)', width: 1.2, type: 'dashed' } },
+            { name: '布林下轨', type: 'line', data: bollLower, smooth: true, showSymbol: false, lineStyle: { color: 'rgba(100, 116, 139, 0.5)', width: 1.2, type: 'dashed' } },
             {
                 name: 'MACD柱',
                 type: 'bar',
@@ -1305,11 +1315,11 @@ function renderMacroKlineChart(klineData, levels) {
                 yAxisIndex: 1,
                 data: hist.map(val => ({
                     value: val,
-                    itemStyle: { color: val >= 0 ? '#00F5A0' : '#FF3366' }
+                    itemStyle: { color: val >= 0 ? '#059669' : '#dc2626' }
                 }))
             },
-            { name: 'DIF', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: dif, showSymbol: false, lineStyle: { color: '#00D2FF', width: 1.2 } },
-            { name: 'DEA', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: dea, showSymbol: false, lineStyle: { color: '#FFB703', width: 1.2 } }
+            { name: 'DIF', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: dif, showSymbol: false, lineStyle: { color: '#0284c7', width: 1.2 } },
+            { name: 'DEA', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: dea, showSymbol: false, lineStyle: { color: '#d97706', width: 1.2 } }
         ]
     };
 
