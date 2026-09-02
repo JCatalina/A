@@ -29,9 +29,9 @@
 
                 <!-- 页面视图切换 Tab -->
                 <div class="nav-view-switch">
-                    <button class="nav-tab active" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
-                    <button class="nav-tab" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
+                    <button class="nav-tab active" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
+                    <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                 </div>
             </div>
 
@@ -67,7 +67,7 @@
         </div>
 
         <!-- 主内容工作区 1: 个股看板 (左右双分栏) -->
-        <main class="main-workspace active-view" id="stockWorkspace">
+        <main class="main-workspace" id="stockWorkspace" style="display: none;">
             
             <!-- 左侧核心分析看板 (占 70% 宽) -->
             <section class="left-chart-panel">
@@ -252,7 +252,7 @@
         </main>
 
         <!-- 主内容工作区 2: 大盘多周期指数研判 (Macro Index Workspace) -->
-        <main class="index-macro-workspace" id="indexWorkspace" style="display: none;">
+        <main class="index-macro-workspace" id="indexWorkspace">
             
             <!-- 顶部指数选择胶囊栏 -->
             <div class="macro-index-nav">

@@ -37,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindEvents();
     bindMacroEvents();
     loadMarketIndices();
+    loadMacroIndexAnalysis(currentMacroSymbol);
     loadStockAnalysis(currentStockCode);
     loadScreenerResults(currentScreenerStrategy);
 });
