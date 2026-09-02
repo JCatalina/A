@@ -3076,6 +3076,27 @@ body {
     .screener-tabs {
         flex-wrap: wrap;
     }
+    /* 多维支撑/压力共振矩阵 → 单列，条目内部换行防重叠 */
+    .levels-grid {
+        grid-template-columns: 1fr;
+    }
+    .card-header-sm {
+        flex-wrap: wrap;
+    }
+    .level-item-header {
+        flex-wrap: wrap;
+        row-gap: 4px;
+    }
+    .level-label {
+        flex: 1 1 100%;
+        white-space: nowrap;
+    }
+    .level-price {
+        white-space: nowrap;
+    }
+    .level-stars {
+        margin-left: auto;
+    }
 
     /* ===== 大盘多周期研判 ===== */
     .macro-index-nav {
