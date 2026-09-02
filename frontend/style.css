@@ -2910,6 +2910,7 @@ body {
 
 /* --- Responsive --- */
 @media (max-width: 768px) {
+    /* ===== MRDI 面板 (原有规则) ===== */
     .mrdi-workspace {
         padding: 12px 14px 30px;
     }
@@ -2939,5 +2940,239 @@ body {
     }
     .mrdi-page-intro {
         flex-direction: column;
+    }
+
+    /* ===== 全局 ===== */
+    html, body {
+        overflow-x: hidden;
+    }
+    /* 防止 ECharts canvas 等内容把 grid/flex 子项撑破视口 */
+    .main-workspace > section,
+    .main-workspace > aside,
+    .left-chart-panel > *,
+    .right-decision-panel > *,
+    .charts-master-container > *,
+    .index-macro-workspace > * {
+        min-width: 0;
+    }
+    .kline-viewport,
+    .chips-viewport {
+        overflow: hidden;
+    }
+
+    /* ===== 顶部导航：改为纵向堆叠 ===== */
+    .app-header {
+        position: static;              /* sticky 多行头部在手机上占屏过高 */
+        flex-wrap: wrap;
+        padding: 10px 12px;
+        gap: 10px;
+    }
+    .header-left {
+        width: 100%;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .brand-subtitle {
+        display: none;
+    }
+    .nav-view-switch {
+        width: 100%;
+        padding: 3px;
+    }
+    .nav-tab {
+        flex: 1;
+        justify-content: center;
+        padding: 6px 8px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .market-ticker {
+        width: 100%;
+        padding: 2px 4px;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .market-ticker::-webkit-scrollbar {
+        display: none;
+    }
+    .header-right {
+        width: 100%;
+    }
+    .search-box-wrapper {
+        flex: 1;
+        min-width: 0;
+    }
+    .search-box-wrapper input {
+        flex: 1;
+        width: auto;
+        min-width: 0;
+        font-size: 16px;               /* ≥16px 避免 iOS 聚焦时自动放大 */
+    }
+    .search-btn,
+    .scan-action-btn {
+        white-space: nowrap;
+    }
+
+    /* ===== 工作区统一留白 ===== */
+    .main-workspace {
+        grid-template-columns: 1fr;    /* 个股看板双栏 → 单列 */
+        padding: 12px;
+        gap: 14px;
+    }
+    .index-macro-workspace {
+        padding: 12px;
+        gap: 14px;
+    }
+    .right-decision-panel {
+        gap: 12px;
+    }
+    .glass-card {
+        padding: 14px;
+    }
+
+    /* ===== 个股量化看板 ===== */
+    .stock-summary-bar {
+        flex-wrap: wrap;
+        padding: 12px 14px;
+        gap: 10px;
+    }
+    .stock-title {
+        font-size: 19px;
+    }
+    .current-price {
+        font-size: 24px;
+    }
+    .stock-price-box {
+        margin-left: auto;
+    }
+    .stock-metrics-group {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px 14px;
+        padding-top: 10px;
+        border-top: 1px dashed #e2e8f0;
+    }
+    .metric-item {
+        flex-direction: row;
+        align-items: baseline;
+        justify-content: space-between;
+    }
+    .chart-toolbar {
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 8px 10px;
+    }
+    .period-toggle-group,
+    .indicator-layers-group,
+    .subchart-toggle-group {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .charts-master-container {
+        grid-template-columns: 1fr 80px;
+        height: 400px;
+    }
+    .screener-tabs {
+        flex-wrap: wrap;
+    }
+
+    /* ===== 大盘多周期研判 ===== */
+    .macro-index-nav {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 12px 14px;
+        gap: 10px;
+    }
+    .index-status-summary-tag {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .idx-name {
+        font-size: 16px;
+    }
+    .idx-price {
+        font-size: 19px;
+    }
+    .macro-conclusion-card {
+        padding: 14px 16px;
+    }
+    .conclusion-points-grid {
+        grid-template-columns: 1fr;
+    }
+    .macro-levels-banner {
+        grid-template-columns: 1fr;    /* 支撑/压力两栏 → 上下排列 */
+    }
+    .macro-lvl-row {
+        flex-wrap: wrap;               /* 标签/价格/来源三段改为可换行 */
+        justify-content: flex-start;
+        gap: 4px 10px;
+    }
+    .macro-lvl-tag,
+    .macro-lvl-price {
+        white-space: nowrap;           /* 数字区间不拆行 */
+    }
+    .macro-lvl-src {
+        width: 100%;
+        text-align: left;
+    }
+    .periods-quad-grid {
+        grid-template-columns: 1fr;    /* 四周期卡片 → 单列 */
+    }
+    .period-quad-card {
+        padding: 14px;
+    }
+    .p-card-title {
+        font-size: 16px;
+    }
+    .section-title-bar {
+        flex-wrap: wrap;
+    }
+    .section-title-bar h2 {
+        font-size: 16px;
+    }
+    .section-title-bar .title-sub {
+        font-size: 11px;
+    }
+    .macro-chart-box {
+        padding: 12px 14px;
+    }
+    .macro-chart-toolbar {
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .macro-kline-container {
+        height: 340px !important;      /* 覆盖元素内联 style 的 480px */
+        min-height: 340px !important;
+    }
+
+    /* ===== MRDI 技术图表 (内联 520px) ===== */
+    .mrdi-tech-chart-wrap {
+        height: 360px !important;
+        min-height: 360px !important;
+    }
+}
+
+/* --- 小屏手机 (≤480px) --- */
+@media (max-width: 480px) {
+    .brand-title {
+        font-size: 15px;
+    }
+    .nav-tab {
+        font-size: 11px;
+        padding: 5px 6px;
+        gap: 4px;
+    }
+    .charts-master-container {
+        grid-template-columns: 1fr 64px;
+        height: 360px;
+    }
+    .macro-kline-container {
+        height: 300px !important;
+        min-height: 300px !important;
+    }
+    .mrdi-tech-chart-wrap {
+        height: 320px !important;
+        min-height: 320px !important;
     }
 }
