@@ -69,6 +69,7 @@ class DataFetcher:
     TENCENT_AMOUNT_WAN_TO_YUAN = 10000.0     # 万元 -> 元
     TENCENT_FLOATCAP_YI_TO_YUAN = 1e8        # 亿元 -> 元
     DEFAULT_FLOAT_SHARES_FALLBACK = 500_000_000.0
+    FLOAT_SHARES_CACHE_TTL = 86400  # 流通股本缓存 24h (解禁/增发会改变流通盘)
 
     def __init__(self):
         self.session = requests.Session()
@@ -79,7 +80,7 @@ class DataFetcher:
         })
         self._stock_list_cache = None
         self._stock_list_cache_time = 0
-        self._float_shares_cache: Dict[str, float] = {}  # 流通股本缓存 (股)
+        self._float_shares_cache: Dict[str, tuple] = {}  # 流通股本缓存 (code -> (ts, 股), TTL 24h)
 
     # ------------------------------------------------------------
     # 基础元数据
@@ -207,8 +208,10 @@ class DataFetcher:
         腾讯 parts[44] 为流通市值，单位【亿元】：FloatShares = 亿元 × 1e8 / Price
         结果缓存，避免重复请求
         """
-        if code in self._float_shares_cache and self._float_shares_cache[code] > 0:
-            return self._float_shares_cache[code]
+        if code in self._float_shares_cache:
+            ts, cached = self._float_shares_cache[code]
+            if cached > 0 and (time.time() - ts) < self.FLOAT_SHARES_CACHE_TTL:
+                return cached
 
         sym = self._get_symbol_prefix(code)
         url = f"http://qt.gtimg.cn/q={sym}"
@@ -222,7 +225,7 @@ class DataFetcher:
                 if price > 0 and float_cap_yi > 0:
                     float_shares = float_cap_yi * self.TENCENT_FLOATCAP_YI_TO_YUAN / price
                     if 1e6 < float_shares < 5e11:  # 合理流通盘范围校验
-                        self._float_shares_cache[code] = float_shares
+                        self._float_shares_cache[code] = (time.time(), float_shares)
                         return float_shares
                     logger.warning(f"Float shares out of sane range for {code}: {float_shares}")
         except Exception as e:
@@ -339,7 +342,9 @@ class DataFetcher:
         resp = self.session.get(url, timeout=6)
         js = resp.json()
         node = (js.get("data") or {}).get(sym, {}) or {}
-        raw = node.get("qfqday") or node.get("day") or []
+        # v2.6: 键名随周期变化(日K=qfqday/day, 周K=qfqweek/week)。
+        # 此前只读 qfqday/day → 周K恒为空并静默回退新浪不复权数据, 日/周价格基准不一致。
+        raw = node.get(f"qfq{kind}") or node.get(kind) or []
         records = []
         for item in raw:
             if not isinstance(item, (list, tuple)) or len(item) < 6:

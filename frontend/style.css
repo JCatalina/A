@@ -2909,7 +2909,7 @@ body {
 }
 
 /* --- Responsive --- */
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
     /* ===== MRDI 面板 (原有规则) ===== */
     .mrdi-workspace {
         padding: 12px 14px 30px;
@@ -3171,6 +3171,20 @@ body {
     .mrdi-tech-chart-wrap {
         height: 360px !important;
         min-height: 360px !important;
+    }
+}
+
+/* --- 小平板过渡带 (1025-1140px)：个股看板双栏放不下，降级单栏但保留桌面头部 --- */
+@media (min-width: 1025px) and (max-width: 1140px) {
+    .main-workspace {
+        grid-template-columns: 1fr;
+    }
+    .main-workspace > section,
+    .main-workspace > aside,
+    .left-chart-panel > *,
+    .right-decision-panel > *,
+    .charts-master-container > * {
+        min-width: 0;
     }
 }
 

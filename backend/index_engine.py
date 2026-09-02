@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import requests
 import pandas as pd
 import numpy as np
@@ -32,6 +33,7 @@ class IndexEngine:
     def __init__(self):
         self.session = requests.Session()
         self.session.trust_env = False
+        self._macro_cache: Dict[str, tuple] = {}  # (symbol:scale) -> (ts, result), TTL 分级缓存
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://finance.sina.com.cn"
@@ -369,13 +371,20 @@ class IndexEngine:
         if symbol not in INDEX_META_MAP:
             symbol = "sh000001"
 
+        # v2.6: 分级 TTL 缓存 — 分时 20s / 日K 60s / 周K 300s, 避免前端多面板轮询反复打满外部行情接口
+        cache_ttl = {"30": 20, "60": 20, "240": 60, "1200": 300}.get(str(scale), 60)
+        cache_key = f"{symbol}:{scale}"
+        cached = self._macro_cache.get(cache_key)
+        if cached and (time.time() - cached[0]) < cache_ttl:
+            return cached[1]
+
         meta = INDEX_META_MAP[symbol]
 
-        # 1. 获取四大周期K线 (v2.3: 日K扩充至250根覆盖完整1年宏观周期，周K扩充至120根)
+        # 1. 获取四大周期K线 (v2.6: 60分100→130根、周K120→260根, 保证MA120/MA250为真实窗口而非expanding伪值)
         df_30m = self.fetch_index_kline(symbol, scale="30", count=100)
-        df_60m = self.fetch_index_kline(symbol, scale="60", count=100)
+        df_60m = self.fetch_index_kline(symbol, scale="60", count=130)
         df_daily = self.fetch_index_kline(symbol, scale="240", count=250)
-        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=120)
+        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=260)
 
         if df_daily.empty:
             return {}
@@ -510,7 +519,7 @@ class IndexEngine:
                     "status_tag": period_30m["status_tag"], "detail": period_30m["status_desc"]},
         }
 
-        return {
+        res = {
             # 完整日K (约250根)，供 MRDI 等需要长窗口的指标/分位数计算使用；kline_data 仅为图表截断的90根
             "daily_kline_full": self._format_kline_chart_data(df_daily_ind, len(df_daily_ind)),
             "timeframes": timeframes,
@@ -527,3 +536,5 @@ class IndexEngine:
             "all_kline_data": all_kline_data,
             "scale": scale
         }
+        self._macro_cache[cache_key] = (time.time(), res)
+        return res

@@ -48,8 +48,8 @@ class ScannerEngine:
             if df_daily.empty or len(df_daily) < 60:
                 return None
 
-            # 2. 获取周K线 (默认80根)
-            df_weekly = self.fetcher.get_kline(code, period="weekly", count=80)
+            # 2. 获取周K线 (v2.6: 80→260根, 保证周MA120/MA250为真实窗口而非expanding伪值)
+            df_weekly = self.fetcher.get_kline(code, period="weekly", count=260)
 
             # 3. 计算日K全套指标
             ind_daily = IndicatorEngine.calculate_all_indicators(df_daily)
@@ -145,16 +145,12 @@ class ScannerEngine:
         divs = res.get("divergences", {}) or {}
         levels = res.get("clustered_levels", {}) or {}
         vol_features = res.get("volume_features", {}) or {}
-        backtest = pred.get("historical_backtest", {}) or {}
 
-        # 回测胜率门槛: 有充足样本时要求≥70%，样本不足时放行(不因数据缺失误杀)
-        bt_status = backtest.get("status", "insufficient_data")
-        bt_win = backtest.get("win_rate_10d") or 0
-        bt_ok = (bt_status == "insufficient_data" or bt_win >= 70)
+        # v2.6: 删除"回测胜率≥70%"硬门槛。点时间评估(§14.2)证明单股样本内胜率无预测力
+        # (pooled Rank-IC=0.005, t=0.64), 文档明确要求"不应再作为选股过滤条件或概率融合输入"。
 
         nearest_s = levels.get("nearest_support")
         nearest_r = levels.get("nearest_resistance")
-        s_stars = nearest_s.get("stars", 0) if nearest_s else 0
         s_dist = (res["price"] - nearest_s["center_price"]) / res["price"] * 100 if nearest_s else 999.0
         r_dist = (nearest_r["center_price"] - res["price"]) / res["price"] * 100 if nearest_r else 999.0
 
@@ -165,36 +161,39 @@ class ScannerEngine:
         matched = []
 
         # 策略1: 短线·回踩强支撑
-        # S1上方≤2.5%, 星级≥3, KDJ超卖或回踩信号, 胜率≥70%(有样本时), 盈亏比≥2.2
+        # S1上方≤2.5%, KDJ超卖或回踩信号, 盈亏比≥2.2
+        # v2.6: 删除星级≥3与回测胜率≥70%门槛(星级与反弹率反向、胜率无预测力, 见§14.2)
         if (0 <= s_dist <= 2.5
-                and s_stars >= 3
                 and (kdj_j < 30 or sig_type == "BUY_SUPPORT_PULLBACK")
-                and bt_ok
                 and rr >= 2.2):
             matched.append("SUPPORT_PULLBACK")
 
         # 策略2: 短线·放量突破
-        # 放量≥1.6×前5日均量(vol_ratio口径已排除当日), 逼近R1≤2%, 获利盘≥70%
+        # 放量≥1.6×前5日均量(vol_ratio口径已排除当日), 逼近R1≤2.5%, 获利盘≥70%
+        # v2.6: 允许 r_dist 小幅为负(已站上R1 1.5%以内)——原口径r_dist≤2.0永远选不中"已突破"
         vol_ratio = vol_features.get("vol_ratio", 1.0)
         if (vol_ratio >= 1.6
-                and r_dist <= 2.0
+                and -1.5 <= r_dist <= 2.5
                 and chips.get("profit_ratio", 0) >= 70):
             matched.append("BREAKOUT_PRESSURE")
 
         # 策略3: 中线·主升浪起爆
-        # 周K主升多头排列 + 90%筹码集中度≤10%(单峰控盘) + 现价高于POC≥2% + 回测胜率≥70%(有样本时)
+        # 周K主升多头排列 + 90%筹码集中度≤10%(单峰控盘) + 现价高于POC≥2%
+        # v2.6: 删除回测胜率≥70%门槛(无预测力, 见§14.2)
         is_weekly_bull = "主升多头" in pred.get("weekly_trend_text", "")
         is_single_peak = chips.get("concentration_90", 99) <= 10
         is_above_poc = res["price"] > chips.get("poc", 0) * 1.02 if chips.get("poc") else False
-        if is_weekly_bull and is_single_peak and is_above_poc and bt_ok:
+        if is_weekly_bull and is_single_peak and is_above_poc:
             matched.append("MAIN_WAVE_TREND")
 
         # 策略4: 超跌·多重底背离
         # 触及布林下轨(≤下轨×1.01) 或 日线MACD底背离, 且KDJ J<15 极度超卖
+        # v2.6: 加缩量收敛条件(vol_ratio≤1.2)。评估显示超跌抄底类条件普遍负lift(-2~-3.2pp),
+        # 均值回归在该池不成立; 缩小口径至"卖压衰竭"场景, 待扩池复测后再校准阈值
         boll_lower = last_kline.get("boll_lower") or 0
         near_boll_lower = boll_lower > 0 and res["price"] <= boll_lower * 1.01
         has_bullish_div = divs.get("bullish_divergence", False)
-        if (near_boll_lower or has_bullish_div) and kdj_j < 15:
+        if (near_boll_lower or has_bullish_div) and kdj_j < 15 and vol_ratio <= 1.2:
             matched.append("OVERSOLD_DIVERGENCE")
 
         return matched
@@ -278,15 +277,13 @@ class ScannerEngine:
         - 并发请求共用一次演示分析（互斥锁），杜绝惊群；
         - 提交前再次校验，保证演示数据永远不会覆盖等待期间完成的真实扫描结果。
         """
-        if self.has_scan_results or self.is_scanning:
+        if self.has_scan_results or self.is_scanning or "ALL" in self.last_results:
             return self.last_results.get("ALL", [])
 
         with self._demo_lock:
             # 双检：等锁期间真实扫描可能已经启动/完成
-            if self.has_scan_results or self.is_scanning:
+            if self.has_scan_results or self.is_scanning or "ALL" in self.last_results:
                 return self.last_results.get("ALL", [])
-            if self.last_results.get("ALL"):
-                return self.last_results["ALL"]  # 演示数据已就绪，直接复用
 
             demo_results = []
             for c in DEMO_CODES:

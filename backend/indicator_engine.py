@@ -17,11 +17,10 @@ class IndicatorEngine:
         df = df.copy()
         
         # 1. 均线系统 (MA & EMA)
+        # v2.6: 数据不足窗口一律 NaN。此前用 expanding 均值兜底, 使 80 根周K/100 根60分K
+        # 也产出"MA120/MA250"伪值并以最高权重进入支撑/压力候选(§14 审查结论)，现已禁止。
         for span in [5, 10, 20, 30, 60, 120, 250]:
-            if len(df) >= span:
-                df[f'ma_{span}'] = df['close'].rolling(window=span).mean()
-            else:
-                df[f'ma_{span}'] = df['close'].expanding().mean()
+            df[f'ma_{span}'] = df['close'].rolling(window=span).mean()
         
         df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
         df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()

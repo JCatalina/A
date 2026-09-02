@@ -1,6 +1,8 @@
 import os
 import logging
-from typing import Optional
+import threading
+from contextlib import asynccontextmanager
+from typing import Optional, Literal
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,9 +14,18 @@ from index_engine import IndexEngine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # v2.6: 演示数据预填充转后台线程, 避免首个 /api/screener/results 请求同步阻塞数十秒
+    threading.Thread(target=scanner_engine.ensure_demo_results, daemon=True, name="demo-prewarm").start()
+    yield
+
+
 app = FastAPI(
     title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="2.1.0"
+    version="2.6.0",
+    lifespan=lifespan
 )
 
 # 允许跨域 (allow_origins=["*"] 与 credentials 不兼容，本地单机部署关闭凭证)
@@ -33,7 +44,7 @@ index_engine = IndexEngine()
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
     symbol: str = Query("sh000001", description="指数代码: sh000001, sz399001, sz399006, sh000688"),
-    scale: str = Query("240", description="K线周期: 30, 60, 240, 1200")
+    scale: Literal["30", "60", "240", "1200"] = Query("240", description="K线周期: 30, 60, 240, 1200")
 ):
     """获取大盘指数多周期深度研判数据（含30分/60分/日K/周K、支撑压力、核心结论）"""
     res = index_engine.analyze_index_macro(symbol, scale=scale)
@@ -65,7 +76,7 @@ def get_stocks(query: Optional[str] = Query(None, description="搜索关键词�
 @app.get("/api/stock/analysis")
 def get_stock_analysis(
     code: str = Query(..., description="股票代码，如 600519 或 000001"),
-    period: str = Query("daily", description="K线周期: daily 或 weekly")
+    period: Literal["daily", "weekly"] = Query("daily", description="K线周期: daily 或 weekly")
 ):
     """获取指定股票的完整多维指标、支撑/压力带与量化交易计划"""
     result = scanner_engine.analyze_single_stock(code, period=period)
@@ -74,10 +85,13 @@ def get_stock_analysis(
     
     return {"status": "success", "data": result}
 
+StrategyName = Literal["ALL", "SUPPORT_PULLBACK", "BREAKOUT_PRESSURE", "MAIN_WAVE_TREND", "OVERSOLD_DIVERGENCE"]
+
+
 @app.post("/api/screener/run")
 def trigger_screener(
     background_tasks: BackgroundTasks,
-    strategy: str = Query("ALL", description="策略类别: ALL, SUPPORT_PULLBACK, BREAKOUT_PRESSURE, MAIN_WAVE_TREND, OVERSOLD_DIVERGENCE"),
+    strategy: StrategyName = Query("ALL", description="策略类别: ALL, SUPPORT_PULLBACK, BREAKOUT_PRESSURE, MAIN_WAVE_TREND, OVERSOLD_DIVERGENCE"),
     limit: int = Query(120, description="扫描股票数量")
 ):
     """启动后台全市场/活跃池批量扫描选股"""
@@ -98,7 +112,7 @@ def get_screener_status():
     }
 
 @app.get("/api/screener/results")
-def get_screener_results(strategy: str = Query("ALL")):
+def get_screener_results(strategy: StrategyName = Query("ALL")):
     """
     获取最新选股结果。
     联动约定：扫描结果只存于 last_results["ALL"]（全量命中），本接口按策略实时过滤，

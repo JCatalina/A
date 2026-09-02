@@ -14,6 +14,8 @@ class PredictionEngine:
     # 止损参数 (v2.5 由点时间评估止损扫描确定, 见 ALGORITHM_DOC §14)
     SL_ATR_MULT = 3.0        # 止损至少距入场 3×ATR
     SL_MAX_RISK_PCT = 12.0   # 单笔最大风险兜底
+    # v2.6: position 维度评估显著负IC(§14.2), 重校准前权重置零
+    POSITION_DIM_ENABLED = False
 
     @staticmethod
     def predict_and_plan(
@@ -161,6 +163,9 @@ class PredictionEngine:
         momentum_score = max(5, min(95, momentum_score))
 
         # D. 支撑/压力空间位置得分 (Position & Level Score)
+        # v2.6: position 维度经点时间评估证实显著负IC(§14.2: IC=-0.033, t=-2.30),
+        # "贴近S1得高分"方向反了。在星级经验化重校准完成前:
+        #   1) 维度权重置零(下方复合分数), 2) 分值本身不再给"贴近S1/高星级"加分, 仅保留展示用途
         position_score = 50
         s_dist_pct = 999.0
         r_dist_pct = 999.0
@@ -172,11 +177,8 @@ class PredictionEngine:
             r_price = nearest_r["center_price"]
             r_dist_pct = (r_price - current_price) / current_price * 100
 
-        # 如果距离支撑位在 0% ~ 2.5% 以内，且是高星级支撑，位置极佳 (与文档/扫描器口径一致)
-        if nearest_s and 0 <= s_dist_pct <= 2.5:
-            position_score += 25 + (nearest_s.get("stars", 3) - 3) * 5
-        elif nearest_s and s_dist_pct < 0:
-            # 跌破支撑
+        if nearest_s and s_dist_pct < 0:
+            # 跌破支撑 (展示用风险标记)
             position_score -= 20
 
         # 如果距离压力位非常近（< 1%），面临回落风险
@@ -204,20 +206,12 @@ class PredictionEngine:
             trend_score * w_trend +
             chip_score * w_chips +
             momentum_score * w_momentum +
-            position_score * w_position
+            position_score * w_position * (1.0 if PredictionEngine.POSITION_DIM_ENABLED else 0.0)
         )
 
-        # 结合历史胜率加权调整最终上涨概率
-        # 融合权重按样本量置信度缩放: 样本<30个时按比例降低胜率话语权，
-        # 避免极小样本(如5个样本100%胜率)以50%权重扭曲最终预测；≥30个样本时达到文档约定的0.5
-        if backtest_result["status"] == "sufficient_data":
-            win_rate_10d = backtest_result["win_rate_10d"]
-            n_samples = backtest_result.get("sample_count", 0)
-            bt_weight = 0.5 * min(1.0, n_samples / 30.0)
-            bullish_prob = round(float(composite_score * (1 - bt_weight) + win_rate_10d * bt_weight), 1)
-        else:
-            # 数据不足时仅使用综合评分，不虚构胜率
-            bullish_prob = round(float(composite_score), 1)
+        # v2.6: 单股回测胜率经点时间评估证实无预测力(pooled Rank-IC=0.005, t=0.64, §14.2),
+        # 不再以任何权重混入 bullish_prob(§14.3 明确要求), 仅作为历史描述在 UI 展示。
+        bullish_prob = round(float(composite_score), 1)
 
         bullish_prob = max(15.0, min(92.0, bullish_prob))
         bearish_prob = round(100.0 - bullish_prob, 1)
@@ -276,26 +270,21 @@ class PredictionEngine:
         # 成本经济学下限: 双向成本1%, 距现价<3%的目标净收益<2%, 而止损侧风险普遍>=3%,
         # 结构上不可能达到有效盈亏比; 且横盘期 MA5/MA10/布林上轨常在现价上方<1.5%挤成
         # 3星簇(纯权重堆叠), 星级单独不足以区分微阻力与有效目标
+        # v2.6: 星级与反弹率反向(§14.2), 不再按星级筛选目标位, 统一取"距离优先"
         MIN_TP1_DIST_PCT = 3.0
         far_r = [r for r in resistances
                  if (r["center_price"] - current_price) / current_price * 100 >= MIN_TP1_DIST_PCT]
-        strong_far = [r for r in far_r if r.get("stars", 0) >= 3]
 
-        if strong_far:
-            tp_1 = round(strong_far[0]["center_price"], 2)
-        elif far_r:
+        if far_r:
             tp_1 = round(far_r[0]["center_price"], 2)
         elif nearest_r:
             tp_1 = round(nearest_r["center_price"], 2)
         else:
             tp_1 = round(current_price * 1.08, 2)
 
-        # TP2 取 TP1 之后的下一个有效目标(优先强压力带)；无则 TP1 上方 6%
+        # TP2 取 TP1 之后的下一个有效目标(距离优先)；无则 TP1 上方 6%
         next_cands = [r for r in far_r if r["center_price"] > tp_1 * 1.001]
-        next_strong = [r for r in next_cands if r.get("stars", 0) >= 3]
-        if next_strong:
-            tp_2 = round(next_strong[0]["center_price"], 2)
-        elif next_cands:
+        if next_cands:
             tp_2 = round(next_cands[0]["center_price"], 2)
         else:
             tp_2 = round(tp_1 * 1.06, 2)
