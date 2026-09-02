@@ -11,6 +11,9 @@ class PredictionEngine:
 
     # 单程交易成本 (佣金+印花税+冲击成本)
     TRANSACTION_COST_PCT = 0.5  # 0.5% 单程, 双向约1%
+    # 止损参数 (v2.5 由点时间评估止损扫描确定, 见 ALGORITHM_DOC §14)
+    SL_ATR_MULT = 3.0        # 止损至少距入场 3×ATR
+    SL_MAX_RISK_PCT = 12.0   # 单笔最大风险兜底
 
     @staticmethod
     def predict_and_plan(
@@ -67,9 +70,15 @@ class PredictionEngine:
             trend_score += 10  # 完整多头排列
 
         # 周线加权
+        # 必须使用带指标列的周线 df (indicators_weekly["df"])；调用方传入的原始 df_weekly 没有 ma_20/ma_60，
+        # 此前 last_w.get('ma_20', w_close) 会退化为 w_close，使周线多/空分支永远不触发
         weekly_trend_text = "震荡整理"
-        if df_weekly is not None and not df_weekly.empty and len(df_weekly) >= 10:
-            last_w = df_weekly.iloc[-1]
+        df_weekly_calc = (indicators_weekly or {}).get("df") if indicators_weekly else None
+        if df_weekly_calc is None or df_weekly_calc.empty:
+            df_weekly_calc = df_weekly
+        if df_weekly_calc is not None and not df_weekly_calc.empty and len(df_weekly_calc) >= 10 \
+                and 'ma_20' in df_weekly_calc.columns:
+            last_w = df_weekly_calc.iloc[-1]
             w_close = last_w['close']
             w_ma20 = last_w.get('ma_20', w_close)
             w_ma60 = last_w.get('ma_60', w_close)
@@ -245,19 +254,23 @@ class PredictionEngine:
         # -------------------------------------------------------------
         atr_val = float(last_d.get("atr", current_price * 0.02))
 
-        # 入场价格区间
+        # 入场价格区间与止损
+        # v2.5 (点时间评估 §14 止损扫描): 任何止损都会降低均值收益，且越紧越差；
+        # 原 max(S1×0.975, entry−2×ATR) 实际由 S1 腿主导，等效固定 -3%~-5%，10日触发率 60~70%，
+        # 每笔损失 1~1.6pp 期望且几乎不截断左尾 (跳空/跌停直接穿越)。
+        # 现规则: 止损下限为 entry − 3×ATR (10日触发率 ~11%，均值损失 ~0.17pp)，S1 腿只能把止损放得更宽，
+        # 不能收得更紧；单笔最大风险再以 -12% 兜底。
         if nearest_s:
             entry_low = round(nearest_s["center_price"] * 0.992, 2)
             entry_high = round(max(current_price * 1.003, nearest_s["center_price"] * 1.015), 2)
-            # ATR动态止损: 取 S1下沿2.5% 与 entry-2×ATR 中更保守者
-            # (保守 = 止损价更高 = 单笔风险敞口更小)
             fixed_sl = nearest_s["center_price"] * 0.975
-            atr_sl = entry_low - 2.0 * atr_val
-            stop_loss = round(max(fixed_sl, atr_sl), 2)
+            atr_sl = entry_low - PredictionEngine.SL_ATR_MULT * atr_val
+            stop_loss = min(fixed_sl, atr_sl)
         else:
             entry_low = round(current_price * 0.985, 2)
             entry_high = round(current_price * 1.005, 2)
-            stop_loss = round(current_price - 2.5 * atr_val, 2)
+            stop_loss = current_price - PredictionEngine.SL_ATR_MULT * atr_val
+        stop_loss = round(max(stop_loss, current_price * (1 - PredictionEngine.SL_MAX_RISK_PCT / 100)), 2)
 
         # 目标止盈价格 (第一目标位与第二目标位)
         # 成本经济学下限: 双向成本1%, 距现价<3%的目标净收益<2%, 而止损侧风险普遍>=3%,
@@ -308,7 +321,7 @@ class PredictionEngine:
             "rr_ratio": rr_ratio,
             "rr_quality": "异常（止损位≥现价或无盈利空间，禁止入场）" if rr_ratio <= 0 else ("极佳 (≥3:1)" if rr_ratio >= 3.0 else ("良好 (≥2:1)" if rr_ratio >= 2.0 else "一般 (<2:1)")),
             "holding_period": "3 ~ 8 个交易日 (短线波段)" if bullish_prob >= 70 else "1 ~ 3 个月 (中线波段)",
-            "stop_loss_method": "ATR动态止损 + 固定比例取保守值"
+            "stop_loss_method": f"止损下限 {PredictionEngine.SL_ATR_MULT:g}×ATR (S1 只能放宽不能收紧), 单笔风险上限 {PredictionEngine.SL_MAX_RISK_PCT:g}%"
         }
 
         # 四维雷达数据 (含权重信息)
@@ -465,7 +478,7 @@ class PredictionEngine:
             if match and (i - last_sample_i) >= MIN_SAMPLE_GAP:
                 # v2.2 路径依赖止损模拟: 持仓期间若盘中最低价触碰动态止损线则视为止损出局
                 atr_i = float(atrs[i]) if pd.notna(atrs[i]) and atrs[i] > 0 else p * 0.02
-                stop_loss_price = p - 2.0 * atr_i
+                stop_loss_price = p - PredictionEngine.SL_ATR_MULT * atr_i   # 与交易计划止损口径一致
 
                 def _path_aware_gain(horizon: int) -> float:
                     """路径依赖收益: 先检查持仓期间是否触碰止损，再按终点结算"""

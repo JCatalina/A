@@ -121,6 +121,19 @@ def get_screener_results(strategy: str = Query("ALL")):
         "data": res
     }
 
+EVAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_reports")
+
+@app.get("/api/eval/latest")
+def get_latest_eval():
+    """读取最近一次点时间评估报告 (由 `python run_eval.py` 离线生成)"""
+    path = os.path.join(EVAL_DIR, "latest.json")
+    if not os.path.exists(path):
+        return JSONResponse(status_code=404, content={"status": "error",
+                            "message": "尚无评估报告，请在 backend 目录执行 python run_eval.py"})
+    import json
+    with open(path, "r", encoding="utf-8") as fh:
+        return {"status": "success", "data": json.load(fh)}
+
 # 挂载前端静态页面
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

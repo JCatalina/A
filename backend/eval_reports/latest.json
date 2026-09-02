@@ -1,0 +1,1673 @@
+{
+  "baseline": {
+    "ret_5": {
+      "n": 5582,
+      "hit": 48.6,
+      "ci": [
+        47.3,
+        50.0
+      ],
+      "mean": 0.88,
+      "median": -0.27,
+      "profit_factor": 1.28
+    },
+    "ret_10": {
+      "n": 5582,
+      "hit": 51.0,
+      "ci": [
+        49.7,
+        52.3
+      ],
+      "mean": 2.51,
+      "median": 0.29,
+      "profit_factor": 1.63
+    },
+    "ret_20": {
+      "n": 5582,
+      "hit": 54.0,
+      "ci": [
+        52.6,
+        55.3
+      ],
+      "mean": 6.0,
+      "median": 1.35,
+      "profit_factor": 2.23
+    },
+    "exc_10": {
+      "n": 5582,
+      "hit": 51.9,
+      "ci": [
+        50.6,
+        53.2
+      ],
+      "mean": 3.09,
+      "median": 0.43,
+      "profit_factor": 1.93
+    }
+  },
+  "unfillable_limit_up_pct": 0.3,
+  "by_signal": {
+    "BUY_BREAKOUT": {
+      "ret_5": {
+        "n": 11,
+        "hit": 36.4,
+        "ci": [
+          15.2,
+          64.6
+        ],
+        "mean": -2.48,
+        "median": -0.2,
+        "profit_factor": 0.44
+      },
+      "ret_10": {
+        "n": 11,
+        "hit": 54.5,
+        "ci": [
+          28.0,
+          78.7
+        ],
+        "mean": 0.09,
+        "median": 3.23,
+        "profit_factor": 1.02
+      },
+      "ret_20": {
+        "n": 11,
+        "hit": 54.5,
+        "ci": [
+          28.0,
+          78.7
+        ],
+        "mean": 5.21,
+        "median": 0.07,
+        "profit_factor": 2.19
+      },
+      "exc_10": {
+        "n": 11,
+        "hit": 54.5,
+        "ci": [
+          28.0,
+          78.7
+        ],
+        "mean": 0.89,
+        "median": 0.07,
+        "profit_factor": 1.25
+      },
+      "path_ret_10": {
+        "n": 11,
+        "hit": 45.5,
+        "ci": [
+          21.3,
+          72.0
+        ],
+        "mean": -2.32,
+        "median": -7.76,
+        "profit_factor": 0.61
+      },
+      "sl_hit_rate_10": 54.5,
+      "lift_hit10_pp": 3.5,
+      "lift_mean10_pp": -2.42,
+      "share_pct": 0.2
+    },
+    "BUY_SUPPORT_PULLBACK": {
+      "ret_5": {
+        "n": 50,
+        "hit": 40.0,
+        "ci": [
+          27.6,
+          53.8
+        ],
+        "mean": -0.5,
+        "median": -2.11,
+        "profit_factor": 0.85
+      },
+      "ret_10": {
+        "n": 50,
+        "hit": 48.0,
+        "ci": [
+          34.8,
+          61.5
+        ],
+        "mean": -1.77,
+        "median": -0.48,
+        "profit_factor": 0.68
+      },
+      "ret_20": {
+        "n": 50,
+        "hit": 28.0,
+        "ci": [
+          17.5,
+          41.7
+        ],
+        "mean": -2.85,
+        "median": -5.59,
+        "profit_factor": 0.63
+      },
+      "exc_10": {
+        "n": 50,
+        "hit": 48.0,
+        "ci": [
+          34.8,
+          61.5
+        ],
+        "mean": -0.75,
+        "median": -1.38,
+        "profit_factor": 0.84
+      },
+      "path_ret_10": {
+        "n": 50,
+        "hit": 44.0,
+        "ci": [
+          31.2,
+          57.7
+        ],
+        "mean": -2.22,
+        "median": -2.15,
+        "profit_factor": 0.61
+      },
+      "sl_hit_rate_10": 32.0,
+      "lift_hit10_pp": -3.0,
+      "lift_mean10_pp": -4.28,
+      "share_pct": 0.9
+    },
+    "HOLD_WATCH": {
+      "ret_5": {
+        "n": 5429,
+        "hit": 48.8,
+        "ci": [
+          47.5,
+          50.2
+        ],
+        "mean": 0.93,
+        "median": -0.23,
+        "profit_factor": 1.29
+      },
+      "ret_10": {
+        "n": 5429,
+        "hit": 51.1,
+        "ci": [
+          49.7,
+          52.4
+        ],
+        "mean": 2.58,
+        "median": 0.3,
+        "profit_factor": 1.65
+      },
+      "ret_20": {
+        "n": 5429,
+        "hit": 54.1,
+        "ci": [
+          52.8,
+          55.5
+        ],
+        "mean": 6.17,
+        "median": 1.44,
+        "profit_factor": 2.27
+      },
+      "exc_10": {
+        "n": 5429,
+        "hit": 51.9,
+        "ci": [
+          50.6,
+          53.2
+        ],
+        "mean": 3.15,
+        "median": 0.45,
+        "profit_factor": 1.95
+      },
+      "path_ret_10": {
+        "n": 5429,
+        "hit": 49.1,
+        "ci": [
+          47.8,
+          50.4
+        ],
+        "mean": 2.17,
+        "median": -0.21,
+        "profit_factor": 1.53
+      },
+      "sl_hit_rate_10": 19.8,
+      "lift_hit10_pp": 0.1,
+      "lift_mean10_pp": 0.07,
+      "share_pct": 97.3
+    },
+    "SELL_RESISTANCE_REJECT": {
+      "ret_5": {
+        "n": 92,
+        "hit": 43.5,
+        "ci": [
+          33.8,
+          53.7
+        ],
+        "mean": -0.69,
+        "median": -0.79,
+        "profit_factor": 0.75
+      },
+      "ret_10": {
+        "n": 92,
+        "hit": 50.0,
+        "ci": [
+          40.0,
+          60.0
+        ],
+        "mean": 1.02,
+        "median": -0.13,
+        "profit_factor": 1.27
+      },
+      "ret_20": {
+        "n": 92,
+        "hit": 57.6,
+        "ci": [
+          47.4,
+          67.2
+        ],
+        "mean": 1.42,
+        "median": 1.86,
+        "profit_factor": 1.27
+      },
+      "exc_10": {
+        "n": 92,
+        "hit": 51.1,
+        "ci": [
+          41.0,
+          61.1
+        ],
+        "mean": 1.75,
+        "median": 0.41,
+        "profit_factor": 1.58
+      },
+      "path_ret_10": {
+        "n": 92,
+        "hit": 47.8,
+        "ci": [
+          37.9,
+          57.9
+        ],
+        "mean": 0.04,
+        "median": -0.84,
+        "profit_factor": 1.01
+      },
+      "sl_hit_rate_10": 23.9,
+      "lift_hit10_pp": -1.0,
+      "lift_mean10_pp": -1.49,
+      "share_pct": 1.6
+    }
+  },
+  "rank_ic": {
+    "composite_score": {
+      "pooled_ic_ret10": 0.007,
+      "pooled_ic_exc10": 0.0007,
+      "n": 5582,
+      "daily_ic_mean": 0.0064,
+      "daily_ic_std": 0.2331,
+      "icir": 0.028,
+      "t_stat": 0.33,
+      "days": 144
+    },
+    "bullish_prob": {
+      "pooled_ic_ret10": -0.0096,
+      "pooled_ic_exc10": -0.0137,
+      "n": 5582,
+      "daily_ic_mean": -0.0012,
+      "daily_ic_std": 0.2383,
+      "icir": -0.005,
+      "t_stat": -0.06,
+      "days": 144
+    },
+    "trend": {
+      "pooled_ic_ret10": -0.0195,
+      "pooled_ic_exc10": -0.0185,
+      "n": 5582,
+      "daily_ic_mean": -0.0085,
+      "daily_ic_std": 0.296,
+      "icir": -0.029,
+      "t_stat": -0.35,
+      "days": 144
+    },
+    "chips": {
+      "pooled_ic_ret10": 0.0283,
+      "pooled_ic_exc10": 0.0222,
+      "n": 5582,
+      "daily_ic_mean": 0.0325,
+      "daily_ic_std": 0.2338,
+      "icir": 0.139,
+      "t_stat": 1.67,
+      "days": 144
+    },
+    "momentum": {
+      "pooled_ic_ret10": 0.0348,
+      "pooled_ic_exc10": 0.0244,
+      "n": 5582,
+      "daily_ic_mean": 0.0197,
+      "daily_ic_std": 0.2116,
+      "icir": 0.093,
+      "t_stat": 1.12,
+      "days": 144
+    },
+    "position": {
+      "pooled_ic_ret10": -0.0287,
+      "pooled_ic_exc10": -0.0297,
+      "n": 5582,
+      "daily_ic_mean": -0.0271,
+      "daily_ic_std": 0.1757,
+      "icir": -0.154,
+      "t_stat": -1.85,
+      "days": 144
+    },
+    "bt_win10": {
+      "pooled_ic_ret10": -0.0003,
+      "pooled_ic_exc10": 0.0057,
+      "n": 5496,
+      "daily_ic_mean": 0.0044,
+      "daily_ic_std": 0.2072,
+      "icir": 0.021,
+      "t_stat": 0.26,
+      "days": 144
+    },
+    "rr_ratio": {
+      "pooled_ic_ret10": 0.0151,
+      "pooled_ic_exc10": 0.0133,
+      "n": 5582,
+      "daily_ic_mean": 0.0068,
+      "daily_ic_std": 0.1724,
+      "icir": 0.04,
+      "t_stat": 0.47,
+      "days": 144
+    }
+  },
+  "composite_quintiles": [
+    {
+      "n": 1117,
+      "hit": 54.1,
+      "ci": [
+        51.1,
+        57.0
+      ],
+      "mean": 2.38,
+      "median": 1.02,
+      "profit_factor": 1.72,
+      "quintile": 1,
+      "score_range": [
+        19,
+        48
+      ],
+      "mean_exc_10": 2.92
+    },
+    {
+      "n": 1116,
+      "hit": 49.6,
+      "ci": [
+        46.6,
+        52.5
+      ],
+      "mean": 1.57,
+      "median": -0.08,
+      "profit_factor": 1.38,
+      "quintile": 2,
+      "score_range": [
+        48,
+        57
+      ],
+      "mean_exc_10": 2.25
+    },
+    {
+      "n": 1116,
+      "hit": 47.5,
+      "ci": [
+        44.6,
+        50.4
+      ],
+      "mean": 1.55,
+      "median": -0.48,
+      "profit_factor": 1.38,
+      "quintile": 3,
+      "score_range": [
+        57,
+        64
+      ],
+      "mean_exc_10": 2.13
+    },
+    {
+      "n": 1116,
+      "hit": 53.0,
+      "ci": [
+        50.1,
+        56.0
+      ],
+      "mean": 3.7,
+      "median": 1.08,
+      "profit_factor": 1.92,
+      "quintile": 4,
+      "score_range": [
+        64,
+        71
+      ],
+      "mean_exc_10": 4.28
+    },
+    {
+      "n": 1117,
+      "hit": 51.0,
+      "ci": [
+        48.1,
+        54.0
+      ],
+      "mean": 3.35,
+      "median": 0.29,
+      "profit_factor": 1.78,
+      "quintile": 5,
+      "score_range": [
+        71,
+        88
+      ],
+      "mean_exc_10": 3.86
+    }
+  ],
+  "calibration_bullish_prob": [
+    {
+      "n": 375,
+      "hit": 52.8,
+      "ci": [
+        47.7,
+        57.8
+      ],
+      "mean": 2.12,
+      "median": 0.43,
+      "profit_factor": 1.67,
+      "bin": "<40",
+      "pred_mean": 35.2,
+      "calib_gap_pp": 17.6
+    },
+    {
+      "n": 1265,
+      "hit": 54.5,
+      "ci": [
+        51.8,
+        57.3
+      ],
+      "mean": 2.42,
+      "median": 1.05,
+      "profit_factor": 1.71,
+      "bin": "40-50",
+      "pred_mean": 45.5,
+      "calib_gap_pp": 9.0
+    },
+    {
+      "n": 1957,
+      "hit": 48.5,
+      "ci": [
+        46.3,
+        50.7
+      ],
+      "mean": 2.13,
+      "median": -0.34,
+      "profit_factor": 1.5,
+      "bin": "50-60",
+      "pred_mean": 54.9,
+      "calib_gap_pp": -6.4
+    },
+    {
+      "n": 1675,
+      "hit": 51.5,
+      "ci": [
+        49.1,
+        53.9
+      ],
+      "mean": 3.2,
+      "median": 0.52,
+      "profit_factor": 1.75,
+      "bin": "60-70",
+      "pred_mean": 64.4,
+      "calib_gap_pp": -12.9
+    },
+    {
+      "n": 306,
+      "hit": 48.4,
+      "ci": [
+        42.8,
+        54.0
+      ],
+      "mean": 2.22,
+      "median": -0.64,
+      "profit_factor": 1.53,
+      "bin": "70-80",
+      "pred_mean": 72.5,
+      "calib_gap_pp": -24.1
+    },
+    {
+      "n": 4,
+      "hit": 25.0,
+      "ci": [
+        4.6,
+        69.9
+      ],
+      "mean": -12.0,
+      "median": -14.91,
+      "profit_factor": 0.17,
+      "bin": "≥80",
+      "pred_mean": 81.7,
+      "calib_gap_pp": -56.7
+    }
+  ],
+  "support_band": {
+    "all_near_s1": {
+      "n": 4769,
+      "hit": 50.7,
+      "ci": [
+        49.2,
+        52.1
+      ],
+      "mean": 2.34,
+      "median": 0.16,
+      "profit_factor": 1.62
+    },
+    "stars_1": {
+      "n": 858,
+      "hit": 53.6,
+      "ci": [
+        50.3,
+        56.9
+      ],
+      "mean": 2.99,
+      "median": 1.08,
+      "profit_factor": 1.71
+    },
+    "stars_2": {
+      "n": 706,
+      "hit": 53.1,
+      "ci": [
+        49.4,
+        56.8
+      ],
+      "mean": 3.42,
+      "median": 0.88,
+      "profit_factor": 1.92
+    },
+    "stars_3": {
+      "n": 456,
+      "hit": 48.5,
+      "ci": [
+        43.9,
+        53.0
+      ],
+      "mean": 1.84,
+      "median": -0.54,
+      "profit_factor": 1.44
+    },
+    "stars_4": {
+      "n": 759,
+      "hit": 53.0,
+      "ci": [
+        49.4,
+        56.5
+      ],
+      "mean": 3.0,
+      "median": 0.96,
+      "profit_factor": 1.79
+    },
+    "stars_5": {
+      "n": 1990,
+      "hit": 48.1,
+      "ci": [
+        46.0,
+        50.3
+      ],
+      "mean": 1.55,
+      "median": -0.39,
+      "profit_factor": 1.44
+    },
+    "not_near_s1": {
+      "n": 813,
+      "hit": 53.3,
+      "ci": [
+        49.8,
+        56.7
+      ],
+      "mean": 3.49,
+      "median": 1.39,
+      "profit_factor": 1.68
+    }
+  },
+  "rr_bins_path10": [
+    {
+      "n": 117,
+      "hit": 56.4,
+      "ci": [
+        47.4,
+        65.1
+      ],
+      "mean": 5.03,
+      "median": 4.42,
+      "profit_factor": 2.22,
+      "bin": "≤0(异常)",
+      "sl_hit_rate": 20.5
+    },
+    {
+      "n": 5382,
+      "hit": 48.7,
+      "ci": [
+        47.4,
+        50.1
+      ],
+      "mean": 1.97,
+      "median": -0.32,
+      "profit_factor": 1.47,
+      "bin": "0-1",
+      "sl_hit_rate": 20.0
+    },
+    {
+      "n": 79,
+      "hit": 55.7,
+      "ci": [
+        44.7,
+        66.1
+      ],
+      "mean": 5.39,
+      "median": 2.02,
+      "profit_factor": 2.45,
+      "bin": "1-2",
+      "sl_hit_rate": 22.8
+    },
+    {
+      "n": 4,
+      "hit": 100.0,
+      "ci": [
+        51.0,
+        100.0
+      ],
+      "mean": 9.9,
+      "median": 7.88,
+      "profit_factor": null,
+      "bin": "2-3",
+      "sl_hit_rate": 0.0
+    }
+  ],
+  "stop_loss_sweep": {
+    "atr_pct_median": 4.65,
+    "h10": [
+      {
+        "n": 5582,
+        "hit": 51.0,
+        "ci": [
+          49.7,
+          52.3
+        ],
+        "mean": 2.51,
+        "median": 0.29,
+        "profit_factor": 1.63,
+        "variant": "无止损",
+        "sl_hit_rate": 0.0,
+        "p05": -16.6,
+        "std": 15.26,
+        "mean_vs_nostop_pp": 0.0
+      },
+      {
+        "n": 5582,
+        "hit": 45.4,
+        "ci": [
+          44.1,
+          46.7
+        ],
+        "mean": 1.99,
+        "median": -1.51,
+        "profit_factor": 1.5,
+        "variant": "1.5×ATR",
+        "sl_hit_rate": 38.9,
+        "mean_vs_nostop_pp": -0.52,
+        "p05": -12.91,
+        "std": 14.5
+      },
+      {
+        "n": 5582,
+        "hit": 48.7,
+        "ci": [
+          47.4,
+          50.0
+        ],
+        "mean": 2.15,
+        "median": -0.35,
+        "profit_factor": 1.52,
+        "variant": "2×ATR",
+        "sl_hit_rate": 26.8,
+        "mean_vs_nostop_pp": -0.36,
+        "p05": -15.38,
+        "std": 14.98
+      },
+      {
+        "n": 5582,
+        "hit": 50.7,
+        "ci": [
+          49.4,
+          52.0
+        ],
+        "mean": 2.34,
+        "median": 0.2,
+        "profit_factor": 1.57,
+        "variant": "3×ATR",
+        "sl_hit_rate": 11.1,
+        "mean_vs_nostop_pp": -0.17,
+        "p05": -16.75,
+        "std": 15.29
+      },
+      {
+        "n": 5582,
+        "hit": 51.0,
+        "ci": [
+          49.7,
+          52.3
+        ],
+        "mean": 2.37,
+        "median": 0.28,
+        "profit_factor": 1.58,
+        "variant": "4×ATR",
+        "sl_hit_rate": 4.7,
+        "mean_vs_nostop_pp": -0.14,
+        "p05": -17.35,
+        "std": 15.39
+      },
+      {
+        "n": 5582,
+        "hit": 51.0,
+        "ci": [
+          49.7,
+          52.3
+        ],
+        "mean": 2.46,
+        "median": 0.29,
+        "profit_factor": 1.61,
+        "variant": "6×ATR",
+        "sl_hit_rate": 0.9,
+        "mean_vs_nostop_pp": -0.05,
+        "p05": -17.07,
+        "std": 15.33
+      },
+      {
+        "n": 5582,
+        "hit": 28.3,
+        "ci": [
+          27.2,
+          29.5
+        ],
+        "mean": 0.9,
+        "median": -4.0,
+        "profit_factor": 1.31,
+        "variant": "固定 -3%",
+        "sl_hit_rate": 67.7,
+        "mean_vs_nostop_pp": -1.61,
+        "p05": -4.25,
+        "std": 11.42
+      },
+      {
+        "n": 5582,
+        "hit": 38.8,
+        "ci": [
+          37.5,
+          40.1
+        ],
+        "mean": 1.58,
+        "median": -6.0,
+        "profit_factor": 1.45,
+        "variant": "固定 -5%",
+        "sl_hit_rate": 51.2,
+        "mean_vs_nostop_pp": -0.93,
+        "p05": -6.63,
+        "std": 13.1
+      },
+      {
+        "n": 5582,
+        "hit": 46.2,
+        "ci": [
+          44.9,
+          47.5
+        ],
+        "mean": 2.02,
+        "median": -1.06,
+        "profit_factor": 1.51,
+        "variant": "固定 -8%",
+        "sl_hit_rate": 33.6,
+        "mean_vs_nostop_pp": -0.49,
+        "p05": -9.5,
+        "std": 14.25
+      },
+      {
+        "n": 5582,
+        "hit": 49.5,
+        "ci": [
+          48.2,
+          50.8
+        ],
+        "mean": 2.17,
+        "median": -0.15,
+        "profit_factor": 1.53,
+        "variant": "固定 -12%",
+        "sl_hit_rate": 18.4,
+        "mean_vs_nostop_pp": -0.34,
+        "p05": -13.0,
+        "std": 14.86
+      }
+    ],
+    "h20": [
+      {
+        "n": 5582,
+        "hit": 54.0,
+        "ci": [
+          52.6,
+          55.3
+        ],
+        "mean": 6.0,
+        "median": 1.35,
+        "profit_factor": 2.23,
+        "variant": "无止损",
+        "sl_hit_rate": 0.0,
+        "p05": -21.3,
+        "std": 23.1,
+        "mean_vs_nostop_pp": 0.0
+      },
+      {
+        "n": 5582,
+        "hit": 41.5,
+        "ci": [
+          40.2,
+          42.8
+        ],
+        "mean": 4.42,
+        "median": -4.59,
+        "profit_factor": 1.92,
+        "variant": "1.5×ATR",
+        "sl_hit_rate": 50.6,
+        "mean_vs_nostop_pp": -1.58,
+        "p05": -13.81,
+        "std": 21.4
+      },
+      {
+        "n": 5582,
+        "hit": 47.4,
+        "ci": [
+          46.1,
+          48.7
+        ],
+        "mean": 5.01,
+        "median": -1.39,
+        "profit_factor": 1.98,
+        "variant": "2×ATR",
+        "sl_hit_rate": 38.6,
+        "mean_vs_nostop_pp": -0.99,
+        "p05": -16.81,
+        "std": 22.33
+      },
+      {
+        "n": 5582,
+        "hit": 52.1,
+        "ci": [
+          50.8,
+          53.4
+        ],
+        "mean": 5.57,
+        "median": 0.92,
+        "profit_factor": 2.07,
+        "variant": "3×ATR",
+        "sl_hit_rate": 21.5,
+        "mean_vs_nostop_pp": -0.43,
+        "p05": -20.79,
+        "std": 23.01
+      },
+      {
+        "n": 5582,
+        "hit": 53.3,
+        "ci": [
+          52.0,
+          54.6
+        ],
+        "mean": 5.7,
+        "median": 1.24,
+        "profit_factor": 2.11,
+        "variant": "4×ATR",
+        "sl_hit_rate": 11.8,
+        "mean_vs_nostop_pp": -0.3,
+        "p05": -22.18,
+        "std": 23.18
+      },
+      {
+        "n": 5582,
+        "hit": 53.9,
+        "ci": [
+          52.6,
+          55.2
+        ],
+        "mean": 5.85,
+        "median": 1.33,
+        "profit_factor": 2.16,
+        "variant": "6×ATR",
+        "sl_hit_rate": 3.6,
+        "mean_vs_nostop_pp": -0.15,
+        "p05": -22.06,
+        "std": 23.23
+      },
+      {
+        "n": 5582,
+        "hit": 24.4,
+        "ci": [
+          23.3,
+          25.5
+        ],
+        "mean": 2.34,
+        "median": -4.0,
+        "profit_factor": 1.73,
+        "variant": "固定 -3%",
+        "sl_hit_rate": 74.1,
+        "mean_vs_nostop_pp": -3.66,
+        "p05": -4.6,
+        "std": 16.5
+      },
+      {
+        "n": 5582,
+        "hit": 35.1,
+        "ci": [
+          33.9,
+          36.4
+        ],
+        "mean": 3.67,
+        "median": -6.0,
+        "profit_factor": 1.92,
+        "variant": "固定 -5%",
+        "sl_hit_rate": 60.4,
+        "mean_vs_nostop_pp": -2.33,
+        "p05": -7.04,
+        "std": 19.17
+      },
+      {
+        "n": 5582,
+        "hit": 44.0,
+        "ci": [
+          42.7,
+          45.3
+        ],
+        "mean": 4.62,
+        "median": -3.11,
+        "profit_factor": 1.99,
+        "variant": "固定 -8%",
+        "sl_hit_rate": 44.7,
+        "mean_vs_nostop_pp": -1.38,
+        "p05": -10.13,
+        "std": 21.17
+      },
+      {
+        "n": 5582,
+        "hit": 49.3,
+        "ci": [
+          48.0,
+          50.6
+        ],
+        "mean": 5.11,
+        "median": -0.28,
+        "profit_factor": 2.0,
+        "variant": "固定 -12%",
+        "sl_hit_rate": 30.0,
+        "mean_vs_nostop_pp": -0.89,
+        "p05": -13.49,
+        "std": 22.35
+      }
+    ]
+  },
+  "insample_backtest_validity": {
+    "n_with_backtest": 5496,
+    "share_pct": 98.5,
+    "by_bin": [
+      {
+        "n": 4165,
+        "hit": 50.6,
+        "ci": [
+          49.1,
+          52.2
+        ],
+        "mean": 2.47,
+        "median": 0.17,
+        "profit_factor": 1.65,
+        "bin": "<50",
+        "pred_mean": 39.3
+      },
+      {
+        "n": 1075,
+        "hit": 53.1,
+        "ci": [
+          50.1,
+          56.1
+        ],
+        "mean": 2.94,
+        "median": 1.0,
+        "profit_factor": 1.68,
+        "bin": "50-60",
+        "pred_mean": 55.4
+      },
+      {
+        "n": 238,
+        "hit": 48.7,
+        "ci": [
+          42.5,
+          55.1
+        ],
+        "mean": 1.51,
+        "median": -0.21,
+        "profit_factor": 1.3,
+        "bin": "60-70",
+        "pred_mean": 63.9
+      },
+      {
+        "n": 18,
+        "hit": 61.1,
+        "ci": [
+          38.6,
+          79.7
+        ],
+        "mean": 2.41,
+        "median": 2.67,
+        "profit_factor": 1.95,
+        "bin": "≥70",
+        "pred_mean": 72.4
+      }
+    ],
+    "pooled_ic": -0.0003
+  },
+  "pooled_conditions": {
+    "baseline": {
+      "ret_5": {
+        "n": 16700,
+        "hit": 48.2,
+        "ci": [
+          47.4,
+          49.0
+        ],
+        "mean": 0.9,
+        "median": -0.29,
+        "profit_factor": 1.29
+      },
+      "ret_10": {
+        "n": 16700,
+        "hit": 51.5,
+        "ci": [
+          50.7,
+          52.2
+        ],
+        "mean": 2.54,
+        "median": 0.36,
+        "profit_factor": 1.65
+      },
+      "ret_20": {
+        "n": 16700,
+        "hit": 54.2,
+        "ci": [
+          53.4,
+          54.9
+        ],
+        "mean": 6.03,
+        "median": 1.43,
+        "profit_factor": 2.26
+      }
+    },
+    "ma_bull": {
+      "ret_5": {
+        "n": 6514,
+        "hit": 50.6,
+        "ci": [
+          49.4,
+          51.8
+        ],
+        "mean": 1.94,
+        "median": 0.12,
+        "profit_factor": 1.56
+      },
+      "ret_10": {
+        "n": 6514,
+        "hit": 53.3,
+        "ci": [
+          52.1,
+          54.5
+        ],
+        "mean": 4.07,
+        "median": 1.11,
+        "profit_factor": 1.95
+      },
+      "ret_20": {
+        "n": 6514,
+        "hit": 54.9,
+        "ci": [
+          53.6,
+          56.1
+        ],
+        "mean": 8.04,
+        "median": 2.26,
+        "profit_factor": 2.46
+      },
+      "lift_hit10_pp": 1.8,
+      "lift_mean10_pp": 1.53,
+      "freq_pct": 39.01
+    },
+    "ma_bull_full": {
+      "ret_5": {
+        "n": 5178,
+        "hit": 49.4,
+        "ci": [
+          48.0,
+          50.8
+        ],
+        "mean": 1.82,
+        "median": -0.12,
+        "profit_factor": 1.48
+      },
+      "ret_10": {
+        "n": 5178,
+        "hit": 51.6,
+        "ci": [
+          50.2,
+          53.0
+        ],
+        "mean": 3.86,
+        "median": 0.58,
+        "profit_factor": 1.82
+      },
+      "ret_20": {
+        "n": 5178,
+        "hit": 52.2,
+        "ci": [
+          50.9,
+          53.6
+        ],
+        "mean": 7.26,
+        "median": 1.0,
+        "profit_factor": 2.17
+      },
+      "lift_hit10_pp": 0.1,
+      "lift_mean10_pp": 1.32,
+      "freq_pct": 31.01
+    },
+    "ma_bear": {
+      "ret_5": {
+        "n": 3557,
+        "hit": 49.5,
+        "ci": [
+          47.8,
+          51.1
+        ],
+        "mean": 0.79,
+        "median": -0.06,
+        "profit_factor": 1.33
+      },
+      "ret_10": {
+        "n": 3557,
+        "hit": 55.6,
+        "ci": [
+          53.9,
+          57.2
+        ],
+        "mean": 2.67,
+        "median": 1.1,
+        "profit_factor": 1.94
+      },
+      "ret_20": {
+        "n": 3557,
+        "hit": 59.4,
+        "ci": [
+          57.8,
+          61.0
+        ],
+        "mean": 5.39,
+        "median": 2.75,
+        "profit_factor": 2.47
+      },
+      "lift_hit10_pp": 4.1,
+      "lift_mean10_pp": 0.13,
+      "freq_pct": 21.3
+    },
+    "near_ma20": {
+      "ret_5": {
+        "n": 4915,
+        "hit": 48.6,
+        "ci": [
+          47.2,
+          50.0
+        ],
+        "mean": 0.79,
+        "median": -0.16,
+        "profit_factor": 1.31
+      },
+      "ret_10": {
+        "n": 4915,
+        "hit": 52.2,
+        "ci": [
+          50.8,
+          53.6
+        ],
+        "mean": 2.27,
+        "median": 0.37,
+        "profit_factor": 1.71
+      },
+      "ret_20": {
+        "n": 4915,
+        "hit": 53.6,
+        "ci": [
+          52.2,
+          55.0
+        ],
+        "mean": 5.41,
+        "median": 1.06,
+        "profit_factor": 2.32
+      },
+      "lift_hit10_pp": 0.7,
+      "lift_mean10_pp": -0.27,
+      "freq_pct": 29.43
+    },
+    "j_lt45": {
+      "ret_5": {
+        "n": 7731,
+        "hit": 46.5,
+        "ci": [
+          45.4,
+          47.6
+        ],
+        "mean": 0.27,
+        "median": -0.56,
+        "profit_factor": 1.08
+      },
+      "ret_10": {
+        "n": 7731,
+        "hit": 49.3,
+        "ci": [
+          48.2,
+          50.4
+        ],
+        "mean": 1.43,
+        "median": -0.15,
+        "profit_factor": 1.35
+      },
+      "ret_20": {
+        "n": 7731,
+        "hit": 52.1,
+        "ci": [
+          51.0,
+          53.3
+        ],
+        "mean": 4.52,
+        "median": 0.71,
+        "profit_factor": 1.94
+      },
+      "lift_hit10_pp": -2.2,
+      "lift_mean10_pp": -1.11,
+      "freq_pct": 46.29
+    },
+    "j_lt20": {
+      "ret_5": {
+        "n": 4660,
+        "hit": 45.9,
+        "ci": [
+          44.5,
+          47.4
+        ],
+        "mean": -0.01,
+        "median": -0.63,
+        "profit_factor": 1.0
+      },
+      "ret_10": {
+        "n": 4660,
+        "hit": 49.2,
+        "ci": [
+          47.8,
+          50.7
+        ],
+        "mean": 0.9,
+        "median": -0.17,
+        "profit_factor": 1.21
+      },
+      "ret_20": {
+        "n": 4660,
+        "hit": 52.4,
+        "ci": [
+          51.0,
+          53.8
+        ],
+        "mean": 3.98,
+        "median": 0.69,
+        "profit_factor": 1.84
+      },
+      "lift_hit10_pp": -2.3,
+      "lift_mean10_pp": -1.64,
+      "freq_pct": 27.9
+    },
+    "j_gt95": {
+      "ret_5": {
+        "n": 1710,
+        "hit": 48.4,
+        "ci": [
+          46.0,
+          50.7
+        ],
+        "mean": 1.14,
+        "median": -0.3,
+        "profit_factor": 1.33
+      },
+      "ret_10": {
+        "n": 1710,
+        "hit": 53.7,
+        "ci": [
+          51.3,
+          56.0
+        ],
+        "mean": 3.11,
+        "median": 1.07,
+        "profit_factor": 1.77
+      },
+      "ret_20": {
+        "n": 1710,
+        "hit": 56.1,
+        "ci": [
+          53.8,
+          58.5
+        ],
+        "mean": 7.18,
+        "median": 2.69,
+        "profit_factor": 2.33
+      },
+      "lift_hit10_pp": 2.2,
+      "lift_mean10_pp": 0.57,
+      "freq_pct": 10.24
+    },
+    "bt_pattern": {
+      "ret_5": {
+        "n": 1533,
+        "hit": 48.1,
+        "ci": [
+          45.6,
+          50.6
+        ],
+        "mean": 0.9,
+        "median": -0.25,
+        "profit_factor": 1.3
+      },
+      "ret_10": {
+        "n": 1533,
+        "hit": 50.8,
+        "ci": [
+          48.3,
+          53.3
+        ],
+        "mean": 2.2,
+        "median": 0.16,
+        "profit_factor": 1.59
+      },
+      "ret_20": {
+        "n": 1533,
+        "hit": 50.7,
+        "ci": [
+          48.2,
+          53.2
+        ],
+        "mean": 5.19,
+        "median": 0.3,
+        "profit_factor": 2.1
+      },
+      "lift_hit10_pp": -0.7,
+      "lift_mean10_pp": -0.34,
+      "freq_pct": 9.18
+    },
+    "vol_breakout": {
+      "ret_5": {
+        "n": 726,
+        "hit": 48.2,
+        "ci": [
+          44.6,
+          51.8
+        ],
+        "mean": 1.38,
+        "median": -0.22,
+        "profit_factor": 1.41
+      },
+      "ret_10": {
+        "n": 726,
+        "hit": 50.8,
+        "ci": [
+          47.2,
+          54.4
+        ],
+        "mean": 2.75,
+        "median": 0.29,
+        "profit_factor": 1.67
+      },
+      "ret_20": {
+        "n": 726,
+        "hit": 55.1,
+        "ci": [
+          51.5,
+          58.7
+        ],
+        "mean": 6.99,
+        "median": 1.86,
+        "profit_factor": 2.5
+      },
+      "lift_hit10_pp": -0.7,
+      "lift_mean10_pp": 0.21,
+      "freq_pct": 4.35
+    },
+    "shrink_pullback": {
+      "ret_5": {
+        "n": 1414,
+        "hit": 47.2,
+        "ci": [
+          44.7,
+          49.8
+        ],
+        "mean": 0.24,
+        "median": -0.41,
+        "profit_factor": 1.09
+      },
+      "ret_10": {
+        "n": 1414,
+        "hit": 49.9,
+        "ci": [
+          47.3,
+          52.5
+        ],
+        "mean": 0.98,
+        "median": -0.03,
+        "profit_factor": 1.28
+      },
+      "ret_20": {
+        "n": 1414,
+        "hit": 51.3,
+        "ci": [
+          48.7,
+          53.9
+        ],
+        "mean": 3.77,
+        "median": 0.39,
+        "profit_factor": 1.91
+      },
+      "lift_hit10_pp": -1.6,
+      "lift_mean10_pp": -1.56,
+      "freq_pct": 8.47
+    },
+    "macd_gold": {
+      "ret_5": {
+        "n": 642,
+        "hit": 46.3,
+        "ci": [
+          42.4,
+          50.1
+        ],
+        "mean": 0.84,
+        "median": -0.48,
+        "profit_factor": 1.25
+      },
+      "ret_10": {
+        "n": 642,
+        "hit": 51.1,
+        "ci": [
+          47.2,
+          54.9
+        ],
+        "mean": 2.74,
+        "median": 0.28,
+        "profit_factor": 1.68
+      },
+      "ret_20": {
+        "n": 642,
+        "hit": 52.5,
+        "ci": [
+          48.6,
+          56.3
+        ],
+        "mean": 5.47,
+        "median": 1.25,
+        "profit_factor": 2.05
+      },
+      "lift_hit10_pp": -0.4,
+      "lift_mean10_pp": 0.2,
+      "freq_pct": 3.84
+    },
+    "boll_touch_lower": {
+      "ret_5": {
+        "n": 895,
+        "hit": 50.9,
+        "ci": [
+          47.7,
+          54.2
+        ],
+        "mean": 0.3,
+        "median": 0.12,
+        "profit_factor": 1.13
+      },
+      "ret_10": {
+        "n": 895,
+        "hit": 49.8,
+        "ci": [
+          46.6,
+          53.1
+        ],
+        "mean": 1.09,
+        "median": -0.02,
+        "profit_factor": 1.34
+      },
+      "ret_20": {
+        "n": 895,
+        "hit": 55.8,
+        "ci": [
+          52.5,
+          59.0
+        ],
+        "mean": 3.59,
+        "median": 1.44,
+        "profit_factor": 1.97
+      },
+      "lift_hit10_pp": -1.7,
+      "lift_mean10_pp": -1.45,
+      "freq_pct": 5.36
+    },
+    "rsi6_lt20": {
+      "ret_5": {
+        "n": 2118,
+        "hit": 45.0,
+        "ci": [
+          42.9,
+          47.1
+        ],
+        "mean": -0.34,
+        "median": -0.7,
+        "profit_factor": 0.9
+      },
+      "ret_10": {
+        "n": 2118,
+        "hit": 47.7,
+        "ci": [
+          45.6,
+          49.9
+        ],
+        "mean": 0.16,
+        "median": -0.52,
+        "profit_factor": 1.04
+      },
+      "ret_20": {
+        "n": 2118,
+        "hit": 53.7,
+        "ci": [
+          51.6,
+          55.8
+        ],
+        "mean": 3.46,
+        "median": 1.15,
+        "profit_factor": 1.74
+      },
+      "lift_hit10_pp": -3.8,
+      "lift_mean10_pp": -2.38,
+      "freq_pct": 12.68
+    }
+  },
+  "significance_flags": [
+    "信号 BUY_BREAKOUT: 10日命中率 54.5% 的 95% CI [28.0, 78.7] 覆盖基线 51.0%，不能认为优于随机",
+    "信号 BUY_SUPPORT_PULLBACK: 10日命中率 48.0% 的 95% CI [34.8, 61.5] 覆盖基线 51.0%，不能认为优于随机",
+    "信号 HOLD_WATCH: 10日命中率 51.1% 的 95% CI [49.7, 52.4] 覆盖基线 51.0%，不能认为优于随机",
+    "信号 SELL_RESISTANCE_REJECT: 10日命中率 50.0% 的 95% CI [40.0, 60.0] 覆盖基线 51.0%，不能认为优于随机",
+    "评分 composite_score: 逐日 Rank-IC t=0.33 不显著 (|t|<2)",
+    "评分 bullish_prob: 逐日 Rank-IC t=-0.06 不显著 (|t|<2)",
+    "评分 trend: 逐日 Rank-IC t=-0.35 不显著 (|t|<2)",
+    "评分 chips: 逐日 Rank-IC t=1.67 不显著 (|t|<2)",
+    "评分 momentum: 逐日 Rank-IC t=1.12 不显著 (|t|<2)",
+    "评分 position: 逐日 Rank-IC t=-1.85 不显著 (|t|<2)",
+    "评分 bt_win10: 逐日 Rank-IC t=0.26 不显著 (|t|<2)",
+    "评分 rr_ratio: 逐日 Rank-IC t=0.47 不显著 (|t|<2)"
+  ],
+  "meta": {
+    "generated_at": "2026-09-02 09:56:27",
+    "stocks_requested": 39,
+    "stocks_used": 39,
+    "bars_per_stock": 700,
+    "warmup": 250,
+    "step": 3,
+    "cost_pct_roundtrip": 1.0,
+    "index_symbol": "sh000001",
+    "pit_points": 5599,
+    "pit_fillable": 5582,
+    "cond_points": 16700,
+    "codes_used": [
+      "000063",
+      "000938",
+      "000977",
+      "002015",
+      "002131",
+      "002384",
+      "002396",
+      "002437",
+      "002475",
+      "003040",
+      "300058",
+      "300164",
+      "300274",
+      "300308",
+      "300364",
+      "300394",
+      "300413",
+      "300418",
+      "300502",
+      "300604",
+      "300750",
+      "301526",
+      "600127",
+      "600176",
+      "600183",
+      "600378",
+      "600487",
+      "600522",
+      "600722",
+      "600869",
+      "601606",
+      "601869",
+      "601899",
+      "603186",
+      "603618",
+      "603893",
+      "603986",
+      "688008",
+      "688256"
+    ],
+    "date_range": [
+      "2024-10-23",
+      "2026-08-03"
+    ],
+    "elapsed_sec": 108.8
+  }
+}

@@ -29,6 +29,8 @@ venv.bak/
 
 # Project Cache & Temp Data
 backend/cache/
+# 点时间评估: 只保留 latest.md / latest.json 入库，逐次时间戳报告与逐点 CSV (每份 ~2.5MB) 不入库
+backend/eval_reports/eval_*
 *.log
 .tempmediaStorage/
 
