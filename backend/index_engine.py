@@ -212,16 +212,14 @@ class IndexEngine:
         g_score += 0.30 * float(np.tanh((c - ma20) / (0.5 * atr_smooth)))
         # MA60: 连续平滑评分 [-0.20, +0.20]
         g_score += 0.20 * float(np.tanh((ma20 - ma60) / (0.5 * atr_smooth)))
-        if hist > 0 and hist >= prev_hist:
-            g_score += 0.25  # 红柱且发散(柱体抬升)
-        elif hist > 0:
-            g_score += 0.10  # 红柱但收敛
-        if dif > dea: g_score += 0.15
+        # MACD 项: hist = 2×(DIF−DEA)，"红柱"与"DIF>DEA"是同一条件，只能计一次。
+        # 用红柱/绿柱的方向变化(发散/收敛)区分强弱，正负对称，量程 [-0.35, +0.35]
+        if hist > 0:
+            g_score += 0.35 if hist >= prev_hist else 0.15   # 红柱发散 / 红柱收敛
+        elif hist < 0:
+            g_score -= 0.35 if hist <= prev_hist else 0.15   # 绿柱发散 / 绿柱收敛
         if kdj_j < 30: g_score += 0.1 # 超卖酝酿
         elif kdj_j > 90: g_score -= 0.15 # 超买
-
-        # 负向扣分: MACD绿柱 (MA20/MA60负向已包含在tanh连续评分中)
-        if hist < 0: g_score -= 0.25
 
         g_score = max(-0.95, min(0.95, g_score))
         g_sign = "+" if g_score >= 0 else ""
@@ -292,6 +290,49 @@ class IndexEngine:
             "status_desc": status_desc,
             "understanding": understanding
         }
+
+    @staticmethod
+    def _direction_label(score: float) -> str:
+        if score >= 0.2: return "偏多"
+        if score >= 0.1: return "弱偏多"
+        if score <= -0.2: return "偏空"
+        if score <= -0.1: return "弱偏空"
+        return "中性"
+
+    @staticmethod
+    def _monthly_trend(df_weekly: pd.DataFrame) -> Dict[str, Any]:
+        """
+        月线级别方向: 由周K重采样为月K (新浪接口无月线周期)。
+        用 收盘 vs 月MA6 / 月MA6 vs 月MA12 / 近3月涨跌幅 给出 [-1, 1] 方向分与标签。
+        """
+        empty = {"label": "数据不足", "score": 0.0, "detail": "月线样本不足", "bars": 0}
+        if df_weekly is None or df_weekly.empty or len(df_weekly) < 30:
+            return empty
+        try:
+            tmp = df_weekly.copy()
+            tmp["dt"] = pd.to_datetime(tmp["date"].astype(str).str.split(" ").str[0], errors="coerce")
+            tmp = tmp.dropna(subset=["dt"]).set_index("dt")
+            monthly = tmp.resample("MS").agg({"open": "first", "high": "max", "low": "min",
+                                              "close": "last", "volume": "sum"}).dropna()
+        except Exception:
+            return empty
+        if len(monthly) < 8:
+            return empty
+        closes = monthly["close"]
+        c = float(closes.iloc[-1])
+        ma6 = float(closes.rolling(6).mean().iloc[-1])
+        ma12 = float(closes.rolling(12).mean().iloc[-1]) if len(monthly) >= 12 else float(closes.expanding().mean().iloc[-1])
+        chg3 = (c - float(closes.iloc[-4])) / float(closes.iloc[-4]) * 100 if len(monthly) >= 4 else 0.0
+
+        score = 0.0
+        score += 0.4 if c > ma6 else -0.4
+        score += 0.3 if ma6 > ma12 else -0.3
+        score += max(-0.3, min(0.3, chg3 / 20.0))   # 近3月涨幅 ±6% 对应 ±0.3 满分
+        score = round(max(-1.0, min(1.0, score)), 2)
+        label = IndexEngine._direction_label(score)
+        detail = (f"月线收盘 {c:.2f} {'站上' if c > ma6 else '跌破'}月MA6 {ma6:.2f}，"
+                  f"月MA6 {'>' if ma6 > ma12 else '<='} 月MA12 {ma12:.2f}，近3月 {chg3:+.2f}%")
+        return {"label": label, "score": score, "detail": detail, "bars": int(len(monthly))}
 
     @staticmethod
     def _format_kline_chart_data(df: pd.DataFrame, count: int = 90) -> List[Dict[str, Any]]:
@@ -381,21 +422,30 @@ class IndexEngine:
         r2_price = resistances[1]["center_price"] if len(resistances) > 1 else round(r1_price * 1.02, 2)
 
         # 核心操作许可判定
+        # 分支顺序: 先判共振(多/空)，再显式判"周日线方向冲突"，最后才允许 60 分钟参与"震荡蓄势"判定，
+        # 避免周线弱多 + 日线明显走空 + 60分微正 被误判为可加仓的震荡蓄势
+        weekly_daily_conflict = (g_weekly * g_daily < 0) and min(abs(g_weekly), abs(g_daily)) >= 0.1
         if g_weekly >= 0.2 and g_daily >= 0.2:
             op_license = "多头顺势，逢低做多"
             op_license_desc = "周线与日线多周期共振向上，大方向确立，持股待涨或在小级别回踩强支撑时积极低吸。"
             op_color = IDX_COLOR_GREEN
             suggested_pos = "70% ~ 85% (重仓顺势)"
-        elif g_weekly >= 0.1 and g_60m > 0:
-            op_license = "震荡蓄势，区间波段"
-            op_license_desc = "大级别方向维持震荡偏强，分时线探底企稳，可在关键支撑位附近分批逢低布局。"
-            op_color = IDX_COLOR_CYAN
-            suggested_pos = "50% ~ 65% (适度波段)"
         elif g_weekly < 0 and g_daily < 0:
             op_license = "空头承压，防守观望"
             op_license_desc = "大级别处于空头压制状态，未见明确止跌信号，分时反弹仅视作技术修复，严格控制仓位。"
             op_color = IDX_COLOR_RED
             suggested_pos = "10% ~ 30% (轻仓防守)"
+        elif weekly_daily_conflict:
+            op_license = "大方向不明，先观望"
+            op_license_desc = (f"周线方向分 {g_weekly:+.2f} 与日线方向分 {g_daily:+.2f} 方向相反，多周期信号冲突；"
+                               "短周期信号不能代替大方向，建议观望等待周线与日线重新共振。")
+            op_color = IDX_COLOR_GOLD
+            suggested_pos = "30% ~ 50% (中性防御)"
+        elif g_weekly >= 0.1 and g_daily >= 0 and g_60m > 0:
+            op_license = "震荡蓄势，区间波段"
+            op_license_desc = "大级别方向维持震荡偏强，日线未走空且分时线探底企稳，可在关键支撑位附近分批逢低布局。"
+            op_color = IDX_COLOR_CYAN
+            suggested_pos = "50% ~ 65% (适度波段)"
         else:
             op_license = "大方向不明，先观望"
             op_license_desc = "完整周线当前方向不明确；短周期信号不能代替大方向，当前建议耐心观望等待大级别确认。"
@@ -445,7 +495,25 @@ class IndexEngine:
         if not selected_kline_data:
             selected_kline_data = all_kline_data["240"]
 
+        # 6. 多周期方向摘要 (供前端 MRDI 决策矩阵直接使用，避免前端按错误结构解析 periods 数组)
+        df_daily_ind = ind_daily.get("df", df_daily)
+        g_30m = float(period_30m["direction_score"])
+        timeframes = {
+            "monthly": self._monthly_trend(df_weekly),
+            "weekly": {"label": self._direction_label(g_weekly), "score": g_weekly,
+                       "status_tag": period_weekly["status_tag"], "detail": period_weekly["status_desc"]},
+            "daily": {"label": self._direction_label(g_daily), "score": g_daily,
+                      "status_tag": period_daily["status_tag"], "detail": period_daily["status_desc"]},
+            "60m": {"label": self._direction_label(g_60m), "score": g_60m,
+                    "status_tag": period_60m["status_tag"], "detail": period_60m["status_desc"]},
+            "30m": {"label": self._direction_label(g_30m), "score": g_30m,
+                    "status_tag": period_30m["status_tag"], "detail": period_30m["status_desc"]},
+        }
+
         return {
+            # 完整日K (约250根)，供 MRDI 等需要长窗口的指标/分位数计算使用；kline_data 仅为图表截断的90根
+            "daily_kline_full": self._format_kline_chart_data(df_daily_ind, len(df_daily_ind)),
+            "timeframes": timeframes,
             "symbol": symbol,
             "name": meta["name"],
             "desc": meta["desc"],

@@ -10,7 +10,8 @@
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=2.2.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/style.css?v=2.3.0">
 </head>
 <body>
     <div class="app-container">
@@ -30,6 +31,7 @@
                 <div class="nav-view-switch">
                     <button class="nav-tab active" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                     <button class="nav-tab" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
+                    <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
                 </div>
             </div>
 
@@ -366,6 +368,353 @@
                 </div>
                 <div class="macro-kline-container" id="macroKlineChart" style="width: 100%; height: 480px; min-height: 480px;"></div>
             </div>
+
+        </main>
+
+        <!-- 主内容工作区 3: MRDI 动量共振与多周期决策模型 -->
+        <main class="mrdi-workspace" id="mrdiWorkspace" style="display: none;">
+
+            <!-- 页面介绍 -->
+            <section class="mrdi-page-intro">
+                <div>
+                    <span class="mrdi-eyebrow">MRDI · MOMENTUM RESONANCE & DECISION INTELLIGENCE</span>
+                    <h1 class="mrdi-page-title">动量共振与多周期决策模型</h1>
+                    <p class="mrdi-page-desc">先看正式许可，再看盘中变化；需要核对时再展开指标、市场分布与图表。</p>
+                </div>
+                <div class="mrdi-live-status">
+                    <span class="mrdi-live-dot"></span>
+                    <span id="mrdiUpdateTime">同步中...</span>
+                </div>
+            </section>
+
+            <!-- 三层视图切换 -->
+            <nav class="mrdi-view-tabs" role="tablist" aria-label="切换信息层级">
+                <button type="button" class="mrdi-vtab active" data-mrdi-view="formal" aria-selected="true">
+                    <i class="fa-solid fa-circle-check"></i><span>正式结果</span>
+                </button>
+                <button type="button" class="mrdi-vtab" data-mrdi-view="live" aria-selected="false">
+                    <i class="fa-solid fa-wave-square"></i><span>进行中观察</span>
+                </button>
+                <button type="button" class="mrdi-vtab" data-mrdi-view="evidence" aria-selected="false">
+                    <i class="fa-solid fa-chart-column"></i><span>客观证据</span>
+                </button>
+            </nav>
+
+            <!-- 指数选择胶囊栏 -->
+            <div class="mrdi-index-toolbar">
+                <span class="mrdi-index-label">当前指数</span>
+                <div class="mrdi-index-tabs" role="group">
+                    <button type="button" class="mrdi-idx-tab active" data-mrdi-idx="sh000001">
+                        <i class="fa-solid fa-chart-simple"></i> 上证指数
+                    </button>
+                    <button type="button" class="mrdi-idx-tab" data-mrdi-idx="sz399006">
+                        <i class="fa-solid fa-rocket"></i> 创业板指
+                    </button>
+                    <button type="button" class="mrdi-idx-tab" data-mrdi-idx="sh000688">
+                        <i class="fa-solid fa-microchip"></i> 科创50
+                    </button>
+                    <button type="button" class="mrdi-idx-tab" data-mrdi-idx="sz399001">
+                        <i class="fa-solid fa-chart-line"></i> 深证成指
+                    </button>
+                </div>
+            </div>
+
+            <!-- ═══ 核心结论驾驶舱 ═══ -->
+            <article class="mrdi-cockpit tone-neutral" id="mrdiCockpit">
+                <div class="mrdi-cockpit-head">
+                    <span><i class="fa-solid fa-bullseye"></i> 核心结论</span>
+                    <small id="mrdiCockpitAsOf">正式周期与当前时点正在对齐…</small>
+                </div>
+                <div class="mrdi-cockpit-hero">
+                    <span>正式操作许可</span>
+                    <strong id="mrdiActionLabel">等待同日结果</strong>
+                    <p id="mrdiActionDetail">等待同日数据后说明判断依据。</p>
+                </div>
+                <div class="mrdi-cockpit-grid">
+                    <div>
+                        <span>大级别方向 · 已完成周期</span>
+                        <strong id="mrdiMajorLabel">判断依据待生成</strong>
+                        <small id="mrdiMajorDetail">完整周线决定许可，完整月线提供背景。</small>
+                    </div>
+                    <div>
+                        <span>当前时点 · 日线与30/60分钟</span>
+                        <strong id="mrdiRhythmLabel">当前节奏待判断</strong>
+                        <small id="mrdiRhythmDetail">当前改善或转弱不会自动改变正式许可。</small>
+                    </div>
+                </div>
+                <div class="mrdi-cockpit-keylevel" id="mrdiKeyLevelRow">
+                    <span><i class="fa-solid fa-crosshairs"></i> 当前关键关口</span>
+                    <div>
+                        <strong id="mrdiKeyLevel">等待关键价位结果</strong>
+                        <small id="mrdiKeyLevelDetail">只从附近的强／核心区域选择。</small>
+                    </div>
+                </div>
+                <div class="mrdi-cockpit-change">
+                    <span><i class="fa-solid fa-code-compare"></i> 相较上一收盘</span>
+                    <strong id="mrdiChangeLabel">等待连续数据后说明主要变化。</strong>
+                </div>
+                <div class="mrdi-cockpit-next">
+                    <span><i class="fa-solid fa-location-arrow"></i> 下一步等待</span>
+                    <strong id="mrdiNextLabel">等待数据后生成</strong>
+                </div>
+            </article>
+
+            <!-- ═══ MRDI 日线信号卡 ═══ -->
+            <section class="mrdi-signal-section" id="mrdiSignalSection">
+                <div class="mrdi-signal-title-row">
+                    <div class="mrdi-signal-title-left">
+                        <div class="mrdi-model-badge"><i class="fa-solid fa-chart-line"></i> MRDI V2.1</div>
+                        <h2>今天有没有出现新信号？</h2>
+                        <p>日线观察 · 先看当前强弱，再看是否出现企稳或回调风险</p>
+                    </div>
+                    <span class="mrdi-data-state" id="mrdiDataState">
+                        <i class="fa-solid fa-rotate-right fa-spin"></i> 加载算法结果中…
+                    </span>
+                </div>
+
+                <!-- 主信号摘要卡 -->
+                <div class="mrdi-summary-card tone-neutral" id="mrdiSummaryCard">
+                    <div class="mrdi-summary-head">
+                        <span class="mrdi-badge neutral" id="mrdiStabilityBadge">等待数据</span>
+                        <span class="mrdi-status" id="mrdiStatusLabel">--</span>
+                    </div>
+                    <p class="mrdi-guidance" id="mrdiGuidance">正在读取最新 MRDI V2.1 结果。</p>
+                    <div class="mrdi-next-step">
+                        <div class="mrdi-next-label"><i class="fa-solid fa-compass"></i> 下一步关注</div>
+                        <strong id="mrdiNextCondition">--</strong>
+                    </div>
+                </div>
+
+                <!-- RD / CD / G 三维评分网格 -->
+                <div class="mrdi-score-grid" id="mrdiScoreGrid">
+                    <div class="mrdi-score-card" id="mrdiCardRD">
+                        <div class="mrdi-score-head">
+                            <span class="mrdi-score-name">
+                                <i class="fa-solid fa-arrow-trend-up"></i>
+                                <span>反弹需求</span> <abbr title="反弹需求：技术超跌、三指数共同超跌、5日跌幅极端和缩量超跌共同构成的向上修复条件；结合历史分位解读。">RD</abbr>
+                            </span>
+                            <span class="mrdi-score-chip" id="mrdiRdChip">--</span>
+                        </div>
+                        <strong id="mrdiRdScore">--</strong>
+                        <div class="mrdi-score-sub">
+                            <small id="mrdiRdPct">近250日位置 --</small>
+                        </div>
+                    </div>
+                    <div class="mrdi-score-card" id="mrdiCardCD">
+                        <div class="mrdi-score-head">
+                            <span class="mrdi-score-name">
+                                <i class="fa-solid fa-arrow-trend-down"></i>
+                                <span>回调压力</span> <abbr title="回调压力：技术超买、三指数共同超买、5日涨幅极端和缩量超买共同构成的回撤风险条件；结合历史分位解读。">CD</abbr>
+                            </span>
+                            <span class="mrdi-score-chip" id="mrdiCdChip">--</span>
+                        </div>
+                        <strong id="mrdiCdScore">--</strong>
+                        <div class="mrdi-score-sub">
+                            <small id="mrdiCdPct">近250日位置 --</small>
+                        </div>
+                    </div>
+                    <div class="mrdi-score-card trigger-card" id="mrdiCardG">
+                        <div class="mrdi-score-head">
+                            <span class="mrdi-score-name">
+                                <i class="fa-solid fa-bolt"></i>
+                                <span>拐点触发</span> <abbr title="拐点触发器：0 为动量方向参考。完成新的上/下穿越且达到 ±0.15，才标记方向初现。">G</abbr>
+                            </span>
+                            <span class="mrdi-score-chip" id="mrdiGChip">±0.15触发</span>
+                        </div>
+                        <strong id="mrdiGScore">--</strong>
+                        <div class="mrdi-score-sub">
+                            <small id="mrdiGState">±0.15 为初现阈值</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ═══ 多周期操作许可 ═══ -->
+            <article class="mrdi-operation-card tone-neutral" id="mrdiOperationCard">
+                <div class="mrdi-operation-main">
+                    <span class="mrdi-operation-eyebrow"><i class="fa-solid fa-person-walking-arrow-right"></i> 操作倾向</span>
+                    <div class="mrdi-operation-title-row">
+                        <strong id="mrdiOpLabel">等待操作层结果</strong>
+                        <span class="mrdi-operation-risk waiting" id="mrdiOpRisk">等待数据</span>
+                    </div>
+                    <p id="mrdiOpSummary">月线决定级别上限，完整周线决定是否允许，日线与60分钟决定时点。</p>
+                    <ul class="mrdi-operation-reasons" id="mrdiOpReasons">
+                        <li>等待同日完整结果后说明具体依据。</li>
+                    </ul>
+                </div>
+                <div class="mrdi-operation-side">
+                    <div>
+                        <span>参考周期</span>
+                        <strong id="mrdiOpHorizon">--</strong>
+                    </div>
+                    <div>
+                        <span>完整周线许可</span>
+                        <strong id="mrdiOpWeekly">--</strong>
+                        <small>只使用最近完整周线，不使用本周形成中数据</small>
+                    </div>
+                    <div class="mrdi-operation-next">
+                        <span><i class="fa-solid fa-location-arrow"></i> 下一道门槛</span>
+                        <strong id="mrdiOpNext">等待数据后生成</strong>
+                    </div>
+                </div>
+            </article>
+
+            <!-- ═══ 大级别方向 ═══ -->
+            <article class="mrdi-direction-card tone-neutral" id="mrdiDirectionCard">
+                <div class="mrdi-direction-main">
+                    <span class="mrdi-direction-eyebrow"><i class="fa-solid fa-route"></i> 大级别方向</span>
+                    <div class="mrdi-direction-title-row">
+                        <strong id="mrdiDirLabel">等待大方向结果</strong>
+                        <span class="mrdi-direction-confidence waiting" id="mrdiDirConf">等待数据</span>
+                    </div>
+                    <p id="mrdiDirPhase">周线判断主波，月线提供背景，日线说明当前所处阶段。</p>
+                </div>
+                <div class="mrdi-direction-evidence">
+                    <div>
+                        <span>周线主波</span>
+                        <strong id="mrdiDirWeekly">--</strong>
+                        <small id="mrdiDirWeeklyDetail">等待结果</small>
+                    </div>
+                    <div>
+                        <span>月线背景</span>
+                        <strong id="mrdiDirMonthly">--</strong>
+                        <small id="mrdiDirMonthlyDetail">等待结果</small>
+                    </div>
+                    <div>
+                        <span>日线阶段</span>
+                        <strong id="mrdiDirDaily">--</strong>
+                        <small id="mrdiDirDailyDetail">等待结果</small>
+                    </div>
+                </div>
+            </article>
+
+            <!-- ═══ 关键价位与共振区 ═══ -->
+            <article class="mrdi-levels-card" id="mrdiLevelsCard">
+                <div class="mrdi-levels-head">
+                    <div>
+                        <span class="mrdi-levels-eyebrow"><i class="fa-solid fa-arrows-up-down"></i> 关键价位与共振区</span>
+                        <h3>上方压力与下方支撑</h3>
+                        <p id="mrdiLevelsBasis">价位使用已完成K线生成；盘中只更新距离和是否正在测试。</p>
+                    </div>
+                    <span class="mrdi-levels-status waiting" id="mrdiLevelsStatus">加载中</span>
+                </div>
+                <div class="mrdi-levels-price-row">
+                    <div>
+                        <span>正式收盘价</span>
+                        <strong id="mrdiLevelsPrice">--</strong>
+                        <small id="mrdiLevelsPriceTime">等待最新价格</small>
+                    </div>
+                    <p id="mrdiLevelsSummary">正在计算最近的上方压力区和下方支撑区。</p>
+                </div>
+                <div class="mrdi-levels-grid">
+                    <section class="mrdi-level-side resistance">
+                        <div class="mrdi-level-side-head">
+                            <span><i class="fa-solid fa-arrow-up"></i> 向上先看</span>
+                            <strong>上方压力区</strong>
+                        </div>
+                        <div class="mrdi-level-list" id="mrdiResistanceList">
+                            <p class="mrdi-level-empty">等待压力位结果。</p>
+                        </div>
+                    </section>
+                    <section class="mrdi-level-side support">
+                        <div class="mrdi-level-side-head">
+                            <span><i class="fa-solid fa-arrow-down"></i> 向下先看</span>
+                            <strong>下方支撑区</strong>
+                        </div>
+                        <div class="mrdi-level-list" id="mrdiSupportList">
+                            <p class="mrdi-level-empty">等待支撑位结果。</p>
+                        </div>
+                    </section>
+                </div>
+            </article>
+
+            <!-- ═══ 短线方向确认 ═══ -->
+            <article class="mrdi-confirm-card tone-neutral" id="mrdiConfirmCard">
+                <div class="mrdi-confirm-main">
+                    <span class="mrdi-confirm-eyebrow"><i class="fa-solid fa-compass"></i> 短线方向确认</span>
+                    <div class="mrdi-confirm-title-row">
+                        <strong id="mrdiConfirmLabel">等待多周期结果</strong>
+                        <span class="mrdi-confirm-badge waiting" id="mrdiConfirmBadge">等待确认</span>
+                    </div>
+                    <small id="mrdiConfirmDetail">判断当前是反弹、下行风险，还是尚无明确方向；并显示确认到了哪个周期。</small>
+                    <p id="mrdiConfirmGuidance">正在读取多周期结果。</p>
+                </div>
+                <div class="mrdi-confirm-next">
+                    <span><i class="fa-solid fa-location-arrow"></i> 下一道门槛</span>
+                    <strong id="mrdiConfirmNext">等待数据后生成</strong>
+                </div>
+            </article>
+
+            <!-- 多周期综合条件成熟度 -->
+            <div class="mrdi-maturity-grid" id="mrdiMaturityGrid">
+                <article class="mrdi-maturity-card rebound">
+                    <div class="mrdi-maturity-label"><i class="fa-solid fa-arrow-trend-up"></i> 新反弹条件成熟度</div>
+                    <strong id="mrdiReboundScore">--</strong>
+                    <small>是否正在形成新的反弹触发，不是上涨概率</small>
+                </article>
+                <article class="mrdi-maturity-card pullback">
+                    <div class="mrdi-maturity-label"><i class="fa-solid fa-arrow-trend-down"></i> 新转弱条件成熟度</div>
+                    <strong id="mrdiPullbackScore">--</strong>
+                    <small>是否正在形成新的向下触发，不代表现有弱势已消失</small>
+                </article>
+                <article class="mrdi-maturity-card trigger">
+                    <div class="mrdi-maturity-label"><i class="fa-solid fa-wave-square"></i> 短线力量</div>
+                    <strong id="mrdiTriggerScore">--</strong>
+                    <small>正值偏改善，负值偏转弱</small>
+                </article>
+            </div>
+
+            <!-- 确认阶梯 -->
+            <section class="mrdi-ladder-section" id="mrdiLadderSection">
+                <div class="mrdi-ladder-head">
+                    <div>
+                        <span class="mrdi-ladder-kicker">LEVEL GATE</span>
+                        <h3>短线信号确认层级</h3>
+                        <p id="mrdiLadderSummary">正在判断当前确认方向与最高层级…</p>
+                    </div>
+                </div>
+                <div class="mrdi-ladder-grid" id="mrdiLadderGrid">
+                    <div class="mrdi-ladder-loading">正在生成30分钟、60分钟和日线的独立确认状态…</div>
+                </div>
+            </section>
+
+            <!-- ═══ 冰点与修复环境 ═══ -->
+            <article class="mrdi-env-card neutral" id="mrdiEnvCard">
+                <div class="mrdi-env-head">
+                    <div class="mrdi-env-title"><i class="fa-solid fa-snowflake"></i> 冰点与修复背景 <abbr title="独立观察项：指数急跌/回撤占综合冰点75%权重。">独立</abbr></div>
+                    <small id="mrdiEnvStatus">数据积累中</small>
+                </div>
+                <div class="mrdi-env-body">
+                    <strong id="mrdiEnvScore">未评分</strong>
+                    <p id="mrdiEnvDetail">尚未满足连续冰点至少 3 日及价格条件的评分要求。</p>
+                </div>
+            </article>
+
+            <!-- ═══ 技术指标核对图表 ═══ -->
+            <section class="mrdi-tech-section">
+                <div class="mrdi-tech-head">
+                    <div>
+                        <span class="mrdi-tech-kicker">技术核对</span>
+                        <h2>指数走势与指标</h2>
+                    </div>
+                    <p>价格、量能、MACD 与 KDJ 仅用于核对主结论，不单独构成信号。</p>
+                </div>
+                <div class="mrdi-tech-toolbar">
+                    <div class="mrdi-tech-period-btns">
+                        <button class="mrdi-tech-btn active" data-mrdi-scale="240">日K线</button>
+                        <button class="mrdi-tech-btn" data-mrdi-scale="1200">周K线</button>
+                        <button class="mrdi-tech-btn" data-mrdi-scale="60">60分钟</button>
+                        <button class="mrdi-tech-btn" data-mrdi-scale="30">30分钟</button>
+                    </div>
+                </div>
+                <div class="mrdi-tech-chart-wrap" id="mrdiTechChart" style="width:100%;height:520px;min-height:520px;"></div>
+            </section>
+
+            <!-- Footer -->
+            <footer class="mrdi-footer">
+                <p>MRDI 动量共振与多周期决策模型 · 个人量化研究系统</p>
+                <small>规则型决策支持，不构成投资建议。分数不是涨跌概率。</small>
+            </footer>
 
         </main>
 

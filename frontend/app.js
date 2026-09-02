@@ -1401,3 +1401,958 @@ async function triggerMarketScan() {
     }
 }
 
+// ==========================================================================
+// MRDI 动量共振与多周期决策模型 — 前端计算引擎与渲染
+// ==========================================================================
+
+let currentMrdiSymbol = "sh000001";
+let currentMrdiScale = "240";
+let currentMrdiData = null;
+let mrdiTechChartInst = null;
+
+/**
+ * 绑定 MRDI 面板事件（由 bindMacroEvents 调用链扩展）
+ */
+function bindMrdiEvents() {
+    // 顶部 Tab 切换: 增加第三个 MRDI 面板
+    const tabMrdi = document.getElementById("tabMrdiView");
+    const tabStock = document.getElementById("tabStockView");
+    const tabIndex = document.getElementById("tabIndexView");
+    const stockWs = document.getElementById("stockWorkspace");
+    const indexWs = document.getElementById("indexWorkspace");
+    const mrdiWs = document.getElementById("mrdiWorkspace");
+
+    function switchToView(activeTab, showEl) {
+        [tabStock, tabIndex, tabMrdi].forEach(t => t?.classList.remove("active"));
+        activeTab?.classList.add("active");
+        if (stockWs) stockWs.style.display = "none";
+        if (indexWs) indexWs.style.display = "none";
+        if (mrdiWs) mrdiWs.style.display = "none";
+        if (showEl) showEl.style.display = showEl === stockWs ? "grid" : "flex";
+    }
+
+    // 重新绑定前两个 Tab (覆盖 bindMacroEvents 中简单逻辑以支持三面板切换)
+    tabStock?.addEventListener("click", () => {
+        switchToView(tabStock, stockWs);
+        klineChartInst?.resize(); chipsChartInst?.resize();
+        radarChartInst?.resize(); probGaugeInst?.resize();
+    });
+
+    tabIndex?.addEventListener("click", () => {
+        switchToView(tabIndex, indexWs);
+        loadMacroIndexAnalysis(currentMacroSymbol);
+        setTimeout(() => macroKlineChartInst?.resize(), 150);
+    });
+
+    tabMrdi?.addEventListener("click", () => {
+        switchToView(tabMrdi, mrdiWs);
+        if (!mrdiTechChartInst) {
+            const dom = document.getElementById("mrdiTechChart");
+            if (dom) mrdiTechChartInst = echarts.init(dom);
+        }
+        loadMrdiAnalysis(currentMrdiSymbol);
+    });
+
+    // MRDI 指数胶囊切换
+    document.querySelectorAll(".mrdi-index-tabs .mrdi-idx-tab").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            document.querySelectorAll(".mrdi-index-tabs .mrdi-idx-tab").forEach(b => b.classList.remove("active"));
+            const t = e.target.closest(".mrdi-idx-tab");
+            if (t) {
+                t.classList.add("active");
+                currentMrdiSymbol = t.dataset.mrdiIdx || "sh000001";
+                loadMrdiAnalysis(currentMrdiSymbol);
+            }
+        });
+    });
+
+    // MRDI 技术图表周期切换
+    document.querySelectorAll(".mrdi-tech-period-btns .mrdi-tech-btn").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+            document.querySelectorAll(".mrdi-tech-period-btns .mrdi-tech-btn").forEach(b => b.classList.remove("active"));
+            const t = e.target.closest(".mrdi-tech-btn");
+            if (!t) return;
+            t.classList.add("active");
+            currentMrdiScale = t.dataset.mrdiScale || "240";
+
+            if (currentMrdiData?.all_kline_data?.[currentMrdiScale]?.length > 0) {
+                renderMrdiTechChart(currentMrdiData.all_kline_data[currentMrdiScale], currentMrdiData.clustered_levels);
+            } else {
+                try {
+                    const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(currentMrdiSymbol)}&scale=${encodeURIComponent(currentMrdiScale)}`);
+                    const json = await res.json();
+                    if (json.data) {
+                        currentMrdiData = json.data;
+                        const kData = json.data.all_kline_data?.[currentMrdiScale] || json.data.kline_data;
+                        renderMrdiTechChart(kData, json.data.clustered_levels);
+                    }
+                } catch (err) {
+                    console.error("MRDI scale change error", err);
+                }
+            }
+        });
+    });
+
+    // MRDI 三层视图切换
+    document.querySelectorAll(".mrdi-view-tabs .mrdi-vtab").forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            document.querySelectorAll(".mrdi-view-tabs .mrdi-vtab").forEach(b => {
+                b.classList.remove("active");
+                b.setAttribute("aria-selected", "false");
+            });
+            const t = e.target.closest(".mrdi-vtab");
+            if (t) {
+                t.classList.add("active");
+                t.setAttribute("aria-selected", "true");
+            }
+        });
+    });
+
+    // Resize
+    window.addEventListener("resize", () => mrdiTechChartInst?.resize());
+}
+
+/**
+ * 载入 MRDI 分析数据
+ */
+async function loadMrdiAnalysis(symbol) {
+    try {
+        const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(symbol)}&scale=240`);
+        const json = await res.json();
+        if (json.status !== "success" || !json.data) {
+            console.warn("MRDI: 未能获取指数数据");
+            return;
+        }
+        currentMrdiData = json.data;
+
+        // 更新时间
+        const now = new Date();
+        const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        const updateEl = document.getElementById("mrdiUpdateTime");
+        if (updateEl) updateEl.textContent = timeStr;
+
+        // 计算 MRDI: 必须用完整日K(约250根)，kline_data 仅是图表截断的90根，
+        // 在其上算 MACD/KDJ 预热不足且"近250日分位"名不副实
+        const kData = json.data.daily_kline_full?.length >= 30
+            ? json.data.daily_kline_full
+            : (json.data.all_kline_data?.["240"] || json.data.kline_data || []);
+        const mrdiResult = calculateMRDI(kData);
+        const dirResult = calculateMultiTimeframeDirection(json.data);
+        const cockpit = generateDecisionCockpit(mrdiResult, dirResult);
+
+        // 渲染所有区块
+        renderMrdiCockpit(cockpit, mrdiResult, dirResult);
+        renderMrdiSignalCard(mrdiResult);
+        renderMrdiScoreGrid(mrdiResult);
+        renderMrdiOperationCard(dirResult, cockpit);
+        renderMrdiDirectionCard(dirResult);
+        renderMrdiLevels(json.data.clustered_levels, kData);
+        renderMrdiConfirmCard(mrdiResult, dirResult);
+        renderMrdiMaturityGrid(mrdiResult, dirResult);
+        renderMrdiLadder(mrdiResult, dirResult);
+        renderMrdiEnvCard(mrdiResult, kData);
+        const chartKData = json.data.all_kline_data?.["240"] || kData;
+        renderMrdiTechChart(chartKData, json.data.clustered_levels);
+
+        // 数据状态
+        const stateEl = document.getElementById("mrdiDataState");
+        if (stateEl) stateEl.innerHTML = `<i class="fa-solid fa-circle-check" style="color:var(--neon-green)"></i> ${kData.length} 根K线已分析`;
+
+    } catch (err) {
+        console.error("MRDI load error", err);
+    }
+}
+
+// ============ MRDI 核心计算引擎 ============
+
+/**
+ * 计算 MRDI: RD(反弹需求), CD(回调压力), G(拐点触发)
+ */
+function calculateMRDI(kData) {
+    if (!kData || kData.length < 30) {
+        return { rd: 0, cd: 0, g: 0, rdPct: 0, cdPct: 0, rdChip: "数据不足", cdChip: "数据不足", gState: "数据不足" };
+    }
+
+    const closes = kData.map(k => k.close);
+    const highs = kData.map(k => k.high);
+    const lows = kData.map(k => k.low);
+    const volumes = kData.map(k => k.volume || 0);
+    const n = closes.length;
+
+    // --- 全序列指标只算一次，供当前值与历史分位共用 ---
+    const rsi14 = calcRSI(closes, 14);
+    const { k: kdjK, d: kdjD, j: kdjJ } = calcKDJ(highs, lows, closes);
+    const { dif, dea, hist } = calcMACD(closes);
+    const ma20 = calcMA(closes, 20);
+    const atr14 = calcATR(highs, lows, closes, 14);
+
+    // 连续涨跌天数序列 (O(n) 递推)
+    const consDown = new Array(n).fill(0);
+    const consUp = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) {
+        consDown[i] = closes[i] < closes[i - 1] ? consDown[i - 1] + 1 : 0;
+        consUp[i] = closes[i] > closes[i - 1] ? consUp[i - 1] + 1 : 0;
+    }
+
+    // 在索引 i 处提取 RD/CD 所需的全部因子
+    const featuresAt = (i) => {
+        const c = closes[i];
+        const m20 = ma20[i] || c;
+        const vol5 = volumes.slice(Math.max(0, i - 4), i + 1);
+        const vol20 = volumes.slice(Math.max(0, i - 19), i + 1);
+        const avg5 = vol5.reduce((a, b) => a + b, 0) / (vol5.length || 1);
+        const avg20 = vol20.reduce((a, b) => a + b, 0) / (vol20.length || 1) || 1;
+        return {
+            rsi: rsi14[i] ?? 50,
+            j: kdjJ[i] ?? 50,
+            deviation: m20 !== 0 ? (c - m20) / m20 * 100 : 0,
+            hist: hist[i] ?? 0,
+            prevHist: hist[i - 1] ?? 0,
+            consecutiveDown: consDown[i],
+            consecutiveUp: consUp[i],
+            volRatio: avg5 / avg20,
+            chg5d: i >= 5 ? (c - closes[i - 5]) / closes[i - 5] * 100 : 0
+        };
+    };
+
+    const f = featuresAt(n - 1);
+    const { rd, cd } = scoreMrdiRdCd(f);
+    const { rsi: latestRSI, j: latestJ, deviation, consecutiveDown, consecutiveUp, volRatio, chg5d } = f;
+
+    // === G 拐点触发 ===
+    const latestDIF = dif[n - 1] || 0;
+    const latestDEA = dea[n - 1] || 0;
+    const prevDIF = dif[n - 2] || 0;
+    const prevDEA = dea[n - 2] || 0;
+    const latestK = kdjK[n - 1] || 50;
+    const latestD = kdjD[n - 1] || 50;
+    const prevK = kdjK[n - 2] || 50;
+    const prevD = kdjD[n - 2] || 50;
+    const latestATR = atr14[n - 1] || closes[n - 1] * 0.01;
+
+    let g = 0;
+    // MACD 金叉/死叉 贡献；非交叉日用 (DIF−DEA) 的变化量，按 ATR 归一化消除价格量纲
+    // (上证 3900 点与 2 元个股的 DIF 差几个数量级，直接乘系数会淹没其他项)
+    if (prevDIF <= prevDEA && latestDIF > latestDEA) g += 0.3;  // 金叉
+    else if (prevDIF >= prevDEA && latestDIF < latestDEA) g -= 0.3;  // 死叉
+    else {
+        const macdMomentum = (latestDIF - latestDEA) - (prevDIF - prevDEA);
+        g += Math.max(-0.3, Math.min(0.3, 4 * macdMomentum / latestATR));
+    }
+
+    // KDJ 金叉/死叉 贡献
+    if (prevK <= prevD && latestK > latestD) g += 0.2;
+    else if (prevK >= prevD && latestK < latestD) g -= 0.2;
+
+    // 价格趋势贡献 (2日涨跌幅, 1% → 0.1)
+    const priceMom = n >= 3 ? (closes[n-1] - closes[n-3]) / closes[n-3] * 10 : 0;
+    g += Math.max(-0.3, Math.min(0.3, priceMom));
+
+    g = Math.round(Math.max(-1, Math.min(1, g)) * 100) / 100;
+
+    // --- 近250日分位: 与当前 RD/CD 使用同一打分函数，否则分位数没有可比性 ---
+    const histStart = Math.max(30, n - 250);
+    const rdHistory = [];
+    const cdHistory = [];
+    for (let i = histStart; i < n; i++) {
+        const s = scoreMrdiRdCd(featuresAt(i));
+        rdHistory.push(s.rd);
+        cdHistory.push(s.cd);
+    }
+
+    const rdPct = rdHistory.length > 0 ? (rdHistory.filter(v => v <= rd).length / rdHistory.length * 100).toFixed(1) : 0;
+    const cdPct = cdHistory.length > 0 ? (cdHistory.filter(v => v <= cd).length / cdHistory.length * 100).toFixed(1) : 0;
+
+    // 生成标签
+    let rdChip = "中性";
+    if (rd >= 60) rdChip = "极端超跌";
+    else if (rd >= 40) rdChip = "显著超跌";
+    else if (rd >= 25) rdChip = "偏弱修复";
+    else if (rd >= 10) rdChip = "弱超跌";
+
+    let cdChip = "中性";
+    if (cd >= 60) cdChip = "极端超买";
+    else if (cd >= 40) cdChip = "显著超买";
+    else if (cd >= 25) cdChip = "偏强回撤";
+    else if (cd >= 10) cdChip = "弱超买";
+
+    let gState = "中性区间";
+    if (g >= 0.15) gState = "正向初现 ↑";
+    else if (g <= -0.15) gState = "负向初现 ↓";
+    else if (g > 0.05) gState = "偏正缓冲";
+    else if (g < -0.05) gState = "偏负缓冲";
+
+    return { rd, cd, g, rdPct, cdPct, rdChip, cdChip, gState, rsi: latestRSI, kdjJ: latestJ, deviation, consecutiveDown, consecutiveUp, chg5d, volRatio };
+}
+
+/**
+ * RD(反弹需求) / CD(回调压力) 打分函数。
+ * 当前值与历史分位必须共用此函数，保证分位数口径一致。
+ */
+function scoreMrdiRdCd(f) {
+    let rd = 0;
+    if (f.rsi < 20) rd += 25;
+    else if (f.rsi < 30) rd += 18;
+    else if (f.rsi < 40) rd += 8;
+
+    if (f.j < 0) rd += 20;
+    else if (f.j < 10) rd += 14;
+    else if (f.j < 20) rd += 7;
+
+    if (f.deviation < -5) rd += 22;
+    else if (f.deviation < -3) rd += 14;
+    else if (f.deviation < -1.5) rd += 6;
+
+    if (f.hist < 0 && f.prevHist < 0 && f.hist > f.prevHist) rd += 10;   // 绿柱收窄
+
+    if (f.consecutiveDown >= 5) rd += 15;
+    else if (f.consecutiveDown >= 3) rd += 8;
+
+    if (f.volRatio < 0.6 && f.deviation < -2) rd += 10;   // 缩量超跌
+
+    if (f.chg5d < -8) rd += 12;
+    else if (f.chg5d < -5) rd += 6;
+
+    let cd = 0;
+    if (f.rsi > 80) cd += 25;
+    else if (f.rsi > 70) cd += 18;
+    else if (f.rsi > 60) cd += 8;
+
+    if (f.j > 100) cd += 20;
+    else if (f.j > 90) cd += 14;
+    else if (f.j > 80) cd += 7;
+
+    if (f.deviation > 5) cd += 22;
+    else if (f.deviation > 3) cd += 14;
+    else if (f.deviation > 1.5) cd += 6;
+
+    if (f.hist > 0 && f.prevHist > 0 && f.hist < f.prevHist) cd += 10;   // 红柱收窄
+
+    if (f.consecutiveUp >= 5) cd += 15;
+    else if (f.consecutiveUp >= 3) cd += 8;
+
+    if (f.volRatio > 1.8 && f.deviation > 2) cd += 10;   // 放量冲高
+
+    if (f.chg5d > 8) cd += 12;
+    else if (f.chg5d > 5) cd += 6;
+
+    return { rd, cd };
+}
+
+/**
+ * 多周期方向判断
+ * 月线/周线/60分/30分方向直接取后端 timeframes（后端 periods 是数组，不能按周期键取值）；
+ * 日线在完整日K上计算阶段趋势。
+ */
+function calculateMultiTimeframeDirection(data) {
+    const kData = data.daily_kline_full?.length >= 30
+        ? data.daily_kline_full
+        : (data.all_kline_data?.["240"] || data.kline_data || []);
+    const tf = data.timeframes || {};
+
+    const dailyTrend = analyzeTrend(kData, "日线");
+    const weeklyTrend = tf.weekly?.label || "数据不足";
+    const monthlyTrend = tf.monthly?.label || "数据不足";
+    const weeklyScore = Number(tf.weekly?.score ?? 0);
+    const monthlyScore = Number(tf.monthly?.score ?? 0);
+    const h60 = tf["60m"] || null;
+    const h30 = tf["30m"] || null;
+
+    const isBear = (l) => l === "偏空" || l === "弱偏空";
+    const isBull = (l) => l === "偏多" || l === "弱偏多";
+
+    // 1) 月线定级别上限
+    let positionCap = "正常";
+    if (monthlyTrend === "偏空") positionCap = "轻仓";
+    else if (monthlyTrend === "弱偏空") positionCap = "半仓";
+
+    // 2) 周线定操作许可, 3) 日线定阶段
+    let permission = "观望";
+    let permissionDetail = "大方向不明，先观望";
+    let riskLevel = "中等";
+
+    if (isBear(weeklyTrend)) {
+        permission = "暂停观望";
+        permissionDetail = `周线${weeklyTrend}(方向分 ${weeklyScore.toFixed(2)})，大级别不许可做多，反弹仅视作修复`;
+        riskLevel = "较高";
+    } else if (dailyTrend.score < -0.3) {
+        permission = "暂停观望";
+        permissionDetail = `日线${dailyTrend.label}，等待日线企稳`;
+        riskLevel = "较高";
+    } else if (dailyTrend.score > 0.6 && weeklyTrend === "偏多") {
+        permission = positionCap === "正常" ? "允许正常操作" : "允许半仓操作";
+        permissionDetail = `日线与周线共振偏强${positionCap !== "正常" ? `，但月线${monthlyTrend}限制级别上限为${positionCap}` : ""}`;
+        riskLevel = "较低";
+    } else if (dailyTrend.score > 0.3 && !isBear(weeklyTrend)) {
+        permission = "允许轻仓试探";
+        permissionDetail = `日线偏强且周线${weeklyTrend}未转空，可轻仓`;
+        riskLevel = "适中";
+    }
+    if (positionCap === "轻仓" && (permission === "允许正常操作" || permission === "允许半仓操作" || permission === "允许轻仓试探")) {
+        permission = "允许轻仓试探";
+        permissionDetail += `；月线${monthlyTrend}，级别上限压至轻仓`;
+    }
+
+    // 4) 60分钟确认延续, 5) 30分钟捕捉时点
+    const intradayLabel = (p) => p ? `${p.label}(${Number(p.score).toFixed(2)})` : "数据不足";
+    let rhythm = "盘中节奏待判断";
+    let rhythmDetail = "30/60分钟数据不足。";
+    if (h60 && h30) {
+        const s60 = Number(h60.score), s30 = Number(h30.score);
+        if (s60 > 0.1 && s30 > 0.1) { rhythm = "分时共振偏强"; }
+        else if (s60 < -0.1 && s30 < -0.1) { rhythm = "分时共振偏弱"; }
+        else if (s60 > 0.1 && s30 <= 0.1) { rhythm = "60分偏强，30分回调中"; }
+        else if (s60 <= -0.1 && s30 > 0.1) { rhythm = "60分偏弱，30分反弹中"; }
+        else { rhythm = "分时震荡"; }
+        rhythmDetail = `60分钟 ${intradayLabel(h60)}，30分钟 ${intradayLabel(h30)}。60分钟决定延续，30分钟只用于找入场时点。`;
+    }
+
+    return {
+        daily: dailyTrend,
+        weekly: weeklyTrend,
+        weeklyScore,
+        weeklyDetail: tf.weekly?.detail || "",
+        monthly: monthlyTrend,
+        monthlyScore,
+        monthlyDetail: tf.monthly?.detail || "",
+        positionCap,
+        h60, h30,
+        rhythm, rhythmDetail,
+        permission,
+        permissionDetail,
+        riskLevel,
+        horizon: dailyTrend.score > 0.3 ? "短线波段 1-5日" : "观察等待",
+        weeklyPermission: isBull(weeklyTrend) ? "允许" : isBear(weeklyTrend) ? "暂停" : "有限观察"
+    };
+}
+
+function analyzeTrend(kData, label) {
+    if (!kData || kData.length < 10) return { label: "数据不足", score: 0, detail: "K线数据不足" };
+
+    const closes = kData.map(k => k.close);
+    const n = closes.length;
+    const ma5 = calcMA(closes, 5);
+    const ma20 = calcMA(closes, 20);
+    const latest = closes[n - 1];
+    const latestMA5 = ma5[ma5.length - 1] || latest;
+    const latestMA20 = ma20[ma20.length - 1] || latest;
+
+    let score = 0;
+    if (latest > latestMA5) score += 0.2;
+    else score -= 0.2;
+    if (latest > latestMA20) score += 0.3;
+    else score -= 0.3;
+    if (latestMA5 > latestMA20) score += 0.2;
+    else score -= 0.2;
+
+    // 趋势方向
+    const recentChg = (closes[n-1] - closes[Math.max(0, n-6)]) / closes[Math.max(0, n-6)] * 100;
+    if (recentChg > 3) score += 0.2;
+    else if (recentChg < -3) score -= 0.2;
+
+    let trendLabel = "中性震荡";
+    let detail = "均线交织，方向不明";
+    if (score > 0.5) { trendLabel = "偏多"; detail = "价格在均线上方，短期趋势向上"; }
+    else if (score > 0.2) { trendLabel = "弱偏多"; detail = "短期略偏强，但未形成明确趋势"; }
+    else if (score < -0.5) { trendLabel = "偏空"; detail = "价格在均线下方，短期趋势向下"; }
+    else if (score < -0.2) { trendLabel = "弱偏空"; detail = "短期略偏弱"; }
+
+    return { label: trendLabel, score, detail };
+}
+
+/**
+ * 生成核心结论驾驶舱
+ */
+function generateDecisionCockpit(mrdi, dir) {
+    let action = "观望等待";
+    let actionDetail = "尚无明确的方向信号。";
+    let tone = "neutral";
+
+    if (mrdi.rd >= 40 && mrdi.g >= 0.15) {
+        action = "留意反弹机会";
+        actionDetail = `RD=${mrdi.rd} 显示显著超跌条件，G=${mrdi.g} 显示正向动量初现。需结合周线许可确认。`;
+        tone = "bullish";
+    } else if (mrdi.cd >= 40 && mrdi.g <= -0.15) {
+        action = "注意回调风险";
+        actionDetail = `CD=${mrdi.cd} 显示显著超买条件，G=${mrdi.g} 显示负向动量初现。建议控制仓位。`;
+        tone = "bearish";
+    } else if (mrdi.rd >= 25) {
+        action = "弱超跌观察";
+        actionDetail = "出现一定超跌信号，但未达到显著水平，继续观察。";
+    } else if (mrdi.cd >= 25) {
+        action = "偏强但有回撤风险";
+        actionDetail = "短期偏强但超买压力在积累，注意节奏。";
+    }
+
+    if (dir.permission === "暂停观望") {
+        const weeklyBear = dir.weekly === "偏空" || dir.weekly === "弱偏空";
+        action = weeklyBear ? "周线不许可，防守观望" : "大方向不明，先观望";
+        actionDetail = dir.permissionDetail;
+        tone = weeklyBear ? "bearish" : "waiting";
+    }
+
+    let major = `周线 ${dir.weekly} / 月线 ${dir.monthly}`;
+    let majorDetail = dir.weeklyDetail || dir.daily.detail;
+    let rhythm = dir.rhythm;
+    let rhythmDetail = dir.rhythmDetail;
+
+    let nextStep = "等待日线收盘确认方向";
+    if (mrdi.rd >= 40) nextStep = "观察G值能否维持正向，等待日线企稳确认";
+    else if (mrdi.cd >= 40) nextStep = "观察是否出现放量阴线确认回调";
+
+    return { action, actionDetail, tone, major, majorDetail, rhythm, rhythmDetail, nextStep };
+}
+
+// ============ MRDI 渲染函数 ============
+
+function renderMrdiCockpit(cockpit, mrdi, dir) {
+    const el = document.getElementById("mrdiCockpit");
+    if (!el) return;
+
+    // 设置色调
+    el.className = `mrdi-cockpit tone-${cockpit.tone}`;
+
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    setT("mrdiActionLabel", cockpit.action);
+    setT("mrdiActionDetail", cockpit.actionDetail);
+    setT("mrdiMajorLabel", cockpit.major);
+    setT("mrdiMajorDetail", cockpit.majorDetail);
+    setT("mrdiRhythmLabel", cockpit.rhythm);
+    setT("mrdiRhythmDetail", cockpit.rhythmDetail);
+    setT("mrdiNextLabel", cockpit.nextStep);
+    setT("mrdiCockpitAsOf", `数据截至 ${new Date().toLocaleDateString("zh-CN")}`);
+
+    setT("mrdiChangeLabel", mrdi.chg5d != null ? `近5日涨跌 ${mrdi.chg5d > 0 ? '+' : ''}${mrdi.chg5d.toFixed(2)}%，连续${mrdi.consecutiveDown > 0 ? '下跌' + mrdi.consecutiveDown + '日' : '上涨' + mrdi.consecutiveUp + '日'}` : "数据积累中");
+
+    // 关键关口
+    setT("mrdiKeyLevel", `MA20 乖离 ${mrdi.deviation > 0 ? '+' : ''}${mrdi.deviation.toFixed(2)}%`);
+    setT("mrdiKeyLevelDetail", mrdi.deviation < -3 ? "价格显著低于MA20，接近潜在支撑区" : mrdi.deviation > 3 ? "价格显著高于MA20，接近潜在压力区" : "价格位于MA20附近，中性区域");
+}
+
+function renderMrdiSignalCard(mrdi) {
+    const card = document.getElementById("mrdiSummaryCard");
+    const badge = document.getElementById("mrdiStabilityBadge");
+    const status = document.getElementById("mrdiStatusLabel");
+    const guidance = document.getElementById("mrdiGuidance");
+    const nextCond = document.getElementById("mrdiNextCondition");
+    if (!card) return;
+
+    let tone = "neutral", badgeText = "中性", statusText = "无明确信号";
+    let guidanceText = "当前市场处于中性状态，RD和CD均未达到显著水平。";
+    let nextText = "继续观察RD和CD的变化，等待G值穿越±0.15阈值。";
+
+    if (mrdi.rd >= 40 && mrdi.g >= 0.15) {
+        tone = "bullish"; badgeText = "企稳信号"; statusText = "超跌+正向动量";
+        guidanceText = `RD=${mrdi.rd}(${mrdi.rdPct}%分位) 显示显著超跌，G=${mrdi.g.toFixed(2)} 正向初现。RSI=${mrdi.rsi.toFixed(1)}，J=${mrdi.kdjJ.toFixed(1)}。`;
+        nextText = "关注G值能否持续维持正向，次日延续确认企稳。";
+    } else if (mrdi.cd >= 40 && mrdi.g <= -0.15) {
+        tone = "bearish"; badgeText = "回调预警"; statusText = "超买+负向动量";
+        guidanceText = `CD=${mrdi.cd}(${mrdi.cdPct}%分位) 显示显著超买，G=${mrdi.g.toFixed(2)} 负向初现。`;
+        nextText = "观察是否出现放量阴线或MACD死叉确认回调。";
+    } else if (mrdi.rd >= 25) {
+        badgeText = "弱超跌"; statusText = "关注反弹";
+        guidanceText = `RD=${mrdi.rd} 出现弱超跌信号，但未达显著水平(40+)。G=${mrdi.g.toFixed(2)} 尚在中性区间。`;
+        nextText = "等待RD进一步升高或G值穿越+0.15。";
+    } else if (mrdi.cd >= 25) {
+        badgeText = "偏强"; statusText = "留意风险";
+        guidanceText = `CD=${mrdi.cd} 有一定回撤压力积累。G=${mrdi.g.toFixed(2)}。`;
+        nextText = "观察CD是否继续走高，以及G值是否转负。";
+    }
+
+    card.className = `mrdi-summary-card tone-${tone}`;
+    if (badge) { badge.textContent = badgeText; badge.className = `mrdi-badge ${tone}`; }
+    if (status) status.textContent = statusText;
+    if (guidance) guidance.textContent = guidanceText;
+    if (nextCond) nextCond.textContent = nextText;
+}
+
+function renderMrdiScoreGrid(mrdi) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    setT("mrdiRdScore", mrdi.rd);
+    setT("mrdiRdChip", mrdi.rdChip);
+    setT("mrdiRdPct", `近250日位置 ${mrdi.rdPct}%`);
+    setT("mrdiCdScore", mrdi.cd);
+    setT("mrdiCdChip", mrdi.cdChip);
+    setT("mrdiCdPct", `近250日位置 ${mrdi.cdPct}%`);
+    setT("mrdiGScore", mrdi.g.toFixed(2));
+    setT("mrdiGState", mrdi.gState);
+
+    // 颜色化分数
+    const rdEl = document.getElementById("mrdiRdScore");
+    if (rdEl) rdEl.style.color = mrdi.rd >= 40 ? "var(--neon-green)" : mrdi.rd >= 25 ? "#0d9488" : "var(--color-text-main)";
+    const cdEl = document.getElementById("mrdiCdScore");
+    if (cdEl) cdEl.style.color = mrdi.cd >= 40 ? "var(--neon-red)" : mrdi.cd >= 25 ? "#b91c1c" : "var(--color-text-main)";
+}
+
+function renderMrdiOperationCard(dir, cockpit) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    const card = document.getElementById("mrdiOperationCard");
+    if (card) card.className = `mrdi-operation-card tone-${cockpit.tone}`;
+
+    setT("mrdiOpLabel", dir.permission);
+    setT("mrdiOpSummary", dir.permissionDetail);
+    setT("mrdiOpHorizon", dir.horizon);
+    setT("mrdiOpWeekly", dir.weeklyPermission);
+    setT("mrdiOpNext", cockpit.nextStep);
+
+    const risk = document.getElementById("mrdiOpRisk");
+    if (risk) {
+        risk.textContent = dir.riskLevel;
+        risk.className = `mrdi-operation-risk ${dir.riskLevel === "较高" ? "bearish" : dir.riskLevel === "较低" ? "bullish" : "waiting"}`;
+    }
+
+    const reasons = document.getElementById("mrdiOpReasons");
+    if (reasons) {
+        reasons.innerHTML = `
+            <li>月线级别上限: ${dir.monthly} (方向分 ${dir.monthlyScore.toFixed(2)}) → ${dir.positionCap}</li>
+            <li>周线操作许可: ${dir.weekly} (方向分 ${dir.weeklyScore.toFixed(2)}) → ${dir.weeklyPermission}</li>
+            <li>日线当前阶段: ${dir.daily.label} (方向分 ${dir.daily.score.toFixed(2)})</li>
+            <li>盘中节奏: ${dir.rhythm}</li>
+        `;
+    }
+}
+
+function renderMrdiDirectionCard(dir) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    setT("mrdiDirLabel", dir.daily.label === "数据不足" ? "等待数据" : `日线 ${dir.daily.label}`);
+    setT("mrdiDirWeekly", dir.weekly);
+    setT("mrdiDirWeeklyDetail", dir.weeklyDetail || (dir.weekly.includes("偏多") ? "周线趋势偏上，支持操作" : dir.weekly.includes("偏空") ? "周线趋势偏下，需谨慎" : "周线方向中性"));
+    setT("mrdiDirMonthly", dir.monthly);
+    setT("mrdiDirMonthlyDetail", dir.monthlyDetail || "月线提供大级别背景参考");
+    setT("mrdiDirDaily", dir.daily.label);
+    setT("mrdiDirDailyDetail", dir.daily.detail);
+    setT("mrdiDirPhase", dir.daily.detail);
+
+    const conf = document.getElementById("mrdiDirConf");
+    if (conf) {
+        conf.textContent = dir.daily.score > 0.3 ? "偏多" : dir.daily.score < -0.3 ? "偏空" : "中性";
+        conf.className = `mrdi-direction-confidence ${dir.daily.score > 0.3 ? "bullish" : dir.daily.score < -0.3 ? "bearish" : "waiting"}`;
+    }
+}
+
+function renderMrdiLevels(levels, kData) {
+    if (!levels) return;
+    const price = kData?.length > 0 ? kData[kData.length - 1].close : 0;
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    setT("mrdiLevelsPrice", price.toFixed(2));
+    setT("mrdiLevelsPriceTime", `最近收盘`);
+    setT("mrdiLevelsStatus", levels.supports || levels.resistances ? "已计算" : "数据不足");
+
+    // 渲染压力位
+    const resList = document.getElementById("mrdiResistanceList");
+    if (resList && levels.resistances?.length > 0) {
+        resList.innerHTML = levels.resistances.slice(0, 3).map(r => `
+            <div class="mrdi-level-item">
+                <span class="level-price">${r.center_price.toFixed(2)}</span>
+                <span class="level-meta">距离 ${((r.center_price - price) / price * 100).toFixed(1)}%</span>
+                <span class="level-strength ${r.stars >= 4 ? 'core' : 'strong'}">${r.stars >= 4 ? '核心区' : '强区'} ⭐${r.stars}</span>
+            </div>
+        `).join("");
+    }
+
+    // 渲染支撑位
+    const supList = document.getElementById("mrdiSupportList");
+    if (supList && levels.supports?.length > 0) {
+        supList.innerHTML = levels.supports.slice(0, 3).map(s => `
+            <div class="mrdi-level-item">
+                <span class="level-price">${s.center_price.toFixed(2)}</span>
+                <span class="level-meta">距离 ${((s.center_price - price) / price * 100).toFixed(1)}%</span>
+                <span class="level-strength ${s.stars >= 4 ? 'core' : 'strong'}">${s.stars >= 4 ? '核心区' : '强区'} ⭐${s.stars}</span>
+            </div>
+        `).join("");
+    }
+
+    // 摘要
+    const nearest_r = levels.resistances?.[0];
+    const nearest_s = levels.supports?.[0];
+    const summary = [];
+    if (nearest_r) summary.push(`上方最近压力 ${nearest_r.center_price.toFixed(2)}(⭐${nearest_r.stars})`);
+    if (nearest_s) summary.push(`下方最近支撑 ${nearest_s.center_price.toFixed(2)}(⭐${nearest_s.stars})`);
+    setT("mrdiLevelsSummary", summary.join("；") || "暂无足够数据生成关键价位。");
+}
+
+function renderMrdiConfirmCard(mrdi, dir) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    let label = "尚无明确方向";
+    let badge = "观察中";
+    let detail = "各周期信号未形成一致方向。";
+    let guidance = "继续等待30分钟和60分钟信号向日线扩展。";
+    let tone = "neutral";
+
+    if (mrdi.g >= 0.15 && dir.daily.score > 0.2) {
+        label = "短线偏多确认中";
+        badge = "30min→日线";
+        detail = `G=${mrdi.g.toFixed(2)} 正向初现，日线趋势分${dir.daily.score.toFixed(2)} 偏上。`;
+        guidance = "关注日线收盘能否站上MA5/MA20。";
+        tone = "bullish";
+    } else if (mrdi.g <= -0.15 && dir.daily.score < -0.2) {
+        label = "短线偏空信号";
+        badge = "30min→日线";
+        detail = `G=${mrdi.g.toFixed(2)} 负向初现，日线趋势分${dir.daily.score.toFixed(2)} 偏下。`;
+        guidance = "关注日线收盘是否跌破MA20。";
+        tone = "bearish";
+    }
+
+    const card = document.getElementById("mrdiConfirmCard");
+    if (card) card.className = `mrdi-confirm-card tone-${tone}`;
+
+    setT("mrdiConfirmLabel", label);
+    setT("mrdiConfirmGuidance", guidance);
+    setT("mrdiConfirmDetail", detail);
+    setT("mrdiConfirmNext", dir.daily.score > 0 ? "日线站上MA20确认" : "等待G值方向明确");
+
+    const badgeEl = document.getElementById("mrdiConfirmBadge");
+    if (badgeEl) {
+        badgeEl.textContent = badge;
+        badgeEl.className = `mrdi-confirm-badge ${tone === "neutral" ? "waiting" : tone}`;
+    }
+}
+
+function renderMrdiMaturityGrid(mrdi, dir) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    // 反弹条件成熟度 (0-100)
+    let rbScore = Math.min(100, Math.round(mrdi.rd * 1.2 + (mrdi.g > 0 ? mrdi.g * 50 : 0)));
+    // 转弱条件成熟度
+    let pbScore = Math.min(100, Math.round(mrdi.cd * 1.2 + (mrdi.g < 0 ? Math.abs(mrdi.g) * 50 : 0)));
+    // 短线力量
+    let triggerScore = (dir.daily.score * 30 + mrdi.g * 20).toFixed(1);
+
+    setT("mrdiReboundScore", rbScore);
+    setT("mrdiPullbackScore", pbScore);
+    setT("mrdiTriggerScore", triggerScore > 0 ? `+${triggerScore}` : triggerScore);
+}
+
+function renderMrdiLadder(mrdi, dir) {
+    const grid = document.getElementById("mrdiLadderGrid");
+    if (!grid) return;
+
+    // 30/60 分钟用真实分时周期方向分；无数据时才退回日线 G 值近似
+    const s30 = dir.h30 ? Number(dir.h30.score) : mrdi.g;
+    const s60 = dir.h60 ? Number(dir.h60.score) : mrdi.g;
+    const steps = [
+        { name: "30分钟", icon: "fa-clock", confirmed: Math.abs(s30) >= 0.1, status: dir.h30 ? dir.h30.label : (mrdi.g > 0 ? "偏改善" : mrdi.g < 0 ? "偏转弱" : "中性") },
+        { name: "60分钟", icon: "fa-hourglass-half", confirmed: Math.abs(s60) >= 0.1, status: dir.h60 ? dir.h60.label : (Math.abs(mrdi.g) >= 0.1 ? (mrdi.g > 0 ? "确认改善" : "确认转弱") : "未触发") },
+        { name: "日线", icon: "fa-calendar-day", confirmed: Math.abs(dir.daily.score) > 0.3, status: dir.daily.label },
+    ];
+
+    grid.innerHTML = steps.map(s => `
+        <div class="mrdi-ladder-step ${s.confirmed ? 'confirmed' : ''}">
+            <div class="step-icon"><i class="fa-solid ${s.icon}"></i></div>
+            <span class="step-name">${s.name}</span>
+            <span class="step-status">${s.status}</span>
+        </div>
+    `).join("");
+
+    const summary = document.getElementById("mrdiLadderSummary");
+    const confirmedCount = steps.filter(s => s.confirmed).length;
+    if (summary) summary.textContent = confirmedCount === 3 ? "三个时间层级均已确认方向" : confirmedCount > 0 ? `${confirmedCount}/3 个时间层级已确认` : "各周期尚无明确确认";
+}
+
+function renderMrdiEnvCard(mrdi, kData) {
+    const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
+    const n = kData.length;
+    if (n < 5) return;
+
+    // 简单冰点判断: 连续3日大跌
+    let iceDays = 0;
+    for (let i = n - 1; i >= Math.max(0, n - 5); i--) {
+        const chg = i > 0 ? (kData[i].close - kData[i-1].close) / kData[i-1].close * 100 : 0;
+        if (chg < -1.5) iceDays++;
+    }
+
+    if (iceDays >= 3) {
+        setT("mrdiEnvScore", "冰点环境");
+        setT("mrdiEnvStatus", `连续${iceDays}日急跌`);
+        setT("mrdiEnvDetail", `近5个交易日中有${iceDays}日跌幅超过1.5%，市场情绪极度悲观，关注企稳信号。`);
+    } else if (iceDays >= 1) {
+        setT("mrdiEnvScore", "偏冷");
+        setT("mrdiEnvStatus", `${iceDays}日急跌`);
+        setT("mrdiEnvDetail", `近期出现${iceDays}日急跌，市场情绪偏弱但未达冰点标准(连续3日)。`);
+    } else {
+        setT("mrdiEnvScore", "正常");
+        setT("mrdiEnvStatus", "无冰点信号");
+        setT("mrdiEnvDetail", "近期市场波动在正常范围内，未触发冰点环境判断。");
+    }
+}
+
+/**
+ * 渲染 MRDI 技术核对图表 (ECharts K线+MACD)
+ */
+function renderMrdiTechChart(kData, levels) {
+    if (!mrdiTechChartInst || !kData || kData.length === 0) return;
+
+    const dates = kData.map(k => k.date);
+    const kValues = kData.map(k => [k.open, k.close, k.low, k.high]);
+    const closes = kData.map(k => k.close);
+    const volumes = kData.map(k => k.volume || 0);
+
+    const ma5 = calcMA(closes, 5);
+    const ma20 = calcMA(closes, 20);
+    const ma60 = calcMA(closes, 60);
+    const { dif, dea, hist } = calcMACD(closes);
+
+    // 支撑压力 MarkLine
+    const markLines = [];
+    if (levels?.supports) {
+        levels.supports.slice(0, 2).forEach(s => {
+            markLines.push({
+                yAxis: s.center_price,
+                lineStyle: { color: '#059669', type: 'dashed', width: 1.5 },
+                label: { show: true, formatter: `S ${s.center_price.toFixed(0)}`, position: 'insideEndBottom', color: '#059669', fontSize: 10 }
+            });
+        });
+    }
+    if (levels?.resistances) {
+        levels.resistances.slice(0, 2).forEach(r => {
+            markLines.push({
+                yAxis: r.center_price,
+                lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
+                label: { show: true, formatter: `R ${r.center_price.toFixed(0)}`, position: 'insideEndTop', color: '#dc2626', fontSize: 10 }
+            });
+        });
+    }
+
+    const option = {
+        animation: false,
+        backgroundColor: '#ffffff',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        grid: [
+            { left: '6%', right: '3%', top: '5%', height: '45%' },
+            { left: '6%', right: '3%', top: '56%', height: '14%' },
+            { left: '6%', right: '3%', top: '74%', height: '20%' }
+        ],
+        xAxis: [
+            { type: 'category', data: dates, gridIndex: 0, axisLine: { lineStyle: { color: '#e2e8f0' } }, axisLabel: { color: '#64748b', fontSize: 10 }, boundaryGap: true },
+            { type: 'category', data: dates, gridIndex: 1, show: false, boundaryGap: true },
+            { type: 'category', data: dates, gridIndex: 2, axisLine: { lineStyle: { color: '#e2e8f0' } }, axisLabel: { color: '#64748b', fontSize: 10 }, boundaryGap: true }
+        ],
+        yAxis: [
+            { scale: true, gridIndex: 0, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { color: '#64748b', fontSize: 10 } },
+            { scale: true, gridIndex: 1, splitLine: { show: false }, axisLabel: { show: false } },
+            { scale: true, gridIndex: 2, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { color: '#64748b', fontSize: 10 } }
+        ],
+        dataZoom: [{ type: 'inside', xAxisIndex: [0, 1, 2], start: Math.max(0, 100 - 3600 / dates.length), end: 100 }],
+        series: [
+            {
+                name: 'K线', type: 'candlestick', data: kValues, xAxisIndex: 0, yAxisIndex: 0,
+                itemStyle: { color: '#059669', color0: '#dc2626', borderColor: '#059669', borderColor0: '#dc2626' },
+                markLine: markLines.length > 0 ? { symbol: ['none', 'none'], data: markLines } : undefined
+            },
+            { name: 'MA5', type: 'line', data: ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { color: '#2563eb', width: 1.2 } },
+            { name: 'MA20', type: 'line', data: ma20, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { color: '#d97706', width: 1.2 } },
+            { name: 'MA60', type: 'line', data: ma60, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { color: '#7c3aed', width: 1.2 } },
+            {
+                name: '成交量', type: 'bar', data: volumes.map((v, i) => ({
+                    value: v,
+                    itemStyle: { color: kValues[i] && kValues[i][1] >= kValues[i][0] ? 'rgba(5,150,105,0.5)' : 'rgba(220,38,38,0.5)' }
+                })),
+                xAxisIndex: 1, yAxisIndex: 1
+            },
+            {
+                name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
+                data: hist.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#059669' : '#dc2626' } }))
+            },
+            { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: dif, showSymbol: false, lineStyle: { color: '#0284c7', width: 1.2 } },
+            { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: dea, showSymbol: false, lineStyle: { color: '#d97706', width: 1.2 } }
+        ]
+    };
+
+    mrdiTechChartInst.setOption(option, true);
+    setTimeout(() => mrdiTechChartInst?.resize(), 40);
+}
+
+// ============ 技术指标计算工具函数 ============
+
+function calcMA(data, period) {
+    const result = [];
+    for (let i = 0; i < data.length; i++) {
+        if (i < period - 1) { result.push(null); continue; }
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j++) sum += data[j];
+        result.push(sum / period);
+    }
+    return result;
+}
+
+function calcRSI(closes, period) {
+    const result = [];
+    for (let i = 0; i < closes.length; i++) {
+        if (i < period) { result.push(50); continue; }
+        let gains = 0, losses = 0;
+        for (let j = i - period + 1; j <= i; j++) {
+            const diff = closes[j] - closes[j - 1];
+            if (diff > 0) gains += diff;
+            else losses -= diff;
+        }
+        const avgGain = gains / period;
+        const avgLoss = losses / period;
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        result.push(100 - 100 / (1 + rs));
+    }
+    return result;
+}
+
+function calcKDJ(highs, lows, closes, p = 9) {
+    const k = [], d = [], j = [];
+    let prevK = 50, prevD = 50;
+    for (let i = 0; i < closes.length; i++) {
+        if (i < p - 1) { k.push(50); d.push(50); j.push(50); continue; }
+        const hh = Math.max(...highs.slice(i - p + 1, i + 1));
+        const ll = Math.min(...lows.slice(i - p + 1, i + 1));
+        const rsv = hh === ll ? 50 : (closes[i] - ll) / (hh - ll) * 100;
+        const curK = 2 / 3 * prevK + 1 / 3 * rsv;
+        const curD = 2 / 3 * prevD + 1 / 3 * curK;
+        const curJ = 3 * curK - 2 * curD;
+        k.push(curK); d.push(curD); j.push(curJ);
+        prevK = curK; prevD = curD;
+    }
+    return { k, d, j };
+}
+
+function calcMACD(closes, short = 12, long = 26, signal = 9) {
+    const emaShort = calcEMA(closes, short);
+    const emaLong = calcEMA(closes, long);
+    const dif = emaShort.map((v, i) => (v != null && emaLong[i] != null) ? v - emaLong[i] : null);
+    const validDif = dif.filter(v => v !== null);
+    const deaRaw = calcEMA(validDif, signal);
+    const dea = [];
+    let validIdx = 0;
+    for (let i = 0; i < dif.length; i++) {
+        if (dif[i] === null) { dea.push(null); }
+        else { dea.push(deaRaw[validIdx] || 0); validIdx++; }
+    }
+    const hist = dif.map((v, i) => (v != null && dea[i] != null) ? 2 * (v - dea[i]) : null);
+    return { dif, dea, hist };
+}
+
+function calcATR(highs, lows, closes, period = 14) {
+    const result = [];
+    const trs = [];
+    for (let i = 0; i < closes.length; i++) {
+        const tr = i === 0
+            ? highs[i] - lows[i]
+            : Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+        trs.push(tr);
+        const win = trs.slice(Math.max(0, i - period + 1), i + 1);
+        result.push(win.reduce((a, b) => a + b, 0) / win.length);
+    }
+    return result;
+}
+
+function calcEMA(data, period) {
+    const result = [];
+    const multiplier = 2 / (period + 1);
+    let ema = null;
+    for (let i = 0; i < data.length; i++) {
+        if (data[i] === null || data[i] === undefined) { result.push(null); continue; }
+        if (ema === null) { ema = data[i]; }
+        else { ema = (data[i] - ema) * multiplier + ema; }
+        result.push(ema);
+    }
+    return result;
+}
+
+// 初始化时绑定 MRDI 事件
+document.addEventListener("DOMContentLoaded", () => {
+    bindMrdiEvents();
+});

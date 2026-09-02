@@ -47,7 +47,7 @@ class ClusterEngine:
             "ma_250": (30, "日线MA250(牛熊年线)"),
             "boll_upper": (18, "日线布林上轨"),
             "boll_lower": (18, "日线布林下轨"),
-            "boll_mid": (15, "日线布林中轨")
+            # 注意: boll_mid 恒等于 ma_20，不能再作为独立候选，否则同一价位被双重计分
         }
 
         for ma_key, (weight, label) in ma_weights.items():
@@ -74,7 +74,7 @@ class ClusterEngine:
                     ("ma_250", "周线MA250(超大级别牛熊年线)", 32),
                     ("boll_lower", "周线布林下轨", 22),
                     ("boll_upper", "周线布林上轨", 22),
-                    ("boll_mid", "周线布林中轨", 18)
+                    # 周线布林中轨 == 周MA20，已由 ma_20 覆盖，不再重复计分
                 ]
                 for w_key, label, weight in weekly_mas:
                     if w_key in last_w and pd.notna(last_w[w_key]) and last_w[w_key] > 0:
