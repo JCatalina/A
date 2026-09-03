@@ -38,9 +38,54 @@ document.addEventListener("DOMContentLoaded", () => {
     bindMacroEvents();
     loadMarketIndices();
     loadMacroIndexAnalysis(currentMacroSymbol);
+    loadIceRebound();
+    setInterval(loadIceRebound, 120000);
     loadStockAnalysis(currentStockCode);
     loadScreenerResults(currentScreenerStrategy);
 });
+
+/**
+ * 大盘冰点反弹概率 (v2.6 历史分箱校准模型)
+ */
+async function loadIceRebound() {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    try {
+        const res = await fetch("/api/index/ice");
+        const json = await res.json();
+        if (json.status !== "success") { set("iceProbNum", "--"); return; }
+        const prob = json.rebound_prob_10d_pct;
+        set("iceProbNum", prob == null ? "--" : prob.toFixed(1));
+        set("iceCI", (json.ci_low_pct == null ? "" :
+            `95%CI [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
+        const liftEl = document.getElementById("iceLift");
+        const lift = json.lift_vs_baseline_pp;
+        if (lift != null && liftEl) {
+            liftEl.textContent = (lift >= 0 ? "↑ 高于无条件基线 " : "↓ 低于无条件基线 ")
+                + Math.abs(lift).toFixed(1) + "pp (基线 " + json.baseline_rebound_pct + "%)";
+            liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
+        }
+        const sc = json.ice_score_0_100 ?? 0;
+        set("iceScoreVal", sc.toFixed(0) + " 分");
+        const fill = document.getElementById("iceScoreFill");
+        if (fill) fill.style.width = Math.min(100, sc) + "%";
+        const f = json.factors || {};
+        const chips = [
+            `${f.price_ret20_pct >= 0 ? "+" : ""}${f.price_ret20_pct}% / 20日`,
+            `连跌 ${f.consec_down_days} 日`,
+            `量能比 ${f.volume_ratio_20d}`,
+            `融资5日 ${f.margin5d_pct >= 0 ? "+" : ""}${f.margin5d_pct}%`,
+        ].map(t => `<span class="ice-chip">${t}</span>`).join("");
+        const facEl = document.getElementById("iceFactors");
+        if (facEl) facEl.innerHTML = chips;
+        const s = json.live_sentiment || {};
+        set("iceSentiment",
+            `实时情绪: 上涨 ${s.up_count} / 下跌 ${s.down_count} · 涨停 ${s.limit_up} / 跌停 ${s.limit_down}` +
+            (s.asof ? ` · 数据日 ${s.asof}` : ""));
+        set("iceUpdateTime", json.update_time || "");
+    } catch (e) {
+        set("iceProbNum", "--");
+    }
+}
 
 /**
  * 初始化图表实例

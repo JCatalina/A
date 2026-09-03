@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=2.5.0">
+    <link rel="stylesheet" href="/static/style.css?v=2.6.0">
 </head>
 <body>
     <div class="app-container">
@@ -267,6 +267,33 @@
                     <span class="idx-price" id="macroIndexPrice">--</span>
                     <span class="idx-chg" id="macroIndexChg">--%</span>
                     <span class="idx-sub" id="macroIndexDesc">A股核心风向标/大盘主板</span>
+                </div>
+            </div>
+
+            <!-- 大盘冰点反弹概率 (v2.6 历史分箱校准模型) -->
+            <div class="glass-card ice-prob-card" id="iceProbCard">
+                <div class="card-header">
+                    <span class="header-badge cyan">ICE</span>
+                    <h2>大盘冰点反弹概率</h2>
+                    <span class="header-tip">历史分箱校准 · 非预测承诺 · 更新 <span id="iceUpdateTime">--</span></span>
+                </div>
+                <div class="ice-body">
+                    <div class="ice-gauge-block">
+                        <div class="ice-prob-big" id="iceProbNum">--</div>
+                        <div class="ice-prob-unit">%</div>
+                        <div class="ice-prob-lab">未来10日反弹 (≥2.5%) 概率</div>
+                        <div class="ice-ci" id="iceCI"></div>
+                        <div class="ice-lift" id="iceLift"></div>
+                    </div>
+                    <div class="ice-detail-block">
+                        <div class="ice-score-row">
+                            <span class="ice-lbl">冰点分</span>
+                            <div class="ice-score-track"><div class="ice-score-fill" id="iceScoreFill" style="width:0%"></div></div>
+                            <span class="ice-score-val" id="iceScoreVal">--</span>
+                        </div>
+                        <div class="ice-factors" id="iceFactors"></div>
+                        <div class="ice-sentiment" id="iceSentiment"></div>
+                    </div>
                 </div>
             </div>
 
@@ -721,6 +748,6 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=2.3.0"></script>
+    <script src="/static/app.js?v=2.4.0"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from data_fetcher import DataFetcher
 from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
+from ice_engine import IceEngine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
 
@@ -40,6 +41,7 @@ app.add_middleware(
 data_fetcher = DataFetcher()
 scanner_engine = ScannerEngine(data_fetcher)
 index_engine = IndexEngine()
+ice_engine = IceEngine()
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -51,6 +53,12 @@ def get_index_macro_analysis(
     if not res:
         return JSONResponse(status_code=404, content={"status": "error", "message": f"未获取到指数 {symbol} 的多周期行情数据"})
     return {"status": "success", "data": res}
+
+@app.get("/api/index/ice")
+def get_index_ice_rebound(symbol: str = Query("sh000001", description="指数代码(仅用于K线特征)")):
+    """大盘冰点反弹概率: 历史分箱校准(近250日相对冰度) + 当日情绪面快照"""
+    return ice_engine.predict(symbol)
+
 
 # 静态前端路径
 FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))

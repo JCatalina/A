@@ -3211,3 +3211,131 @@ body {
         min-height: 320px !important;
     }
 }
+
+/* ==========================================================================
+   大盘冰点反弹概率面板 (v2.6)
+   ========================================================================== */
+.ice-body {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+.ice-gauge-block {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px;
+}
+.ice-prob-big {
+    font-family: var(--font-mono);
+    font-size: 44px;
+    font-weight: 800;
+    line-height: 1;
+    color: #0f172a;
+}
+.ice-prob-unit {
+    font-size: 14px;
+    color: var(--color-text-dim);
+    font-weight: 700;
+}
+.ice-prob-lab {
+    font-size: 12px;
+    color: var(--color-text-dim);
+    margin-top: 6px;
+    text-align: center;
+}
+.ice-ci {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-dim);
+    margin-top: 6px;
+    text-align: center;
+}
+.ice-lift {
+    font-size: 12px;
+    font-weight: 700;
+    margin-top: 4px;
+    text-align: center;
+}
+.ice-lift.pos { color: var(--neon-green); }
+.ice-lift.neg { color: var(--neon-red); }
+.ice-detail-block {
+    flex: 1 1 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    justify-content: center;
+}
+.ice-score-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.ice-lbl {
+    font-size: 12px;
+    font-weight: 700;
+    color: #475569;
+    white-space: nowrap;
+}
+.ice-score-track {
+    flex: 1;
+    height: 10px;
+    background: #f1f5f9;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.ice-score-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #94a3b8, var(--neon-red));
+    border-radius: 6px;
+    transition: width 0.4s ease;
+}
+.ice-score-val {
+    font-family: var(--font-mono);
+    font-weight: 800;
+    font-size: 14px;
+    min-width: 34px;
+    text-align: right;
+}
+.ice-factors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.ice-chip {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: #ffffff;
+    color: #334155;
+}
+.ice-chip.hot {
+    background: #fef2f2;
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+.ice-sentiment {
+    font-size: 11px;
+    color: #64748b;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+@media (max-width: 1024px) {
+    .ice-body {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .ice-gauge-block {
+        flex: none;
+        width: 100%;
+    }
+}
