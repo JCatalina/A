@@ -323,17 +323,21 @@ class IndexEngine:
         closes = monthly["close"]
         c = float(closes.iloc[-1])
         ma6 = float(closes.rolling(6).mean().iloc[-1])
-        ma12 = float(closes.rolling(12).mean().iloc[-1]) if len(monthly) >= 12 else float(closes.expanding().mean().iloc[-1])
+        # v2.6: 月线样本不足12个月时 ma12 为 NaN, 不再用 expanding 均值冒充月MA12 (§14 审查原则)
+        has_ma12 = len(monthly) >= 12
+        ma12 = float(closes.rolling(12).mean().iloc[-1]) if has_ma12 else float("nan")
         chg3 = (c - float(closes.iloc[-4])) / float(closes.iloc[-4]) * 100 if len(monthly) >= 4 else 0.0
 
         score = 0.0
         score += 0.4 if c > ma6 else -0.4
-        score += 0.3 if ma6 > ma12 else -0.3
+        if has_ma12:
+            score += 0.3 if ma6 > ma12 else -0.3
         score += max(-0.3, min(0.3, chg3 / 20.0))   # 近3月涨幅 ±6% 对应 ±0.3 满分
         score = round(max(-1.0, min(1.0, score)), 2)
         label = IndexEngine._direction_label(score)
         detail = (f"月线收盘 {c:.2f} {'站上' if c > ma6 else '跌破'}月MA6 {ma6:.2f}，"
-                  f"月MA6 {'>' if ma6 > ma12 else '<='} 月MA12 {ma12:.2f}，近3月 {chg3:+.2f}%")
+                  + (f"月MA6 {'>' if ma6 > ma12 else '<='} 月MA12 {ma12:.2f}，" if has_ma12 else "月线样本不足12月未评估月MA12，")
+                  + f"近3月 {chg3:+.2f}%")
         return {"label": label, "score": score, "detail": detail, "bars": int(len(monthly))}
 
     @staticmethod

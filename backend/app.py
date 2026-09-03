@@ -20,6 +20,8 @@ logger = logging.getLogger("A-Stock-Quant-Server")
 async def lifespan(_app: FastAPI):
     # v2.6: 演示数据预填充转后台线程, 避免首个 /api/screener/results 请求同步阻塞数十秒
     threading.Thread(target=scanner_engine.ensure_demo_results, daemon=True, name="demo-prewarm").start()
+    # v2.6: 冰点反弹校准表预热 (四个指数各自独立校准, 磁盘有缓存则秒级)
+    threading.Thread(target=ice_engine.warm_all, daemon=True, name="ice-prewarm").start()
     yield
 
 
@@ -55,8 +57,11 @@ def get_index_macro_analysis(
     return {"status": "success", "data": res}
 
 @app.get("/api/index/ice")
-def get_index_ice_rebound(symbol: str = Query("sh000001", description="指数代码(仅用于K线特征)")):
-    """大盘冰点反弹概率: 历史分箱校准(近250日相对冰度) + 当日情绪面快照"""
+def get_index_ice_rebound(
+    symbol: Literal["sh000001", "sz399001", "sz399006", "sh000688"] = Query(
+        "sh000001", description="指数代码: 每个指数使用各自独立的历史校准表")
+):
+    """大盘冰点反弹概率: 该指数自身历史的分箱校准(近250日相对冰度) + 当日情绪面快照"""
     return ice_engine.predict(symbol)
 
 

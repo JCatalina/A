@@ -38,25 +38,34 @@ document.addEventListener("DOMContentLoaded", () => {
     bindMacroEvents();
     loadMarketIndices();
     loadMacroIndexAnalysis(currentMacroSymbol);
-    loadIceRebound();
-    setInterval(loadIceRebound, 120000);
+    loadIceRebound(currentMacroSymbol);
+    setInterval(() => loadIceRebound(currentMacroSymbol), 120000);
     loadStockAnalysis(currentStockCode);
     loadScreenerResults(currentScreenerStrategy);
 });
 
 /**
- * 大盘冰点反弹概率 (v2.6 历史分箱校准模型)
+ * 大盘冰点反弹概率 (v2.6 每个指数独立历史校准)
  */
-async function loadIceRebound() {
+const ICE_INDEX_NAMES = {
+    "sh000001": "上证指数",
+    "sz399001": "深证成指",
+    "sz399006": "创业板指",
+    "sh000688": "科创50"
+};
+
+async function loadIceRebound(symbol) {
+    symbol = symbol || currentMacroSymbol || "sh000001";
     const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
     try {
-        const res = await fetch("/api/index/ice");
+        const res = await fetch(`/api/index/ice?symbol=${encodeURIComponent(symbol)}`);
         const json = await res.json();
+        set("iceIndexName", ICE_INDEX_NAMES[json.symbol] || json.symbol || ICE_INDEX_NAMES[symbol]);
         if (json.status !== "success") { set("iceProbNum", "--"); return; }
         const prob = json.rebound_prob_10d_pct;
         set("iceProbNum", prob == null ? "--" : prob.toFixed(1));
         set("iceCI", (json.ci_low_pct == null ? "" :
-            `95%CI [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
+            `95%CI(去重叠保守) [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
         const liftEl = document.getElementById("iceLift");
         const lift = json.lift_vs_baseline_pp;
         if (lift != null && liftEl) {
@@ -950,6 +959,7 @@ function bindMacroEvents() {
                 targetBtn.classList.add("active");
                 currentMacroSymbol = targetBtn.dataset.symbol || "sh000001";
                 loadMacroIndexAnalysis(currentMacroSymbol);
+                loadIceRebound(currentMacroSymbol);   // 冰点面板跟随所选指数
             }
         });
     });

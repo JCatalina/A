@@ -12,7 +12,7 @@
 A. 价格行为(Technical Extremes) — 20日涨幅 / 乖离率 / 距60日低点 / 连跌天数 / 60日回撤
 B. 量能资金(Volume & Liquidity) — 量能相对20日均量收缩度 / 两融余额5日变化(去杠杆)
 标签: 未来10交易日 close-to-close 涨幅; "反弹事件" = 涨幅 >= +2.5%
-交易口径: T+1 开盘买入, T+11 收盘卖出 (用于展示真实可获得的期望收益)
+交易口径: T+1 开盘买入, T+10 收盘卖出 (约9个交易日持仓, 展示真实可获得的期望收益)
 """
 import json
 import logging
@@ -30,23 +30,42 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 EVAL_DIR = os.path.join(os.path.dirname(__file__), "eval_reports")
 MARGIN_CACHE = os.path.join(CACHE_DIR, "margin_history.json")
-CALIB_CACHE = os.path.join(CACHE_DIR, "ice_calibration.json")
 
 REBOUND_THRESHOLD = 2.5      # 10日涨幅 >= 2.5% 计为一次"反弹"
 REBOUND_FWD = 10             # 前视窗口(交易日)
 MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h
+CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
+# 支持的指数 (各自独立校准: 特征与标签同指数, 严禁跨指数借表)
+KNOWN_ICE_SYMBOLS = ("sh000001", "sz399001", "sz399006", "sh000688")
 
 
 class IceEngine:
-    """冰点反弹: 特征计算 + 历史校准 + 概率输出"""
+    """冰点反弹: 特征计算 + 历史校准 + 概率输出 (每个指数独立校准表)"""
 
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or self._new_session()
         self._margin_df: Optional[pd.DataFrame] = None
-        self._calib: Optional[Dict[str, Any]] = None
-        self._calib_ts = 0.0
+        self._calibs: Dict[str, Dict[str, Any]] = {}     # symbol -> 校准结果
+        self._calib_ts: Dict[str, float] = {}            # symbol -> 加载时间
         self._live_ts = 0.0
         self._live_cache: Optional[Dict[str, Any]] = None
+
+    @staticmethod
+    def _calib_path(symbol: str) -> str:
+        return os.path.join(EVAL_DIR, f"ice_calibration_{symbol}.json")
+
+    @staticmethod
+    def normalize_symbol(symbol: str) -> str:
+        s = (symbol or "").strip().lower()
+        return s if s in KNOWN_ICE_SYMBOLS else "sh000001"
+
+    def warm_all(self) -> None:
+        """启动预热: 为全部支持指数构建/加载校准表 (磁盘有缓存则秒级)"""
+        for sym in KNOWN_ICE_SYMBOLS:
+            try:
+                self._load_calibration(sym)
+            except Exception as e:
+                logger.warning(f"Ice warm_all {sym} failed: {e}")
 
     @staticmethod
     def _new_session() -> requests.Session:
@@ -138,11 +157,12 @@ class IceEngine:
         return df
 
     def fetch_live_sentiment(self) -> Dict[str, Any]:
-        """实时情绪快照 (60s 缓存): 涨跌分布 + 涨停/跌停家数"""
+        """实时情绪快照 (60s 缓存): 涨跌分布 + 涨停/跌停家数 (权威池口径优先, fenbu 回退)"""
         if self._live_cache and time.time() - self._live_ts < 60:
             return self._live_cache
         out = {"up_count": None, "down_count": None, "flat_count": None,
-               "limit_up": None, "limit_down": None, "asof": None}
+               "limit_up": None, "limit_down": None, "asof": None,
+               "limit_source": "pool"}
         try:
             js = self.session.get(
                 "https://push2ex.eastmoney.com/getTopicZDFenBu?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt",
@@ -162,10 +182,29 @@ class IceEngine:
                 else:
                     flat += v
             out.update({"up_count": up, "down_count": down, "flat_count": flat,
-                        "limit_up": lu, "limit_down": ld,
+                        "limit_up": lu, "limit_down": ld, "limit_source": "fenbu_est",
                         "asof": (js.get("data") or {}).get("qdate")})
         except Exception as e:
             logger.warning(f"Ice live sentiment fetch failed: {e}")
+        # 权威涨停/跌停家数: 涨跌分布的 10/11 桶会把 20cm 未涨停股计入(高估), 池口径更准
+        try:
+            ymd = time.strftime("%Y%m%d")
+            zt = self.session.get(
+                "https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
+                f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fbt%3Aasc&date={ymd}", timeout=8).json()
+            dt = self.session.get(
+                "https://push2ex.eastmoney.com/getTopicDTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
+                f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fund%3Aasc&date={ymd}", timeout=8).json()
+            lu_pool = (zt.get("data") or {}).get("tc")
+            ld_pool = (dt.get("data") or {}).get("tc")
+            if isinstance(lu_pool, int):
+                out["limit_up"] = lu_pool
+            if isinstance(ld_pool, int):
+                out["limit_down"] = ld_pool
+            if isinstance(lu_pool, int) or isinstance(ld_pool, int):
+                out["limit_source"] = "pool"
+        except Exception as e:
+            logger.warning(f"Ice limit pool fetch failed: {e}")
         self._live_cache = out
         self._live_ts = time.time()
         return out
@@ -296,8 +335,14 @@ class IceEngine:
             mean10 = sub["fwd10"].mean() if n else np.nan
             trade = sub["trade_ret"].mean() if n else np.nan
             ci_lo, ci_hi = self._wilson(hit, n) if n else (0.0, 0.0)
-            table.append({"bin": lab, "n": int(n), "hit_rate_10d": None if np.isnan(hit) else round(float(hit) * 100, 1),
+            # 日频采样 × 10日前视 → 前视窗口高度重叠, 独立样本假设下的 Wilson CI 偏窄;
+            # 有效样本量按 n/前视窗口 折减, 给出"去重叠保守 CI"(展示口径), 原始 CI 留档
+            n_eff = max(1, n // REBOUND_FWD)
+            elo, ehi = self._wilson(hit, n_eff) if n else (0.0, 0.0)
+            table.append({"bin": lab, "n": int(n), "n_eff_overlap_adj": int(n_eff),
+                          "hit_rate_10d": None if np.isnan(hit) else round(float(hit) * 100, 1),
                           "ci_low": round(ci_lo * 100, 1), "ci_high": round(ci_hi * 100, 1),
+                          "ci_eff_low": round(elo * 100, 1), "ci_eff_high": round(ehi * 100, 1),
                           "mean_fwd10_pct": None if np.isnan(mean10) else round(float(mean10), 2),
                           "mean_trade_ret_pct": None if np.isnan(trade) else round(float(trade), 2)})
 
@@ -342,35 +387,37 @@ class IceEngine:
                 "label": "收盘价口径未来10日涨幅≥2.5%; trade口径 T+1开盘买/T+11收盘卖",
             },
         }
-        self._calib = result
-        self._calib_ts = time.time()
+        self._calibs[symbol] = result
+        self._calib_ts[symbol] = time.time()
         try:
             os.makedirs(EVAL_DIR, exist_ok=True)
-            with open(os.path.join(EVAL_DIR, "ice_calibration.json"), "w", encoding="utf-8") as fh:
+            with open(self._calib_path(symbol), "w", encoding="utf-8") as fh:
                 json.dump(result, fh, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"Ice calibration save failed: {e}")
         return result
 
-    def _load_calibration(self) -> Optional[Dict[str, Any]]:
-        if self._calib and time.time() - self._calib_ts < 24 * 3600:
-            return self._calib
-        path = os.path.join(EVAL_DIR, "ice_calibration.json")
+    def _load_calibration(self, symbol: str) -> Optional[Dict[str, Any]]:
+        symbol = self.normalize_symbol(symbol)
+        if symbol in self._calibs and time.time() - self._calib_ts.get(symbol, 0) < CALIB_MEM_TTL:
+            return self._calibs[symbol]
+        path = self._calib_path(symbol)
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
-                    self._calib = json.load(fh)
-                self._calib_ts = time.time()
-                return self._calib
+                    self._calibs[symbol] = json.load(fh)
+                self._calib_ts[symbol] = time.time()
+                return self._calibs[symbol]
             except Exception:
                 pass
-        return self.calibrate()
+        return self.calibrate(symbol)
 
     # ------------------------------------------------------------------
     # 预测
     # ------------------------------------------------------------------
     def predict(self, symbol: str = "sh000001") -> Dict[str, Any]:
-        calib = self._load_calibration() or {}
+        symbol = self.normalize_symbol(symbol)
+        calib = self._load_calibration(symbol) or {}
         if "bins" not in calib:
             return {"status": "unavailable", "message": "校准数据缺失"}
 
@@ -393,6 +440,15 @@ class IceEngine:
             t = table[-1]
             prob, ci_lo, ci_hi, bin_n = (t["calibrated_prob"], t["ci_low"], t["ci_high"], t["n"])
 
+        # 展示口径采用"去重叠保守 CI"(10日前视重叠样本折减有效样本量)
+        ci_elo, ci_ehi = ci_lo, ci_hi
+        for t in table:
+            lo, hi = {"0-20": (0, 20), "20-40": (20, 40), "40-60": (40, 60),
+                      "60-80": (60, 80), "80-100": (80, 100)}[t["bin"]]
+            if lo <= score < hi:
+                ci_elo, ci_ehi = t.get("ci_eff_low", t["ci_low"]), t.get("ci_eff_high", t["ci_high"])
+                break
+
         live = self.fetch_live_sentiment()
         factors = {
             "price_ret20_pct": round(float(row["ret20"]), 2),
@@ -406,18 +462,22 @@ class IceEngine:
         return {
             "status": "success",
             "symbol": symbol,
+            "calibrated_on": calib.get("symbol", symbol),
             "update_time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ice_score_0_100": score,
             "rebound_prob_10d_pct": prob,
-            "ci_low_pct": ci_lo,
-            "ci_high_pct": ci_hi,
+            "ci_low_pct": ci_elo,
+            "ci_high_pct": ci_ehi,
+            "ci_raw_low_pct": ci_lo,
+            "ci_raw_high_pct": ci_hi,
             "calib_bin": "n/a" if bin_n is None else f"n={bin_n}",
             "baseline_rebound_pct": calib.get("baseline_rebound_hit_10d_pct"),
             "baseline_mean_fwd10_pct": calib.get("baseline_mean_fwd10_pct"),
             "lift_vs_baseline_pp": None if prob is None else round(prob - calib.get("baseline_rebound_hit_10d_pct", 0), 1),
             "factors": factors,
             "live_sentiment": live,
-            "disclaimer": "基于历史条件命中率的分箱校准估计(非预测承诺); 情绪面数据仅当日展示未参与校准",
+            "disclaimer": ("基于该指数自身历史的分箱校准估计(非预测承诺); 展示CI为去重叠保守口径(n/10有效样本); "
+                           "情绪面为全市场快照, 仅当日展示未参与校准; 融资余额特征为沪深两市口径"),
         }
 
 

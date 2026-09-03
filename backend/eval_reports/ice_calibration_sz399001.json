@@ -1,0 +1,98 @@
+{
+  "symbol": "sz399001",
+  "generated_at": "2026-09-03 15:03:08",
+  "sample_days": 612,
+  "baseline_rebound_hit_10d_pct": 35.0,
+  "baseline_mean_fwd10_pct": 0.84,
+  "rebound_threshold_pct": 2.5,
+  "fwd_window": 10,
+  "bins": [
+    {
+      "bin": "0-20",
+      "n": 89,
+      "n_eff_overlap_adj": 8,
+      "hit_rate_10d": 36.0,
+      "ci_low": 26.8,
+      "ci_high": 46.3,
+      "ci_eff_low": 12.8,
+      "ci_eff_high": 68.2,
+      "mean_fwd10_pct": 1.21,
+      "mean_trade_ret_pct": 1.12,
+      "calibrated_prob": 33.9
+    },
+    {
+      "bin": "20-40",
+      "n": 186,
+      "n_eff_overlap_adj": 18,
+      "hit_rate_10d": 37.6,
+      "ci_low": 31.0,
+      "ci_high": 44.8,
+      "ci_eff_low": 19.4,
+      "ci_eff_high": 60.2,
+      "mean_fwd10_pct": 1.02,
+      "mean_trade_ret_pct": 1.03,
+      "calibrated_prob": 33.9
+    },
+    {
+      "bin": "40-60",
+      "n": 183,
+      "n_eff_overlap_adj": 18,
+      "hit_rate_10d": 29.5,
+      "ci_low": 23.4,
+      "ci_high": 36.5,
+      "ci_eff_low": 13.6,
+      "ci_eff_high": 52.6,
+      "mean_fwd10_pct": 0.17,
+      "mean_trade_ret_pct": 0.25,
+      "calibrated_prob": 33.9
+    },
+    {
+      "bin": "60-80",
+      "n": 128,
+      "n_eff_overlap_adj": 12,
+      "hit_rate_10d": 34.4,
+      "ci_low": 26.7,
+      "ci_high": 43.0,
+      "ci_eff_low": 14.5,
+      "ci_eff_high": 61.9,
+      "mean_fwd10_pct": 0.98,
+      "mean_trade_ret_pct": 1.1,
+      "calibrated_prob": 34.4
+    },
+    {
+      "bin": "80-100",
+      "n": 26,
+      "n_eff_overlap_adj": 2,
+      "hit_rate_10d": 53.8,
+      "ci_low": 35.5,
+      "ci_high": 71.2,
+      "ci_eff_low": 10.8,
+      "ci_eff_high": 91.8,
+      "mean_fwd10_pct": 2.37,
+      "mean_trade_ret_pct": 2.15,
+      "calibrated_prob": 53.8
+    }
+  ],
+  "regime": {
+    "bull_above_ma200": {
+      "n": 385,
+      "rebound_hit_pct": 36.4,
+      "baseline_bin_hit_diff": null,
+      "extreme_n": 88,
+      "extreme_hit_pct": 40.9
+    },
+    "bear_below_ma200": {
+      "n": 227,
+      "rebound_hit_pct": 32.6,
+      "baseline_bin_hit_diff": null,
+      "extreme_n": 66,
+      "extreme_hit_pct": 33.3
+    }
+  },
+  "feature_definition": {
+    "score": "各特征相对自身近250日窗口的冰度百分位加权平均 (价格35%/量能与融资35%/深度与连跌30%)",
+    "price": "20日跌幅 / 20日线乖离 / 60日回撤 / 连跌天数 的百分位",
+    "funding": "量能收缩度(倒数) 与 融资余额5日去杠杆幅度 的百分位",
+    "label": "收盘价口径未来10日涨幅≥2.5%; trade口径 T+1开盘买/T+11收盘卖"
+  }
+}
