@@ -18,6 +18,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from typing import Dict, List, Optional, Any
 
@@ -35,6 +36,8 @@ REBOUND_THRESHOLD = 2.5      # 10日涨幅 >= 2.5% 计为一次"反弹"
 REBOUND_FWD = 10             # 前视窗口(交易日)
 MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h
 CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
+DAILY_KLINE_TTL = 60         # v2.7: 指数日K原始数据内存缓存 (数据抓取与计算分离)
+PRED_TTL = 60                # v2.7: 冰点面板结果缓存 TTL (stale-while-revalidate)
 # 支持的指数 (各自独立校准: 特征与标签同指数, 严禁跨指数借表)
 KNOWN_ICE_SYMBOLS = ("sh000001", "sz399001", "sz399006", "sh000688")
 
@@ -49,6 +52,11 @@ class IceEngine:
         self._calib_ts: Dict[str, float] = {}            # symbol -> 加载时间
         self._live_ts = 0.0
         self._live_cache: Optional[Dict[str, Any]] = None
+        self._daily_cache: Dict[tuple, tuple] = {}       # (symbol, count) -> (ts, df), 日K TTL 缓存
+        self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
+        self._http_lock = threading.RLock()              # requests.Session 多线程并发保护
+        self._pred_lock = threading.Lock()
+        self._pred_refreshing: set = set()               # 后台刷新去重键集合
 
     @staticmethod
     def _calib_path(symbol: str) -> str:
@@ -60,12 +68,25 @@ class IceEngine:
         return s if s in KNOWN_ICE_SYMBOLS else "sh000001"
 
     def warm_all(self) -> None:
-        """启动预热: 为全部支持指数构建/加载校准表 (磁盘有缓存则秒级)"""
+        """启动预热 (v2.7): 校准表 + 全部指数日K原始帧(300/800) + 首份预测结果, 首次切换即命中缓存"""
         for sym in KNOWN_ICE_SYMBOLS:
             try:
                 self._load_calibration(sym)
             except Exception as e:
-                logger.warning(f"Ice warm_all {sym} failed: {e}")
+                logger.warning(f"Ice warm_all calib {sym} failed: {e}")
+        for count in (300, 800):
+            for sym in KNOWN_ICE_SYMBOLS:
+                try:
+                    self.fetch_index_daily(sym, count)
+                except Exception as e:
+                    logger.warning(f"Ice warm_all kline {sym}/{count} failed: {e}")
+        # 预热各指数首份预测 (日K帧已缓存, 情绪面为全局60s缓存, 代价极小)
+        for sym in KNOWN_ICE_SYMBOLS:
+            try:
+                self.predict(sym)
+            except Exception as e:
+                logger.warning(f"Ice warm_all predict {sym} failed: {e}")
+        logger.info("IceEngine warm_all finished")
 
     @staticmethod
     def _new_session() -> requests.Session:
@@ -81,11 +102,17 @@ class IceEngine:
     # 数据获取
     # ------------------------------------------------------------------
     def fetch_index_daily(self, symbol: str = "sh000001", count: int = 800) -> pd.DataFrame:
-        """腾讯前复权日K (量单位:手), 含均价估算成交额"""
+        """腾讯前复权日K (量单位:手), 含均价估算成交额; v2.7 60s 内存 TTL 缓存"""
+        key = (symbol, count)
+        cached = self._daily_cache.get(key)
+        if cached and (time.time() - cached[0]) < DAILY_KLINE_TTL:
+            return cached[1]
+
         url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
                f"param={symbol},day,,,{count},qfq")
         try:
-            js = self.session.get(url, timeout=8).json()
+            with self._http_lock:
+                js = self.session.get(url, timeout=8).json()
             node = (js.get("data") or {}).get(symbol, {}) or {}
             raw = node.get("qfqday") or node.get("day") or []
         except Exception as e:
@@ -102,7 +129,10 @@ class IceEngine:
                 "volume": v * 100.0,                       # 手 -> 股口径
                 "amount_proxy": v * 100.0 * (o + c) / 2,   # 成交额估算(分位/比值用)
             })
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            self._daily_cache[key] = (time.time(), df)
+        return df
 
     def fetch_margin_history(self, days: int = 900) -> pd.DataFrame:
         """两融余额历史 (RZYE=融资余额), 东财 datacenter, 磁盘缓存"""
@@ -127,7 +157,8 @@ class IceEngine:
                    f"?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageNumber={page}&pageSize=300"
                    "&sortColumns=dim_date&sortTypes=-1&source=WEB&client=WEB")
             try:
-                js = self.session.get(url, timeout=10).json()
+                with self._http_lock:
+                    js = self.session.get(url, timeout=10).json()
                 data = (js.get("result") or {}).get("data") or []
                 for d in data:
                     try:
@@ -164,9 +195,10 @@ class IceEngine:
                "limit_up": None, "limit_down": None, "asof": None,
                "limit_source": "pool"}
         try:
-            js = self.session.get(
-                "https://push2ex.eastmoney.com/getTopicZDFenBu?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt",
-                timeout=8).json()
+            with self._http_lock:
+                js = self.session.get(
+                    "https://push2ex.eastmoney.com/getTopicZDFenBu?ut=7eea3edcaed734bea9cbfc24409ed989&dpt=wz.ztzt",
+                    timeout=8).json()
             data = (js.get("data") or {}).get("fenbu") or []
             up = down = flat = lu = ld = 0
             for item in data:
@@ -189,12 +221,13 @@ class IceEngine:
         # 权威涨停/跌停家数: 涨跌分布的 10/11 桶会把 20cm 未涨停股计入(高估), 池口径更准
         try:
             ymd = time.strftime("%Y%m%d")
-            zt = self.session.get(
-                "https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
-                f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fbt%3Aasc&date={ymd}", timeout=8).json()
-            dt = self.session.get(
-                "https://push2ex.eastmoney.com/getTopicDTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
-                f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fund%3Aasc&date={ymd}", timeout=8).json()
+            with self._http_lock:
+                zt = self.session.get(
+                    "https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
+                    f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fbt%3Aasc&date={ymd}", timeout=8).json()
+                dt = self.session.get(
+                    "https://push2ex.eastmoney.com/getTopicDTPool?ut=7eea3edcaed734bea9cbfc24409ed989"
+                    f"&dpt=wz.ztzt&Pageindex=0&pagesize=1&sort=fund%3Aasc&date={ymd}", timeout=8).json()
             lu_pool = (zt.get("data") or {}).get("tc")
             ld_pool = (dt.get("data") or {}).get("tc")
             if isinstance(lu_pool, int):
@@ -413,9 +446,46 @@ class IceEngine:
         return self.calibrate(symbol)
 
     # ------------------------------------------------------------------
-    # 预测
+    # 预测 (v2.7 stale-while-revalidate: TTL 内直返; 过期先回旧值, 后台刷新)
     # ------------------------------------------------------------------
     def predict(self, symbol: str = "sh000001") -> Dict[str, Any]:
+        symbol = self.normalize_symbol(symbol)
+        now = time.time()
+        ent = self._pred_cache.get(symbol)
+        if ent:
+            if now - ent[0] < PRED_TTL:
+                return ent[1]
+            # 过期: 立即回旧值, 同时后台刷新 (情绪面等远端数据不再阻塞切 tab)
+            self._refresh_predict_async(symbol)
+            return ent[1]
+
+        res = self._predict_sync(symbol)
+        if res.get("status") == "success":
+            self._pred_cache[symbol] = (time.time(), res)
+        return res
+
+    def _refresh_predict_async(self, symbol: str) -> None:
+        """后台刷新过期冰点结果 (同键去重, 静默失败不影响已有结果)"""
+        with self._pred_lock:
+            if symbol in self._pred_refreshing:
+                return
+            self._pred_refreshing.add(symbol)
+
+        def _run():
+            try:
+                res = self._predict_sync(symbol)
+                if res.get("status") == "success":
+                    self._pred_cache[symbol] = (time.time(), res)
+            except Exception as e:
+                logger.warning(f"Ice predict async refresh failed {symbol}: {e}")
+            finally:
+                with self._pred_lock:
+                    self._pred_refreshing.discard(symbol)
+
+        threading.Thread(target=_run, name=f"ice-refresh-{symbol}", daemon=True).start()
+
+    def _predict_sync(self, symbol: str) -> Dict[str, Any]:
+        """同步计算冰点反弹概率 (无缓存逻辑)"""
         symbol = self.normalize_symbol(symbol)
         calib = self._load_calibration(symbol) or {}
         if "bins" not in calib:

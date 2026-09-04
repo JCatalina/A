@@ -16,6 +16,11 @@ let currentMacroSymbol = "sh000001";
 let currentMacroScale = "240";
 let currentMacroData = null;
 
+// v2.7: 按指数缓存的响应快照 (stale-while-revalidate 前端侧)
+// 切 tab 时先立即渲染旧值, 后台请求返回后再刷新; 切回看过的指数秒开
+const macroCache = {};
+const iceCache = {};
+
 // ECharts 实例
 let klineChartInst = null;
 let chipsChartInst = null;
@@ -56,44 +61,55 @@ const ICE_INDEX_NAMES = {
 
 async function loadIceRebound(symbol) {
     symbol = symbol || currentMacroSymbol || "sh000001";
-    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切换秒开
+    if (iceCache[symbol]) renderIcePanel(iceCache[symbol]);
     try {
         const res = await fetch(`/api/index/ice?symbol=${encodeURIComponent(symbol)}`);
         const json = await res.json();
-        set("iceIndexName", ICE_INDEX_NAMES[json.symbol] || json.symbol || ICE_INDEX_NAMES[symbol]);
-        if (json.status !== "success") { set("iceProbNum", "--"); return; }
-        const prob = json.rebound_prob_10d_pct;
-        set("iceProbNum", prob == null ? "--" : prob.toFixed(1));
-        set("iceCI", (json.ci_low_pct == null ? "" :
-            `95%CI(去重叠保守) [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
-        const liftEl = document.getElementById("iceLift");
-        const lift = json.lift_vs_baseline_pp;
-        if (lift != null && liftEl) {
-            liftEl.textContent = (lift >= 0 ? "↑ 高于无条件基线 " : "↓ 低于无条件基线 ")
-                + Math.abs(lift).toFixed(1) + "pp (基线 " + json.baseline_rebound_pct + "%)";
-            liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
-        }
-        const sc = json.ice_score_0_100 ?? 0;
-        set("iceScoreVal", sc.toFixed(0) + " 分");
-        const fill = document.getElementById("iceScoreFill");
-        if (fill) fill.style.width = Math.min(100, sc) + "%";
-        const f = json.factors || {};
-        const chips = [
-            `${f.price_ret20_pct >= 0 ? "+" : ""}${f.price_ret20_pct}% / 20日`,
-            `连跌 ${f.consec_down_days} 日`,
-            `量能比 ${f.volume_ratio_20d}`,
-            `融资5日 ${f.margin5d_pct >= 0 ? "+" : ""}${f.margin5d_pct}%`,
-        ].map(t => `<span class="ice-chip">${t}</span>`).join("");
-        const facEl = document.getElementById("iceFactors");
-        if (facEl) facEl.innerHTML = chips;
-        const s = json.live_sentiment || {};
-        set("iceSentiment",
-            `实时情绪: 上涨 ${s.up_count} / 下跌 ${s.down_count} · 涨停 ${s.limit_up} / 跌停 ${s.limit_down}` +
-            (s.asof ? ` · 数据日 ${s.asof}` : ""));
-        set("iceUpdateTime", json.update_time || "");
+        iceCache[symbol] = json;
+        // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖
+        if (symbol === currentMacroSymbol) renderIcePanel(json);
     } catch (e) {
-        set("iceProbNum", "--");
+        if (!iceCache[symbol]) {
+            const el = document.getElementById("iceProbNum");
+            if (el) el.textContent = "--";
+        }
     }
+}
+
+function renderIcePanel(json) {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    set("iceIndexName", ICE_INDEX_NAMES[json.symbol] || json.symbol || ICE_INDEX_NAMES[currentMacroSymbol]);
+    if (json.status !== "success") { set("iceProbNum", "--"); return; }
+    const prob = json.rebound_prob_10d_pct;
+    set("iceProbNum", prob == null ? "--" : prob.toFixed(1));
+    set("iceCI", (json.ci_low_pct == null ? "" :
+        `95%CI(去重叠保守) [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
+    const liftEl = document.getElementById("iceLift");
+    const lift = json.lift_vs_baseline_pp;
+    if (lift != null && liftEl) {
+        liftEl.textContent = (lift >= 0 ? "↑ 高于无条件基线 " : "↓ 低于无条件基线 ")
+            + Math.abs(lift).toFixed(1) + "pp (基线 " + json.baseline_rebound_pct + "%)";
+        liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
+    }
+    const sc = json.ice_score_0_100 ?? 0;
+    set("iceScoreVal", sc.toFixed(0) + " 分");
+    const fill = document.getElementById("iceScoreFill");
+    if (fill) fill.style.width = Math.min(100, sc) + "%";
+    const f = json.factors || {};
+    const chips = [
+        `${f.price_ret20_pct >= 0 ? "+" : ""}${f.price_ret20_pct}% / 20日`,
+        `连跌 ${f.consec_down_days} 日`,
+        `量能比 ${f.volume_ratio_20d}`,
+        `融资5日 ${f.margin5d_pct >= 0 ? "+" : ""}${f.margin5d_pct}%`,
+    ].map(t => `<span class="ice-chip">${t}</span>`).join("");
+    const facEl = document.getElementById("iceFactors");
+    if (facEl) facEl.innerHTML = chips;
+    const s = json.live_sentiment || {};
+    set("iceSentiment",
+        `实时情绪: 上涨 ${s.up_count} / 下跌 ${s.down_count} · 涨停 ${s.limit_up} / 跌停 ${s.limit_down}` +
+        (s.asof ? ` · 数据日 ${s.asof}` : ""));
+    set("iceUpdateTime", json.update_time || "");
 }
 
 /**
@@ -1003,28 +1019,35 @@ function bindMacroEvents() {
  * 载入大盘指数多周期深度研判数据
  */
 async function loadMacroIndexAnalysis(symbol) {
+    // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切回看过的指数秒开
+    if (macroCache[symbol]) renderMacroAnalysis(macroCache[symbol]);
     try {
         const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(symbol)}&scale=${encodeURIComponent(currentMacroScale)}`);
         const json = await res.json();
         if (json.status !== "success" || !json.data) {
-            console.warn("未能获取大盘指数数据");
+            if (!macroCache[symbol]) console.warn("未能获取大盘指数数据");
             return;
         }
-
-        currentMacroData = json.data;
-        renderMacroHeader(json.data);
-        renderMacroConclusion(json.data.conclusion);
-        renderMacroLevels(json.data.clustered_levels);
-        renderPeriodsQuad(json.data.periods);
-        
-        const kData = (json.data.all_kline_data && json.data.all_kline_data[currentMacroScale]) 
-                      ? json.data.all_kline_data[currentMacroScale] 
-                      : json.data.kline_data;
-        renderMacroKlineChart(kData, json.data.clustered_levels);
-        setTimeout(() => macroKlineChartInst?.resize(), 80);
+        macroCache[symbol] = json.data;
+        // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖
+        if (symbol === currentMacroSymbol) renderMacroAnalysis(json.data);
     } catch (e) {
         console.error("Error loading macro index analysis", e);
     }
+}
+
+function renderMacroAnalysis(data) {
+    currentMacroData = data;
+    renderMacroHeader(data);
+    renderMacroConclusion(data.conclusion);
+    renderMacroLevels(data.clustered_levels);
+    renderPeriodsQuad(data.periods);
+
+    const kData = (data.all_kline_data && data.all_kline_data[currentMacroScale])
+                  ? data.all_kline_data[currentMacroScale]
+                  : data.kline_data;
+    renderMacroKlineChart(kData, data.clustered_levels);
+    setTimeout(() => macroKlineChartInst?.resize(), 80);
 }
 
 /**

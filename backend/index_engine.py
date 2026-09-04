@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 import time
 import requests
 import pandas as pd
@@ -30,21 +31,41 @@ class IndexEngine:
     """
     大盘各大核心指数多周期（30分、60分、日K、周K）深度研判引擎
     """
+    # v2.7: 原始行情数据分级 TTL — 数据抓取与指标计算分离, 计算永远在缓存之上实时进行
+    KLINE_TTL = {"30": 20, "60": 20, "240": 60, "1200": 300}
+    REALTIME_TTL = 10
+
     def __init__(self):
         self.session = requests.Session()
         self.session.trust_env = False
         self._macro_cache: Dict[str, tuple] = {}  # (symbol:scale) -> (ts, result), TTL 分级缓存
+        self._kline_cache: Dict[tuple, tuple] = {}  # (symbol, scale, count) -> (ts, df), 原始K线 TTL 缓存
+        self._rt_cache: Dict[str, tuple] = {}      # symbol -> (ts, 实时快照)
+        self._http_lock = threading.RLock()        # requests.Session 多线程并发保护
+        self._recompute_lock = threading.Lock()
+        self._recomputing: set = set()             # 后台刷新去重键集合
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://finance.sina.com.cn"
         })
 
     def fetch_index_realtime(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """获取指数实时快照 (v2.7: 10s TTL 内存缓存, 避免 K线合并与研判入口重复打点)"""
+        cached = self._rt_cache.get(symbol)
+        if cached and (time.time() - cached[0]) < self.REALTIME_TTL:
+            return cached[1]
+        rt = self._fetch_index_realtime_raw(symbol)
+        if rt:
+            self._rt_cache[symbol] = (time.time(), rt)
+        return rt
+
+    def _fetch_index_realtime_raw(self, symbol: str) -> Optional[Dict[str, Any]]:
         """获取指数实时快照（改进：获取完整OHLC数据）"""
         # 使用完整接口而非简化接口，获取完整OHLC
         url = f"http://qt.gtimg.cn/q={symbol}"
         try:
-            resp = self.session.get(url, timeout=4)
+            with self._http_lock:
+                resp = self.session.get(url, timeout=4)
             resp.encoding = "gbk"
             parts = resp.text.strip().split("~")
             if len(parts) >= 35:
@@ -96,13 +117,19 @@ class IndexEngine:
 
     def fetch_index_kline(self, symbol: str, scale: str, count: int = 150) -> pd.DataFrame:
         """
-        获取指定周期的指数K线 (自动合并当日最新实时数据)
+        获取指定周期的指数K线 (自动合并当日最新实时数据; v2.7 原始K线 TTL 缓存: 分时20s/日K60s/周K300s)
         scale: 30(30分钟), 60(60分钟), 240(日K), 1200(周K)
         """
+        key = (symbol, str(scale), count)
+        cached = self._kline_cache.get(key)
+        if cached and (time.time() - cached[0]) < self.KLINE_TTL.get(str(scale), 60):
+            return cached[1]
+
         url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={symbol}&scale={scale}&ma=no&datalen={count}"
         df = pd.DataFrame()
         try:
-            resp = self.session.get(url, timeout=6)
+            with self._http_lock:
+                resp = self.session.get(url, timeout=6)
             if resp.status_code == 200:
                 raw_data = resp.json()
                 if raw_data and isinstance(raw_data, list):
@@ -160,6 +187,8 @@ class IndexEngine:
                     if "low" in rt and rt["low"] > 0:
                         df.loc[df.index[-1], "low"] = min(df["low"].iloc[-1], rt["low"])
 
+        if not df.empty:
+            self._kline_cache[key] = (time.time(), df)
         return df
 
     def analyze_single_period(self, df: pd.DataFrame, period_name: str) -> Dict[str, Any]:
@@ -368,20 +397,52 @@ class IndexEngine:
 
     def analyze_index_macro(self, symbol: str = "sh000001", scale: str = "240") -> Dict[str, Any]:
         """
-        全方位研判大盘指数：获取四大周期K线、聚类支撑压力位、多周期特征对比、操作许可与决策建议
-        scale: 30(30分钟), 60(60分钟), 240(日K), 1200(周K)
+        大盘研判总入口 (v2.7 stale-while-revalidate):
+        - 结果 TTL 内直接返回; 过期先立即返回旧结果, 后台线程刷新 (切 tab 不阻塞);
+        - 原始K线另有分级 TTL 缓存, 指标计算永远在缓存之上实时进行 (数据抓取与计算分离)。
         """
         symbol = symbol.strip().lower()
         if symbol not in INDEX_META_MAP:
             symbol = "sh000001"
-
-        # v2.6: 分级 TTL 缓存 — 分时 20s / 日K 60s / 周K 300s, 避免前端多面板轮询反复打满外部行情接口
-        cache_ttl = {"30": 20, "60": 20, "240": 60, "1200": 300}.get(str(scale), 60)
+        scale = str(scale)
+        cache_ttl = {"30": 20, "60": 20, "240": 60, "1200": 300}.get(scale, 60)
         cache_key = f"{symbol}:{scale}"
+
         cached = self._macro_cache.get(cache_key)
-        if cached and (time.time() - cached[0]) < cache_ttl:
+        if cached:
+            if time.time() - cached[0] < cache_ttl:
+                return cached[1]
+            # 过期: 立即回旧值, 同时后台刷新 (同键去重, 防止并发请求重复打外部接口)
+            self._refresh_async(cache_key, symbol, scale)
             return cached[1]
 
+        res = self._analyze_sync(symbol, scale)
+        if res:
+            self._macro_cache[cache_key] = (time.time(), res)
+        return res
+
+    def _refresh_async(self, cache_key: str, symbol: str, scale: str) -> None:
+        """后台刷新过期缓存 (同键去重, 静默失败不影响已有结果)"""
+        with self._recompute_lock:
+            if cache_key in self._recomputing:
+                return
+            self._recomputing.add(cache_key)
+
+        def _run():
+            try:
+                res = self._analyze_sync(symbol, scale)
+                if res:
+                    self._macro_cache[cache_key] = (time.time(), res)
+            except Exception as e:
+                logger.warning(f"Index macro async refresh failed {cache_key}: {e}")
+            finally:
+                with self._recompute_lock:
+                    self._recomputing.discard(cache_key)
+
+        threading.Thread(target=_run, name=f"macro-refresh-{cache_key}", daemon=True).start()
+
+    def _analyze_sync(self, symbol: str, scale: str) -> Dict[str, Any]:
+        """同步计算大盘研判 (无缓存逻辑): 拉取四大周期K线 + 指标/聚类/结论"""
         meta = INDEX_META_MAP[symbol]
 
         # 1. 获取四大周期K线 (v2.6: 60分100→130根、周K120→260根, 保证MA120/MA250为真实窗口而非expanding伪值)
@@ -540,5 +601,19 @@ class IndexEngine:
             "all_kline_data": all_kline_data,
             "scale": scale
         }
-        self._macro_cache[cache_key] = (time.time(), res)
         return res
+
+    def warm_all(self) -> None:
+        """启动预热 (v2.7): 后台预拉全部指数 x 四大周期原始K线与实时快照, 首次切换 tab 即命中缓存"""
+        counts = {"30": 100, "60": 130, "240": 250, "1200": 260}
+        for sym in INDEX_META_MAP:
+            for scale, count in counts.items():
+                try:
+                    self.fetch_index_kline(sym, scale=scale, count=count)
+                except Exception as e:
+                    logger.warning(f"Index warm kline failed {sym}:{scale}: {e}")
+            try:
+                self.fetch_index_realtime(sym)
+            except Exception as e:
+                logger.warning(f"Index warm realtime failed {sym}: {e}")
+        logger.info("IndexEngine warm_all finished")

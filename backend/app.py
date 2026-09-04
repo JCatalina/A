@@ -22,6 +22,8 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=scanner_engine.ensure_demo_results, daemon=True, name="demo-prewarm").start()
     # v2.6: 冰点反弹校准表预热 (四个指数各自独立校准, 磁盘有缓存则秒级)
     threading.Thread(target=ice_engine.warm_all, daemon=True, name="ice-prewarm").start()
+    # v2.7: 大盘四大指数 x 四大周期原始K线预热, 首次切换 index tab 即命中缓存
+    threading.Thread(target=index_engine.warm_all, daemon=True, name="index-prewarm").start()
     yield
 
 
