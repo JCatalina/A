@@ -21,6 +21,13 @@ let currentMacroData = null;
 const macroCache = {};
 const iceCache = {};
 
+// v2.8: 服务常驻轮询状态 (防并发重入 / 无变化不重复渲染)
+let marketIndicesLoading = false;
+let macroPollPending = false;      // 大盘研判静默轮询在途标记
+let macroRenderedUpdateTime = "";  // 已渲染大盘研判结果的 update_time (不变则不重渲染)
+let screenerPollPending = false;   // 选股雷达静默轮询在途标记
+let screenerLastSig = null;        // 已渲染选股结果的签名 (code:price 组合变化才重渲染)
+
 // ECharts 实例
 let klineChartInst = null;
 let chipsChartInst = null;
@@ -47,6 +54,21 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(() => loadIceRebound(currentMacroSymbol), 120000);
     loadStockAnalysis(currentStockCode);
     loadScreenerResults(currentScreenerStrategy);
+
+    // v2.8: 服务常驻期间持续刷新 — 指数条 30s / 大盘研判 60s / 选股雷达 60s
+    setInterval(loadMarketIndices, 30000);
+    setInterval(() => loadMacroIndexAnalysis(currentMacroSymbol, { silent: true }), 60000);
+    setInterval(() => loadScreenerResults(currentScreenerStrategy, { silent: true }), 60000);
+
+    // 页面重新可见时立即全量刷新: 解决挂机数日后切回页面第一眼仍是旧数据的问题
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        loadMarketIndices();
+        loadMacroIndexAnalysis(currentMacroSymbol);
+        loadIceRebound(currentMacroSymbol);
+        loadScreenerResults(currentScreenerStrategy);
+        loadStockAnalysis(currentStockCode, currentPeriod, false);
+    });
 });
 
 /**
@@ -253,6 +275,8 @@ function bindEvents() {
  * 获取大盘指数数据
  */
 async function loadMarketIndices() {
+    if (marketIndicesLoading) return;   // 上一次请求在途, 跳过本次轮询
+    marketIndicesLoading = true;
     try {
         const res = await fetch("/api/market/indices");
         const json = await res.json();
@@ -271,6 +295,8 @@ async function loadMarketIndices() {
         }
     } catch (e) {
         console.error("Failed to load market indices", e);
+    } finally {
+        marketIndicesLoading = false;
     }
 }
 
@@ -862,21 +888,29 @@ const STOCK_NAMES = {
 /**
  * 载入选股雷达池结果
  */
-async function loadScreenerResults(strategy) {
+async function loadScreenerResults(strategy, opts = {}) {
     const listEl = document.getElementById("screenerList");
+    const silent = !!opts.silent;   // 静默轮询: 防重入, 结果未变化时不重渲染(保留滚动与选中态)
 
-    // 扫描进行中：不请求结果池(避免触发后端演示数据填充与真实扫描竞争)，显示等待提示
-    if (scanActive) {
-        listEl.innerHTML = '<div class="screener-loading">🚀 全市场扫描进行中，完成后将自动刷新本雷达池...</div>';
-        return;
-    }
-
-    listEl.innerHTML = '<div class="screener-loading">正在匹配高胜率共振标的...</div>';
-
+    if (silent && screenerPollPending) return;
+    if (silent) screenerPollPending = true;
     try {
+        // 扫描进行中：不请求结果池(避免触发后端演示数据填充与真实扫描竞争)，显示等待提示
+        if (scanActive) {
+            if (!silent) listEl.innerHTML = '<div class="screener-loading">🚀 全市场扫描进行中，完成后将自动刷新本雷达池...</div>';
+            return;
+        }
+
+        if (!silent) listEl.innerHTML = '<div class="screener-loading">正在匹配高胜率共振标的...</div>';
+
         const res = await fetch(`/api/screener/results?strategy=${strategy}`);
         const json = await res.json();
         if (json.data && json.data.length > 0) {
+            // 内容签名: 代码/价格/首个命中策略变化才视为结果更新
+            const sig = json.data.map(i => `${i.code}:${i.price}:${i.matched_strategies?.[0] || ""}`).join("|");
+            if (silent && sig === screenerLastSig) return;
+            screenerLastSig = sig;
+
             // 策略标签映射 (覆盖四大策略全部分支)
             const strategyTagMap = {
                 "SUPPORT_PULLBACK": "回踩支撑",
@@ -926,11 +960,18 @@ async function loadScreenerResults(strategy) {
                 });
             });
         } else {
-            listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #64748b; font-size: 12px;">暂无匹配标的，可点击上方【盘后批量全扫描】开始扫描</div>';
+            // 静默轮询仅在结果被清空(与已渲染状态不同)时才刷新提示
+            if (!silent || screenerLastSig !== null) {
+                screenerLastSig = null;
+                listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #64748b; font-size: 12px;">暂无匹配标的，可点击上方【盘后批量全扫描】开始扫描</div>';
+            }
         }
     } catch (e) {
         console.error("Error loading screener results", e);
-        listEl.innerHTML = '<div style="color: var(--neon-red); padding: 10px;">加载选股池失败</div>';
+        // 静默轮询失败保留现有结果, 避免整屏被错误提示替换
+        if (!silent) listEl.innerHTML = '<div style="color: var(--neon-red); padding: 10px;">加载选股池失败</div>';
+    } finally {
+        if (silent) screenerPollPending = false;
     }
 }
 
@@ -1018,21 +1059,31 @@ function bindMacroEvents() {
 /**
  * 载入大盘指数多周期深度研判数据
  */
-async function loadMacroIndexAnalysis(symbol) {
-    // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切回看过的指数秒开
-    if (macroCache[symbol]) renderMacroAnalysis(macroCache[symbol]);
+async function loadMacroIndexAnalysis(symbol, opts = {}) {
+    const silent = !!opts.silent;   // 静默轮询: 防重入, 且 update_time 未变时只存档不重渲染
+    if (silent && macroPollPending) return;
+    if (silent) macroPollPending = true;
     try {
+        // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切回看过的指数秒开
+        if (!silent && macroCache[symbol]) renderMacroAnalysis(macroCache[symbol]);
+
         const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(symbol)}&scale=${encodeURIComponent(currentMacroScale)}`);
         const json = await res.json();
         if (json.status !== "success" || !json.data) {
-            if (!macroCache[symbol]) console.warn("未能获取大盘指数数据");
+            if (!silent && !macroCache[symbol]) console.warn("未能获取大盘指数数据");
             return;
         }
         macroCache[symbol] = json.data;
-        // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖
-        if (symbol === currentMacroSymbol) renderMacroAnalysis(json.data);
+        // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖;
+        // 静默轮询仅在服务端产出新结果(update_time 变化)时才重渲染, 不打断用户浏览图表
+        if (symbol === currentMacroSymbol && (!silent || json.data.update_time !== macroRenderedUpdateTime)) {
+            renderMacroAnalysis(json.data);
+            macroRenderedUpdateTime = json.data.update_time || "";
+        }
     } catch (e) {
         console.error("Error loading macro index analysis", e);
+    } finally {
+        if (silent) macroPollPending = false;
     }
 }
 

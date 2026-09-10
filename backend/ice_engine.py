@@ -34,7 +34,7 @@ MARGIN_CACHE = os.path.join(CACHE_DIR, "margin_history.json")
 
 REBOUND_THRESHOLD = 2.5      # 10日涨幅 >= 2.5% 计为一次"反弹"
 REBOUND_FWD = 10             # 前视窗口(交易日)
-MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h
+MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h (内存与磁盘统一 TTL, 常驻进程也按此周期刷新)
 CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
 DAILY_KLINE_TTL = 60         # v2.7: 指数日K原始数据内存缓存 (数据抓取与计算分离)
 PRED_TTL = 60                # v2.7: 冰点面板结果缓存 TTL (stale-while-revalidate)
@@ -48,6 +48,7 @@ class IceEngine:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or self._new_session()
         self._margin_df: Optional[pd.DataFrame] = None
+        self._margin_ts = 0.0                            # 内存中两融数据加载时间 (超 TTL 须重取)
         self._calibs: Dict[str, Dict[str, Any]] = {}     # symbol -> 校准结果
         self._calib_ts: Dict[str, float] = {}            # symbol -> 加载时间
         self._live_ts = 0.0
@@ -136,7 +137,8 @@ class IceEngine:
 
     def fetch_margin_history(self, days: int = 900) -> pd.DataFrame:
         """两融余额历史 (RZYE=融资余额), 东财 datacenter, 磁盘缓存"""
-        if self._margin_df is not None and len(self._margin_df) >= days * 0.8:
+        if (self._margin_df is not None and len(self._margin_df) >= days * 0.8
+                and time.time() - self._margin_ts < MARGIN_CACHE_TTL):
             return self._margin_df
         if os.path.exists(MARGIN_CACHE):
             try:
@@ -146,6 +148,7 @@ class IceEngine:
                     df = pd.DataFrame(cached["rows"])
                     if not df.empty:
                         self._margin_df = df
+                        self._margin_ts = cached.get("ts", time.time())
                         return df
             except Exception as e:
                 logger.warning(f"Ice margin cache read failed: {e}")
@@ -180,9 +183,10 @@ class IceEngine:
         df = pd.DataFrame(rows)
         if not df.empty:
             self._margin_df = df
+            self._margin_ts = time.time()
             try:
                 with open(MARGIN_CACHE, "w", encoding="utf-8") as fh:
-                    json.dump({"ts": time.time(), "rows": rows}, fh, ensure_ascii=False)
+                    json.dump({"ts": self._margin_ts, "rows": rows}, fh, ensure_ascii=False)
             except Exception:
                 pass
         return df

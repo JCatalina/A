@@ -12,6 +12,7 @@ from data_fetcher import DataFetcher
 from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
 from ice_engine import IceEngine
+from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
 
@@ -24,12 +25,16 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=ice_engine.warm_all, daemon=True, name="ice-prewarm").start()
     # v2.7: 大盘四大指数 x 四大周期原始K线预热, 首次切换 index tab 即命中缓存
     threading.Thread(target=index_engine.warm_all, daemon=True, name="index-prewarm").start()
+    # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
+    _scheduler = RefreshScheduler(data_fetcher, scanner_engine, index_engine, ice_engine)
+    _scheduler.start()
     yield
+    _scheduler.stop()
 
 
 app = FastAPI(
     title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="2.6.0",
+    version="2.8.0",
     lifespan=lifespan
 )
 

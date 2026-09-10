@@ -70,6 +70,7 @@ class DataFetcher:
     TENCENT_FLOATCAP_YI_TO_YUAN = 1e8        # 亿元 -> 元
     DEFAULT_FLOAT_SHARES_FALLBACK = 500_000_000.0
     FLOAT_SHARES_CACHE_TTL = 86400  # 流通股本缓存 24h (解禁/增发会改变流通盘)
+    INDICES_SNAPSHOT_TTL = 15       # 大盘指数条快照缓存 15s (前端 30s 轮询, 秒回且不打爆数据源)
 
     def __init__(self):
         self.session = requests.Session()
@@ -81,6 +82,8 @@ class DataFetcher:
         self._stock_list_cache = None
         self._stock_list_cache_time = 0
         self._float_shares_cache: Dict[str, tuple] = {}  # 流通股本缓存 (code -> (ts, 股), TTL 24h)
+        self._indices_cache: Optional[List[Dict[str, Any]]] = None
+        self._indices_cache_time = 0.0
 
     # ------------------------------------------------------------
     # 基础元数据
@@ -469,7 +472,11 @@ class DataFetcher:
     # 大盘指数
     # ------------------------------------------------------------
     def get_market_indices(self) -> List[Dict[str, Any]]:
-        """获取大盘核心指数（上证指数、深证成指、创业板指、科创50）"""
+        """获取大盘核心指数（上证指数、深证成指、创业板指、科创50）; 15s 快照缓存"""
+        now = time.time()
+        if self._indices_cache and (now - self._indices_cache_time) < self.INDICES_SNAPSHOT_TTL:
+            return self._indices_cache
+
         url = "http://qt.gtimg.cn/q=s_sh000001,s_sz399001,s_sz399006,s_sh000688"
         try:
             resp = self.session.get(url, timeout=5)
@@ -498,6 +505,8 @@ class DataFetcher:
                         "amount": float(parts[7]) * self.TENCENT_AMOUNT_WAN_TO_YUAN if len(parts) > 7 and parts[7] else 0.0
                     })
             if indices:
+                self._indices_cache = indices
+                self._indices_cache_time = now
                 return indices
         except Exception as e:
             logger.warning(f"Fetch indices error: {e}")
