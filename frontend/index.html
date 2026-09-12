@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>A股高胜率技术指标与多维支撑压力位量化分析系统</title>
+    <title>A股规则筛选技术指标与多维支撑压力位量化分析系统</title>
     <!-- Google Fonts 现代金融字体 -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,7 +58,7 @@
         <!-- 扫描进度通知条 (隐藏状态) -->
         <div class="scan-progress-bar-wrap" id="scanProgressWrap" style="display: none;">
             <div class="progress-info">
-                <span id="scanStatusText">正在执行全A股多线程高胜率策略深度扫描...</span>
+                <span id="scanStatusText">正在执行全A股多线程规则筛选策略深度扫描...</span>
                 <span id="scanPercentText">0%</span>
             </div>
             <div class="progress-track">
@@ -148,7 +148,7 @@
                 <!-- 1. AI与量化走势概率预测罗盘 -->
                 <div class="glass-card prediction-compass-card">
                     <div class="card-header">
-                        <span class="header-badge">PROBABILITY</span>
+                        <span class="header-badge">SCORE</span>
                         <h2>多头综合评分与交易信号</h2>
                     </div>
 
@@ -158,8 +158,8 @@
                             <div class="prob-gauge" id="probGaugeChart"></div>
                             <div class="prob-score-center">
                                 <span class="prob-number" id="bullishProbNum">--</span>
-                                <span class="prob-unit">%</span>
-                                <span class="prob-subtext" title="点时间评估显示该分数与实际10日上涨比例无校准关系，请勿当作概率使用">多头评分 (非校准概率)</span>
+                                <span class="prob-unit">分</span>
+                                <span class="prob-subtext" title="0–100分技术规则评分，尚未校准为概率；旧字段仅作评分兼容，不代表未来收益">多头评分（未校准）</span>
                             </div>
                         </div>
 
@@ -175,18 +175,18 @@
 
                     <!-- 历史回测胜率对比栏 -->
                     <div class="historical-backtest-box">
-                        <div class="ht-title" title="单股样本内小样本统计；pooled 点时间评估 Rank-IC≈0.005，对未来收益无预测力，仅作历史描述">📊 历史相似形态回测胜率（单股样本内 · 仅供参考，评估显示无预测力）：</div>
+                        <div class="ht-title" title="单股样本内价格路径描述，未完整建模交易执行；旧报告不适用于新版评分，不代表未来胜率">📊 历史相似形态命中率（样本内 · 非可交易回测）：</div>
                         <div class="ht-grid">
                             <div class="ht-col">
-                                <span class="ht-lbl">5日上涨胜率</span>
+                                <span class="ht-lbl">5日历史命中率</span>
                                 <span class="ht-val" id="htWin5d">--%</span>
                             </div>
                             <div class="ht-col">
-                                <span class="ht-lbl">10日突破胜率</span>
+                                <span class="ht-lbl">10日历史命中率</span>
                                 <span class="ht-val highlight" id="htWin10d">--%</span>
                             </div>
                             <div class="ht-col">
-                                <span class="ht-lbl">20日波段胜率</span>
+                                <span class="ht-lbl">20日历史命中率</span>
                                 <span class="ht-val" id="htWin20d">--%</span>
                             </div>
                         </div>
@@ -226,16 +226,16 @@
                     </div>
                 </div>
 
-                <!-- 3. 高胜率选股雷达池 (Screener Radar) -->
+                <!-- 3. 规则筛选选股雷达池 (Screener Radar) -->
                 <div class="glass-card screener-card">
                     <div class="card-header">
                         <span class="header-badge gold">SCREENER</span>
-                        <h2>高胜率选股雷达池</h2>
+                        <h2>规则筛选选股雷达池</h2>
                     </div>
 
                     <!-- 策略切换标签 -->
                     <div class="screener-tabs">
-                        <button class="sc-tab active" data-strategy="ALL">全部高胜率</button>
+                        <button class="sc-tab active" data-strategy="ALL">全部规则筛选</button>
                         <button class="sc-tab" data-strategy="SUPPORT_PULLBACK">回踩强支撑</button>
                         <button class="sc-tab" data-strategy="BREAKOUT_PRESSURE">放量突破</button>
                         <button class="sc-tab" data-strategy="MAIN_WAVE_TREND">中线主升浪</button>
@@ -244,7 +244,7 @@
 
                     <!-- 选股列表 -->
                     <div class="screener-list" id="screenerList">
-                        <div class="screener-loading">正在载入高胜率标的...</div>
+                        <div class="screener-loading">正在载入规则筛选标的...</div>
                     </div>
                 </div>
 
@@ -281,7 +281,7 @@
                     <div class="ice-gauge-block">
                         <div class="ice-prob-big" id="iceProbNum">--</div>
                         <div class="ice-prob-unit">%</div>
-                        <div class="ice-prob-lab">未来10日反弹 (≥2.5%) 概率</div>
+                        <div class="ice-prob-lab">10交易日反弹 (≥2.5%) · 历史概率估计</div>
                         <div class="ice-ci" id="iceCI"></div>
                         <div class="ice-lift" id="iceLift"></div>
                     </div>
@@ -293,6 +293,8 @@
                         </div>
                         <div class="ice-factors" id="iceFactors"></div>
                         <div class="ice-sentiment" id="iceSentiment"></div>
+                        <div class="ice-ci" id="iceValidation" role="status"></div>
+                        <div class="ice-ci" id="iceDisclaimer"></div>
                     </div>
                 </div>
             </div>

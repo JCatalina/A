@@ -131,9 +131,10 @@ class IndicatorEngine:
     @staticmethod
     def calculate_chip_distribution(df: pd.DataFrame, bins: int = 100, lookback: int = 250) -> Dict[str, Any]:
         """
-        基于历史换手率与三角分布的筹码衰减分布模型
-        - 个股: 使用真实换手率进行衰减注入（回看250个交易日）
-        - 无换手率数据(如指数): 退化为按成交量加权的 Volume Profile（无衰减）
+        历史价格/成交量的筹码分布估算，不代表真实持仓或主力控盘。
+        - 仅 attrs['turnover_provenance'] 明确 status='reliable'、basis='historical'
+          且成交日换手数据完整有效时使用换手衰减（单位为百分数）。
+        - 当前股本估算、未知来源或缺失换手：纯历史成交量分布，无时间衰减。
         """
         empty = {"bins": [], "poc": 0, "peaks": [], "profit_ratio": 50,
                  "concentration_70": 0, "range_70": [], "concentration_90": 0,
@@ -141,7 +142,31 @@ class IndicatorEngine:
         if df.empty or len(df) < 5:
             return empty
 
+        provenance = df.attrs.get('turnover_provenance', {})
+        if not isinstance(provenance, dict):
+            provenance = {}
         sub_df = df.iloc[-lookback:].copy()
+        volumes = pd.to_numeric(sub_df['volume'], errors='coerce')
+        # 零成交日不影响价格网格、不衰减也不注入；无有效成交返回兼容空结果。
+        sub_df = sub_df.loc[np.isfinite(volumes) & (volumes > 0)].copy()
+        turnovers = pd.to_numeric(sub_df.get('turnover', pd.Series(dtype=float)), errors='coerce')
+        use_turnover = (
+            provenance.get('status') == 'reliable'
+            and provenance.get('basis') == 'historical'
+            and 'turnover' in sub_df.columns
+            and bool((np.isfinite(turnovers) & (turnovers >= 0) & (turnovers <= 100)).all())
+        )
+        model_metadata = {
+            'model': 'historical_turnover_decay' if use_turnover else 'historical_volume_profile',
+            'turnover_used': use_turnover,
+            'turnover_provenance': provenance or {'status': 'unknown', 'basis': 'unknown'},
+            'model_note': '筹码、获利比例及集中度均为历史价格/成交量模型估算，不代表实际持仓、主力成本或控盘程度。'
+                          + ('仅使用显式可靠的历史换手口径。' if use_turnover else
+                             '换手来源不可靠或不完整，退回无衰减历史成交量分布，不使用当前流通股本。')
+        }
+        empty.update(model_metadata)
+        if sub_df.empty:
+            return empty
         min_p = sub_df['low'].min()
         max_p = sub_df['high'].max()
 
@@ -153,30 +178,27 @@ class IndicatorEngine:
         bin_centers = (price_bins[:-1] + price_bins[1:]) / 2
         chip_density = np.zeros(bins)
 
-        # 换手率列有效性判断：缺失或恒定(如指数填充值)则退化为成交量分布
-        use_turnover = ('turnover' in sub_df.columns
-                        and sub_df['turnover'].nunique(dropna=True) > 1)
-        avg_vol = float(sub_df['volume'].mean()) if not use_turnover else 0.0
-
-        # 遍历历史K线，按换手率进行衰减累加（涨跌停日降权）
+        # 遍历有效成交K线；可靠零换手保留为零，不设置最低换手率。
         for _, row in sub_df.iterrows():
             if use_turnover:
-                turnover = min(max(row.get('turnover', 2.0) / 100.0, 0.005), 0.5)  # 换手率衰减因子
+                turnover = min(float(row['turnover']) / 100.0, 0.5)  # 保留原50%上限启发式
                 # 衰减历史筹码
                 chip_density *= (1.0 - turnover)
             else:
-                # 成交量分布模式: 以相对量能为注入权重，不做时间衰减
-                turnover = float(row['volume']) / (avg_vol + 1e-9)
+                # 纯历史成交量分布：直接以历史成交股数注入，不使用任何当前分母。
+                turnover = float(row['volume'])
 
-            # 涨跌停日降权：涨跌停日的筹码分布不可靠，降低注入权重
+            # 换手衰减模式保留原涨跌停降权；纯成交量模式不引入额外权重。
             is_limit = row.get('is_limit_up', False) or row.get('is_limit_down', False)
-            inject_weight = 0.3 if is_limit else 1.0
+            inject_weight = 0.3 if use_turnover and is_limit else 1.0
 
             IndicatorEngine._inject_chips(chip_density, price_bins, bin_centers, row,
                                           turnover * inject_weight)
 
         # 归一化
-        total_chips = np.sum(chip_density) + 1e-9
+        total_chips = np.sum(chip_density)
+        if total_chips <= 0:
+            return empty
         chip_density_ratio = chip_density / total_chips
         # 寻找主筹码峰 POC (Point of Control)
         poc_idx = np.argmax(chip_density_ratio)
@@ -228,7 +250,8 @@ class IndicatorEngine:
             "range_70": [low_70, high_70],
             "concentration_90": conc_90,
             "range_90": [low_90, high_90],
-            "is_single_peak": conc_90 < 10.0 # 集中度低于10%为单峰高度控盘 (与评分引擎阈值一致)
+            "is_single_peak": conc_90 < 10.0,  # 兼容集中度阈值标志，不等于主力控盘
+            **model_metadata
         }
 
     @staticmethod

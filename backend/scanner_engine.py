@@ -51,6 +51,14 @@ class ScannerEngine:
             # 2. 获取周K线 (v2.6: 80→260根, 保证周MA120/MA250为真实窗口而非expanding伪值)
             df_weekly = self.fetcher.get_kline(code, period="weekly", count=260)
 
+            data_quality = {"daily": dict(df_daily.attrs), "weekly": dict(df_weekly.attrs), "warnings": []}
+            if df_daily.attrs.get("adjustment") != "qfq":
+                data_quality["warnings"].append("日线非明确前复权口径，除权可能影响技术指标；不用于严格历史评估")
+            if (not df_weekly.empty and
+                    df_daily.attrs.get("adjustment", "unknown") != df_weekly.attrs.get("adjustment", "unknown")):
+                data_quality["warnings"].append("日周线复权口径不一致，已禁用周线参与评分")
+                df_weekly = pd.DataFrame()
+
             # 3. 计算日K全套指标
             ind_daily = IndicatorEngine.calculate_all_indicators(df_daily)
 
@@ -125,6 +133,7 @@ class ScannerEngine:
                 "volume_features": ind_daily.get("volume_features", {}),
                 "clustered_levels": clustered_levels,
                 "prediction": prediction,
+                "data_quality": data_quality,
                 "kline_chart_data": kline_chart_data
             }
         except Exception as e:
@@ -247,10 +256,10 @@ class ScannerEngine:
                     except Exception as e:
                         logger.warning(f"Scan stock error: {e}")
 
-            # 排序：多头概率从高到低，盈亏比从大到小
+            # 排序：多头评分从高到低，盈亏比从大到小
             results.sort(
                 key=lambda x: (
-                    x["prediction"].get("bullish_probability", 0),
+                    x["prediction"].get("bullish_score", x["prediction"].get("bullish_probability", 0)),
                     x["prediction"].get("trade_plan", {}).get("rr_ratio", 0)
                 ),
                 reverse=True
@@ -294,7 +303,7 @@ class ScannerEngine:
                     stk_res["is_demo"] = True  # 前端展示"演示"角标
                     demo_results.append(stk_res)
 
-            demo_results.sort(key=lambda x: x["prediction"].get("bullish_probability", 0), reverse=True)
+            demo_results.sort(key=lambda x: x["prediction"].get("bullish_score", x["prediction"].get("bullish_probability", 0)), reverse=True)
 
             # 提交前终检：若等待期间真实扫描已完成/启动，丢弃演示数据
             if not self.has_scan_results and not self.is_scanning:

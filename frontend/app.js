@@ -1,5 +1,5 @@
 /**
- * A股高胜率技术指标与多维支撑压力位量化分析看板
+ * A股规则筛选技术指标与多维支撑压力位量化分析看板
  * 核心交互与ECharts金融图表控制器
  */
 
@@ -16,10 +16,9 @@ let currentMacroSymbol = "sh000001";
 let currentMacroScale = "240";
 let currentMacroData = null;
 
-// v2.7: 按指数缓存的响应快照 (stale-while-revalidate 前端侧)
-// 切 tab 时先立即渲染旧值, 后台请求返回后再刷新; 切回看过的指数秒开
+// 大盘研判按指数缓存响应快照；冰点面板不复用旧成功结果。
 const macroCache = {};
-const iceCache = {};
+let iceRequestId = 0;
 
 // v2.8: 服务常驻轮询状态 (防并发重入 / 无变化不重复渲染)
 let marketIndicesLoading = false;
@@ -72,7 +71,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 /**
- * 大盘冰点反弹概率 (v2.6 每个指数独立历史校准)
+ * 大盘冰点反弹概率：历史估计与样本外验证分开展示。
  */
 const ICE_INDEX_NAMES = {
     "sh000001": "上证指数",
@@ -83,42 +82,82 @@ const ICE_INDEX_NAMES = {
 
 async function loadIceRebound(symbol) {
     symbol = symbol || currentMacroSymbol || "sh000001";
-    // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切换秒开
-    if (iceCache[symbol]) renderIcePanel(iceCache[symbol]);
+    const requestId = ++iceRequestId;
+    if (symbol === currentMacroSymbol) renderIcePanel({ symbol, message: "正在读取历史估计…" });
     try {
         const res = await fetch(`/api/index/ice?symbol=${encodeURIComponent(symbol)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
-        iceCache[symbol] = json;
-        // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖
-        if (symbol === currentMacroSymbol) renderIcePanel(json);
+        // 仅最新请求可渲染，包含同指数重入以及 A→B→A 的切换。
+        if (requestId === iceRequestId && symbol === currentMacroSymbol) {
+            renderIcePanel({ ...json, symbol });
+        }
     } catch (e) {
-        if (!iceCache[symbol]) {
-            const el = document.getElementById("iceProbNum");
-            if (el) el.textContent = "--";
+        if (requestId === iceRequestId && symbol === currentMacroSymbol) {
+            renderIcePanel({ symbol, message: "请求失败，历史估计暂不可用" });
         }
     }
 }
 
-function renderIcePanel(json) {
+function renderIcePanel(json = {}) {
+    json = json || {};
     const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    // 每次先清空整个面板，错误、缺特征、缺概率均不能遗留旧成功结果。
     set("iceIndexName", ICE_INDEX_NAMES[json.symbol] || json.symbol || ICE_INDEX_NAMES[currentMacroSymbol]);
-    if (json.status !== "success") { set("iceProbNum", "--"); return; }
-    const prob = json.rebound_prob_10d_pct;
-    set("iceProbNum", prob == null ? "--" : prob.toFixed(1));
-    set("iceCI", (json.ci_low_pct == null ? "" :
-        `95%CI(去重叠保守) [${json.ci_low_pct}~${json.ci_high_pct}]% · 档内样本 ${json.calib_bin}`));
-    const liftEl = document.getElementById("iceLift");
-    const lift = json.lift_vs_baseline_pp;
-    if (lift != null && liftEl) {
-        liftEl.textContent = (lift >= 0 ? "↑ 高于无条件基线 " : "↓ 低于无条件基线 ")
-            + Math.abs(lift).toFixed(1) + "pp (基线 " + json.baseline_rebound_pct + "%)";
-        liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
-    }
-    const sc = json.ice_score_0_100 ?? 0;
-    set("iceScoreVal", sc.toFixed(0) + " 分");
+    set("iceProbNum", "--");
+    set("iceScoreVal", "--");
+    set("iceUpdateTime", "--");
+    ["iceCI", "iceLift", "iceFactors", "iceSentiment", "iceValidation", "iceDisclaimer"].forEach(id => set(id, ""));
     const fill = document.getElementById("iceScoreFill");
-    if (fill) fill.style.width = Math.min(100, sc) + "%";
+    if (fill) fill.style.width = "0%";
+    const liftEl = document.getElementById("iceLift");
+    if (liftEl) liftEl.className = "ice-lift";
+
     const f = json.factors || {};
+    const missingFeatures = json.missing_features?.length > 0 ||
+        (json.status === "success" && ![f.price_ret20_pct, f.consec_down_days, f.volume_ratio_20d, f.margin5d_pct].every(Number.isFinite));
+    if (json.status !== "success" || missingFeatures) {
+        set("iceValidation", missingFeatures ? "特征缺失，历史估计暂不可用" : (json.message || "历史估计暂不可用"));
+        set("iceDisclaimer", json.disclaimer || "仅供历史参考，不构成预测承诺或投资建议。");
+        return;
+    }
+
+    const validation = json.validation || {};
+    const validationLabels = {
+        insufficient_oos: "样本外验证不足",
+        no_oos_edge: "样本外未优于基率",
+        positive_oos_skill: "样本外 Brier 评分优于基率（不保证未来表现）"
+    };
+    const probabilityLabels = {
+        historical_estimate: "历史估计",
+        insufficient_bin: "分箱样本不足，暂无概率估计",
+        uncalibrated: "未校准，仅供历史参考"
+    };
+    set("iceValidation", `${probabilityLabels[json.probability_status] || "历史估计（概率状态未提供或未知）"} · ` +
+        `${validationLabels[validation.status] || "样本外状态未提供或未知"} · ` +
+        `样本外有效样本数 n=${Number.isFinite(validation.n) ? validation.n : "--"}` +
+        (Number.isFinite(validation.brier_skill) ? ` · Brier skill=${validation.brier_skill.toFixed(4)}` : ""));
+    set("iceDisclaimer", json.disclaimer || "仅供历史参考，不构成预测承诺或投资建议。");
+    set("iceUpdateTime", `${json.update_time || "--"} · 数据截至 ${json.asof_date || "--"}`);
+
+    const prob = json.rebound_prob_10d_pct;
+    if (Number.isFinite(prob)) {
+        set("iceProbNum", prob.toFixed(1));
+        if (Number.isFinite(json.ci_low_pct) && Number.isFinite(json.ci_high_pct)) {
+            set("iceCI", `原始分箱区间参考 [${json.ci_low_pct}~${json.ci_high_pct}]%（n/10启发式，非模型置信区间） · 档内样本 ${json.calib_bin ?? "--"}`);
+        }
+        const lift = json.lift_vs_baseline_pp;
+        if (Number.isFinite(lift) && Number.isFinite(json.baseline_rebound_pct) && liftEl) {
+            liftEl.textContent = (lift >= 0 ? "高于历史无条件基线 " : "低于历史无条件基线 ")
+                + Math.abs(lift).toFixed(1) + "pp (基线 " + json.baseline_rebound_pct + "%)";
+            liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
+        }
+    }
+    const sc = json.ice_score_0_100;
+    if (Number.isFinite(sc)) {
+        set("iceScoreVal", sc.toFixed(0) + " 分");
+        if (fill) fill.style.width = Math.max(0, Math.min(100, sc)) + "%";
+    }
     const chips = [
         `${f.price_ret20_pct >= 0 ? "+" : ""}${f.price_ret20_pct}% / 20日`,
         `连跌 ${f.consec_down_days} 日`,
@@ -128,10 +167,10 @@ function renderIcePanel(json) {
     const facEl = document.getElementById("iceFactors");
     if (facEl) facEl.innerHTML = chips;
     const s = json.live_sentiment || {};
+    const count = value => Number.isFinite(value) ? value : "--";
     set("iceSentiment",
-        `实时情绪: 上涨 ${s.up_count} / 下跌 ${s.down_count} · 涨停 ${s.limit_up} / 跌停 ${s.limit_down}` +
+        `实时情绪: 上涨 ${count(s.up_count)} / 下跌 ${count(s.down_count)} · 涨停 ${count(s.limit_up)} / 跌停 ${count(s.limit_down)}` +
         (s.asof ? ` · 数据日 ${s.asof}` : ""));
-    set("iceUpdateTime", json.update_time || "");
 }
 
 /**
@@ -693,10 +732,11 @@ function renderChipsDistribution(chips, currentPrice) {
  */
 function renderPredictionAndPlan(data) {
     const pred = data.prediction || {};
-    const prob = pred.bullish_probability || 50;
+    const score = pred.bullish_score ?? pred.bullish_probability;
+    const hasScore = Number.isFinite(score);
 
-    // 1. 胜率仪表盘
-    document.getElementById("bullishProbNum").innerText = prob.toFixed(1);
+    // 1. 多头评分仪表盘
+    document.getElementById("bullishProbNum").innerText = hasScore ? score.toFixed(1) : "--";
     
     if (probGaugeInst) {
         const gaugeOption = {
@@ -731,7 +771,7 @@ function renderPredictionAndPlan(data) {
                 splitLine: { show: false },
                 axisLabel: { show: false },
                 detail: { show: false },
-                data: [{ value: prob }]
+                data: hasScore ? [{ value: score }] : []
             }]
         };
         probGaugeInst.setOption(gaugeOption, true);
@@ -747,7 +787,9 @@ function renderPredictionAndPlan(data) {
     sigDesc.innerText = pred.signal_action || "等待触发";
     capsule.style.borderColor = pred.signal_color || "var(--neon-green)";
     capsule.style.background = `${pred.signal_color || '#059669'}15`;
-    sigIcon.innerText = prob >= 70 ? "🚀" : (prob <= 40 ? "⚠️" : "⚖️");
+    sigIcon.innerText = hasScore && score >= 70 ? "🚀" : (hasScore && score <= 40 ? "⚠️" : "⚖️");
+    const qualityWarnings = data.data_quality?.warnings || [];
+    sigDesc.innerText += qualityWarnings.length ? ` · ${qualityWarnings.join("；")}` : "";
 
     // 3. 历史回测胜率 (样本不足时如实显示，绝不虚构默认值)
     const ht = pred.historical_backtest || {};
@@ -768,7 +810,7 @@ function renderPredictionAndPlan(data) {
         document.getElementById("htWin5d").style.fontSize = "";
         document.getElementById("htWin10d").style.fontSize = "";
         document.getElementById("htWin20d").style.fontSize = "";
-        if (htBox) htBox.title = `有效相似样本 ${ht.sample_count} 个 (扣双边交易成本后统计)`;
+        if (htBox) htBox.title = `相似样本 ${ht.sample_count} 个；样本内价格路径描述，非可执行交易回测，不代表未来胜率`;
     }
 
     // 4. 四维雷达图
@@ -901,7 +943,7 @@ async function loadScreenerResults(strategy, opts = {}) {
             return;
         }
 
-        if (!silent) listEl.innerHTML = '<div class="screener-loading">正在匹配高胜率共振标的...</div>';
+        if (!silent) listEl.innerHTML = '<div class="screener-loading">正在匹配规则筛选共振标的...</div>';
 
         const res = await fetch(`/api/screener/results?strategy=${strategy}`);
         const json = await res.json();
@@ -921,7 +963,8 @@ async function loadScreenerResults(strategy, opts = {}) {
 
             listEl.innerHTML = json.data.map(item => {
                 const pred = item.prediction || {};
-                const prob = pred.bullish_probability || 50;
+                const score = pred.bullish_score ?? pred.bullish_probability;
+                const hasScore = Number.isFinite(score);
                 const plan = pred.trade_plan || {};
                 const tag = strategyTagMap[item.matched_strategies?.[0]] || "综合共振";
 
@@ -945,8 +988,8 @@ async function loadScreenerResults(strategy, opts = {}) {
                             </div>
                         </div>
                         <div class="sc-info-right">
-                            <div class="sc-prob-val">${prob.toFixed(0)}% 多头期望</div>
-                            <div class="sc-rr-val">R:R ${plan.rr_ratio || 3.0}:1</div>
+                            <div class="sc-prob-val">${hasScore ? score.toFixed(0) : '--'} 分 · 多头评分</div>
+                            <div class="sc-rr-val">R:R ${plan.rr_ratio ?? '--'}:1</div>
                         </div>
                     </div>
                 `;

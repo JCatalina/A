@@ -7,9 +7,9 @@
 1. 点时间: 对每个历史日 t 只用 df[:t+1] 跑与线上完全一致的流水线
    (IndicatorEngine → ClusterEngine → PredictionEngine)，记录输出，再与 t 之后的真实走势对照。
    周线由日线切片重采样得到，保证不含 t 之后的信息。
-2. 执行约束贴近 A 股: 信号日 t 收盘后决策，t+1 开盘成交；t+1 开盘涨停(≥限幅-0.5%)视为不可成交；
-   路径止损: 盘中 low ≤ SL 时按 min(开盘价, SL) 成交(跳空穿止损按开盘)，跌停封板日不可卖出。
-3. pooled 统计: 把所有股票、所有日期的样本汇总后再算命中率 / IC / 校准，
+2. 执行约束近似 A 股: t 收盘决策，t+1 开盘买入(开盘涨停不可买)，入场日不可卖。
+   止损/到期待卖单持续至可成交日；一字跌停不可卖，数据耗尽截尾。固定期限收益仅为 MTM。
+3. pooled 统计: 把所有股票、所有日期的样本汇总后再算命中率 / IC / 评分分组实现命中率，
    替代单股 5~30 个样本的"胜率"。所有比例都给 Wilson 95% 置信区间，并与无条件基线对比。
 """
 from __future__ import annotations
@@ -111,25 +111,79 @@ def _limit_pct(code: str) -> float:
 
 
 def path_exit(opens: np.ndarray, lows: np.ndarray, closes: np.ndarray, e: int, horizon: int,
-              sl: float, limit: float) -> Tuple[float, bool]:
+              sl: float, limit: float, highs: Optional[np.ndarray] = None) -> Tuple[float, Optional[bool]]:
+    """确定性日线退出模型，返回 (退出价, 已成交退出是否由止损触发)。
+
+    e 日开盘买入，A 股 T+1 禁止当天卖出，但当天 low <= sl 会留下止损待卖单。
+    首次可卖日触发止损按 min(open, sl)；已有待卖单在未来可成交日按 open 执行，
+    即使价格已反弹也不撤单。到期 e+horizon 当日按 close 卖出，受阻则顺延开盘卖。
+    有 highs 时仅把 OHLC 相等且达到跌停阈值的一字跌停视为封板；无 highs 时保留
+    “close == low 且达到跌停阈值”的明确保守启发式，可能将开板日误判为不可卖。
+    日线无法证明开板日开盘排队可成交，这里按非封板日可成交近似，不是逐笔撮合。
+    数据耗尽仍未成交返回 (np.nan, None)，不伪造收益，也不计入已成交止损率。
     """
-    路径依赖退出: 从 e(入场日, 开盘买入) 持有到 e+horizon 收盘，期间盘中 low ≤ sl 触发止损。
-    - 入场当日: 开盘价高于 sl 且盘中触及 → 按 sl 成交
-    - 其后: 跳空低开穿越 sl → 按开盘价成交; 跌停封板 (收盘=最低且跌幅≥限幅) 不可卖出，顺延
-    返回 (退出价, 是否止损)
-    """
-    for d in range(e, e + horizon + 1):
+    n = len(closes)
+    if len(opens) != n or len(lows) != n or (highs is not None and len(highs) != n):
+        raise ValueError("OHLC arrays must have equal lengths")
+    if e < 0 or e >= n or horizon < 0:
+        raise ValueError("entry index or horizon out of range")
+    due = e + horizon
+    stop_pending = False
+    expiry_pending = False
+    for d in range(e, n):
+        triggered = bool(np.isfinite(lows[d]) and lows[d] <= sl)
         if d == e:
-            if lows[d] <= sl < opens[d]:
-                return sl, True
+            stop_pending = triggered
+            expiry_pending = d >= due
             continue
-        if lows[d] <= sl:
-            pc = closes[d - 1]
-            limit_down = closes[d] <= pc * (1 - limit / 100 + 0.001) and lows[d] == closes[d]
-            if limit_down:
-                continue
-            return min(opens[d], sl), True
-    return closes[e + horizon], False
+
+        # 无效行情也不可用于构造成交；已有待卖状态不可丢失。
+        prices = [opens[d], lows[d], closes[d], closes[d - 1]]
+        if highs is not None:
+            prices.append(highs[d])
+        valid = all(np.isfinite(p) and p > 0 for p in prices)
+        limit_down = False
+        if valid:
+            at_limit = closes[d] <= closes[d - 1] * (1 - limit / 100 + 0.001)
+            flat_low = bool(np.isclose(lows[d], closes[d], rtol=0, atol=1e-8))
+            if highs is None:
+                limit_down = at_limit and flat_low
+            else:
+                limit_down = (at_limit and flat_low
+                              and bool(np.isclose(highs[d], lows[d], rtol=0, atol=1e-8))
+                              and bool(np.isclose(opens[d], lows[d], rtol=0, atol=1e-8)))
+        if valid and not limit_down:
+            # 昨日已挂出的到期单先于今日盘中止损触发，避免事后更改退出原因。
+            if stop_pending or expiry_pending:
+                return float(opens[d]), stop_pending
+            if triggered:
+                return float(min(opens[d], sl)), True
+            if d >= due:
+                return float(closes[d]), False
+        stop_pending = stop_pending or (triggered and not expiry_pending)
+        expiry_pending = expiry_pending or d >= due
+    return np.nan, None
+
+
+def _quality_info(df: pd.DataFrame) -> Dict[str, Any]:
+    """保留来源 attrs，仅接纳明确 qfq；未知/混合/raw 口径均不静默混用。"""
+    attrs = dict(df.attrs)
+    nested = attrs.get("data_quality", {})
+    nested = nested if isinstance(nested, dict) else {}
+    markers = [str(container[key]).strip().lower()
+               for container in (attrs, nested)
+               for key in ("adjustment", "adjust", "price_adjustment", "adjustment_type")
+               if key in container]
+    accepted = bool(markers) and all(v in ("qfq", "前复权", "forward") for v in markers)
+    return {"attrs": attrs, "accepted": accepted,
+            "reason": "explicit_qfq" if accepted else "excluded_non_qfq_or_unknown_adjustment"}
+
+
+def _eligible_quality(code: str, df: pd.DataFrame) -> bool:
+    quality = _quality_info(df)
+    if not quality["accepted"]:
+        logger.warning("eval excludes %s: %s; attrs=%s", code, quality["reason"], quality["attrs"])
+    return quality["accepted"]
 
 
 def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, int]) -> List[Dict[str, Any]]:
@@ -140,6 +194,8 @@ def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, in
     """
     code, df_full, idx_close, warmup, step, max_h = args
     records: List[Dict[str, Any]] = []
+    if not _eligible_quality(code, df_full):
+        return records
     n = len(df_full)
     if n < warmup + max_h + 2:
         return records
@@ -193,7 +249,9 @@ def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, in
             "close_t": round(price_t, 3), "entry": round(entry, 3), "open_chg_pct": round(open_chg, 2),
             "fillable": fillable,
             "signal_type": pred.get("signal_type"),
-            "bullish_prob": pred.get("bullish_probability"),
+            # 历史列名保留兼容；值是启发式评分，并非校准概率。
+            "bullish_prob": pred.get("bullish_score", pred.get("bullish_probability")),
+            "data_quality": _quality_info(df_full),
             "composite_score": pred.get("composite_score"),
             "trend": radar.get("trend"), "chips": radar.get("chips"),
             "momentum": radar.get("momentum"), "position": radar.get("position"),
@@ -215,7 +273,7 @@ def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, in
             "weekly_trend": pred.get("weekly_trend_text"),
         }
 
-        # ---- 前瞻收益 (净, %) ----
+        # ---- 固定期限 mark-to-market (扣估算双向成本)，不是可执行退出收益 ----
         idx_e = idx_close.get(dates[e])
         for h in HORIZONS:
             x = e + h
@@ -231,10 +289,13 @@ def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, in
         # ---- 路径依赖: 交易计划止损 (10 日) ----
         sl = plan.get("stop_loss")
         rec["path_ret_10"], rec["sl_hit_10"] = None, None
-        if fillable and sl and e + 10 < n:
-            exit_px, hit = path_exit(opens, lows, closes, e, 10, float(sl), limit)
-            rec["path_ret_10"] = round((exit_px - entry) / entry * 100 - COST_PCT, 2)
-            rec["sl_hit_10"] = hit
+        rec["path_censored_10"] = None
+        if fillable and sl and np.isfinite(float(sl)):
+            exit_px, hit = path_exit(opens, lows, closes, e, 10, float(sl), limit, highs=highs)
+            rec["path_censored_10"] = not np.isfinite(exit_px)
+            if np.isfinite(exit_px):
+                rec["path_ret_10"] = round((exit_px - entry) / entry * 100 - COST_PCT, 2)
+                rec["sl_hit_10"] = hit
 
         # ---- 止损参数扫描: 以入场价为基准的 ATR 倍数 / 固定百分比 ----
         atr_t = float(last.get("atr", 0) or 0)
@@ -243,11 +304,11 @@ def eval_one_stock(args: Tuple[str, pd.DataFrame, Dict[str, float], int, int, in
             variants: List[Tuple[str, float]] = [(f"atr{m:g}", entry - m * atr_t) for m in SL_ATR_MULTS]
             variants += [(f"pct{p:g}", entry * (1 - p / 100)) for p in SL_FIXED_PCTS]
             for h in SL_SWEEP_HORIZONS:
-                if e + h >= n:
-                    continue
                 for tag, sl_px in variants:
-                    px, hit = path_exit(opens, lows, closes, e, h, sl_px, limit)
-                    rec[f"sw_{tag}_ret{h}"] = round((px - entry) / entry * 100 - COST_PCT, 2)
+                    px, hit = path_exit(opens, lows, closes, e, h, sl_px, limit, highs=highs)
+                    rec[f"sw_{tag}_censored{h}"] = not np.isfinite(px)
+                    rec[f"sw_{tag}_ret{h}"] = (round((px - entry) / entry * 100 - COST_PCT, 2)
+                                                   if np.isfinite(px) else None)
                     rec[f"sw_{tag}_hit{h}"] = hit
 
         records.append(rec)
@@ -263,6 +324,8 @@ def condition_samples(code: str, df_full: pd.DataFrame, warmup: int, max_h: int)
     对每个 t 记录条件标志与 t+1 开盘买入的前瞻净收益。
     注意: 这里不含聚类/背离等需切片的特征，仅用于"条件 → 收益"的大样本基率。
     """
+    if not _eligible_quality(code, df_full):
+        return pd.DataFrame()
     ind = IndicatorEngine.calculate_all_indicators(df_full)
     if not ind:
         return pd.DataFrame()
@@ -324,11 +387,13 @@ class EvalEngine:
         self.bars = bars
         self.index_symbol = index_symbol
         self.max_h = max(HORIZONS)
+        self.data_quality: Dict[str, Any] = {}
 
     # ---------------- 数据 ----------------
     def fetch_universe(self, codes: List[str], workers: int = 6,
                        progress: Optional[Callable[[str], None]] = None) -> Dict[str, pd.DataFrame]:
         out: Dict[str, pd.DataFrame] = {}
+        self.data_quality = {}
 
         def _one(code: str):
             try:
@@ -340,8 +405,14 @@ class EvalEngine:
 
         with ThreadPoolExecutor(max_workers=workers) as ex:
             for code, df in ex.map(_one, codes):
-                if not df.empty and len(df) >= self.warmup + self.max_h + 2:
-                    out[code] = df
+                quality = _quality_info(df)
+                quality["bars"] = len(df)
+                quality["used"] = False
+                self.data_quality[code] = quality
+                if not df.empty and _eligible_quality(code, df):
+                    if len(df) >= self.warmup + self.max_h + 2:
+                        out[code] = df
+                        quality["used"] = True
                 if progress:
                     progress(f"fetched {code}: {len(df)} bars")
         return out
@@ -388,7 +459,11 @@ class EvalEngine:
 
         # 2) 廉价路径条件基率 (全日期, 单进程即可)
         cond_frames = [condition_samples(code, df, self.warmup, self.max_h) for code, df in data.items()]
-        cond = pd.concat([f for f in cond_frames if not f.empty], ignore_index=True) if cond_frames else pd.DataFrame()
+        cond_frames = [f for f in cond_frames if not f.empty]
+        cond = pd.concat(cond_frames, ignore_index=True) if cond_frames else pd.DataFrame()
+        for frame in (pit, cond):
+            frame.attrs["data_quality"] = self.data_quality
+            frame.attrs["fixed_horizon_return_basis"] = "mark-to-market, not executable exits"
 
         metrics = self.compute_metrics(pit, cond)
         metrics["meta"] = {
@@ -400,6 +475,11 @@ class EvalEngine:
             "cond_points": int(len(cond)),
             # 活跃股票池按当日成交额实时排序，盘中会漂移；记录实际使用的代码以便用 --codes 精确复现
             "codes_used": sorted(data.keys()),
+            "data_quality": self.data_quality,
+            "adjustment_policy": "explicit_qfq_only; raw/mixed/unknown excluded with warning",
+            "fixed_horizon_return_basis": "mark-to-market; ret net estimated cost, exc gross vs index",
+            "path_return_basis": "T+1 executable approximation; pending sells persist; censored excluded",
+            "bullish_score_basis": "uncalibrated score grouped by realized hit rate",
             "date_range": [str(pit["date"].min()), str(pit["date"].max())] if not pit.empty else None,
             "elapsed_sec": round(time.time() - t0, 1),
         }
@@ -412,6 +492,14 @@ class EvalEngine:
             m["error"] = "no point-in-time records"
             return m
         f = pit[pit["fillable"]].copy()
+        if f.empty:
+            m["error"] = "no fillable point-in-time records"
+            return m
+        m["path_execution"] = {
+            "completed_10": int(f["path_ret_10"].notna().sum()),
+            "censored_10": int(f.get("path_censored_10", pd.Series(dtype=bool)).fillna(False).sum()),
+            "not_evaluated_10": int(f.get("path_censored_10", pd.Series(index=f.index, dtype=object)).isna().sum()),
+        }
 
         # A. 基线 (无条件)
         m["baseline"] = {f"ret_{h}": _rate_block(f[f"ret_{h}"]) for h in HORIZONS}
@@ -473,7 +561,7 @@ class EvalEngine:
             pass
         m["composite_quintiles"] = q
 
-        # E. bullish_prob 校准: 预测 X% → 实际上涨比例
+        # E. 未校准 bullish_score 的评分分组实现命中率；旧键仅用于兼容。
         bins = [0, 40, 50, 60, 70, 80, 101]
         labels = ["<40", "40-50", "50-60", "60-70", "70-80", "≥80"]
         cal: List[Dict[str, Any]] = []
@@ -481,10 +569,12 @@ class EvalEngine:
         for k, g in f.groupby("pb", observed=True):
             blk = _rate_block(g["ret_10"])
             blk["bin"] = str(k)
-            blk["pred_mean"] = round(float(g["bullish_prob"].mean()), 1)
-            blk["calib_gap_pp"] = round(blk["hit"] - blk["pred_mean"], 1) if blk["hit"] is not None else None
+            blk["score_mean"] = round(float(g["bullish_prob"].mean()), 1)
+            blk["pred_mean"] = blk["score_mean"]  # deprecated alias, not probability
+            blk["calib_gap_pp"] = None  # 未校准评分与命中率不存在可解释的“校准偏差”
             cal.append(blk)
-        m["calibration_bullish_prob"] = cal
+        m["bullish_score_groups"] = cal
+        m["calibration_bullish_prob"] = cal  # legacy schema alias
 
         # F. 支撑带星级 → 回踩后 10 日反弹率 (现价在 S1 上方 ≤2.5%)
         near = f[(f["s_dist_pct"].notna()) & (f["s_dist_pct"] >= 0) & (f["s_dist_pct"] <= 2.5)]
@@ -509,7 +599,7 @@ class EvalEngine:
         for h in SL_SWEEP_HORIZONS:
             rows: List[Dict[str, Any]] = []
             base = _rate_block(f[f"ret_{h}"])
-            base.update({"variant": "无止损", "sl_hit_rate": 0.0})
+            base.update({"variant": "无止损 MTM（非成交）", "sl_hit_rate": 0.0, "censored_n": None})
             rows.append(base)
             tags = [f"atr{m:g}" for m in SL_ATR_MULTS] + [f"pct{p:g}" for p in SL_FIXED_PCTS]
             for tag in tags:
@@ -517,7 +607,8 @@ class EvalEngine:
                 if col not in f.columns:
                     continue
                 blk = _rate_block(f[col])
-                hits = f[f"sw_{tag}_hit{h}"].dropna()
+                hits = f.loc[f[col].notna(), f"sw_{tag}_hit{h}"].dropna()
+                blk["censored_n"] = int(f.get(f"sw_{tag}_censored{h}", pd.Series(dtype=bool)).fillna(False).sum())
                 blk["variant"] = (f"{tag[3:]}×ATR" if tag.startswith("atr") else f"固定 -{tag[3:]}%")
                 blk["sl_hit_rate"] = round(float(hits.mean()) * 100, 1) if len(hits) else None
                 blk["mean_vs_nostop_pp"] = round(blk["mean"] - base["mean"], 2) if blk["mean"] is not None and base["mean"] is not None else None
@@ -585,8 +676,21 @@ class EvalEngine:
         L.append(f"- 股票池: 请求 {meta.get('stocks_requested')} / 有效 {meta.get('stocks_used')} 只，每只 {meta.get('bars_per_stock')} 根日K，预热 {meta.get('warmup')} 根，评估步长 {meta.get('step')} 日  ")
         L.append(f"- 评估点: {meta.get('pit_points')} (可成交 {meta.get('pit_fillable')})，条件基率样本: {meta.get('cond_points')}  ")
         L.append(f"- 日期范围: {meta.get('date_range')}；双向成本 {meta.get('cost_pct_roundtrip')}%；基准指数 {meta.get('index_symbol')}；耗时 {meta.get('elapsed_sec')}s\n")
-        L.append("> 口径: 信号日 t 收盘决策 → t+1 开盘成交(开盘涨停不可成交) → t+1+h 收盘退出，收益已扣双向成本。"
-                 "所有比例附 Wilson 95% CI；与无条件基线比较得到 lift。\n")
+        L.append("> 口径: 信号日 t 收盘决策 → t+1 开盘买入(近涨停不可买)。固定期限 ret_h 是 t+1+h 收盘"
+                 "mark-to-market (MTM) 估值收益，扣估算双向成本，不保证当日可卖；exc_h 是未扣成本的 MTM 相对指数超额。"
+                 "基线、IC、评分分组、条件基率均使用 MTM，不是可执行收益。\n")
+        L.append("> 路径模拟成交收益: 入场日禁止卖出(T+1)，但触发止损会保留待卖状态；其后首次触发按 min(open, SL)，"
+                 "既有待卖单在可成交日按开盘执行。到期可卖按收盘，否则顺延；数据耗尽仍未卖出记截尾，"
+                 "不计收益、命中率或已成交样本的止损触发率。有效持有期可能超过标称期限。"
+                 "有 high 用 OHLC 一字跌停识别封板；无 high 用 close=low 且达到跌停阈值的保守启发式。\n")
+        L.append(f"> 数据质量: 仅接纳明确 qfq，raw/混合/unknown 排除并日志说明；完整来源 attrs 见 JSON meta.data_quality。"
+                 f"记录 {len(meta.get('data_quality', {}))} 只。所有命中率附 Wilson 95% CI。\n")
+        L.append("> 限制: 日线开板不代表开盘排队必能成交；未精确处理 ST、历史涨跌停制度、上市初期无涨跌幅限制、"
+                 "价格档位、停牌/零成交量、费用税率与滑点、退市及复权因子的历史版本。截尾排除会造成选择偏差，"
+                 "不能据已成交样本推断完整组合收益。\n")
+        if "path_execution" in metrics:
+            pe = metrics["path_execution"]
+            L.append(f"路径10日: 已成交 {pe['completed_10']}，截尾未成交 {pe['censored_10']}，未评估 {pe['not_evaluated_10']}。\n")
         if "error" in metrics:
             L.append(f"**错误**: {metrics['error']}")
             return "\n".join(L)
@@ -604,8 +708,8 @@ class EvalEngine:
         L.append(f"| 10 日超额(vs 指数) | {rb(metrics['baseline']['exc_10'])} |")
         L.append(f"\n开盘涨停不可成交比例: {metrics.get('unfillable_limit_up_pct')}%\n")
 
-        L.append("## 2. 信号类型 → 真实前瞻收益\n")
-        L.append("| 信号 | 占比 | 10日 | 10日超额 | 路径止损后10日 | 止损触发率 | 命中lift(pp) | 均值lift(pp) |\n|:--|--:|:--|:--|:--|--:|--:|--:|")
+        L.append("## 2. 信号类型 → MTM 与路径模拟成交收益\n")
+        L.append("| 信号 | 占比 | 10日 MTM | 10日 MTM超额 | 路径成交(目标10日) | 已成交止损触发率 | MTM命中lift(pp) | MTM均值lift(pp) |\n|:--|--:|:--|:--|:--|--:|--:|--:|")
         for st, b in metrics["by_signal"].items():
             L.append(f"| {st} | {b['share_pct']}% | {rb(b['ret_10'])} | {rb(b['exc_10'])} | {rb(b['path_ret_10'])} | {b['sl_hit_rate_10']} | {b['lift_hit10_pp']} | {b['lift_mean10_pp']} |")
 
@@ -620,22 +724,24 @@ class EvalEngine:
         for qb in metrics["composite_quintiles"]:
             L.append(f"| Q{qb['quintile']} | {qb['score_range']} | {rb(qb)} | {qb['mean_exc_10']} |")
 
-        L.append("\n## 5. bullish_prob 校准 (预测上涨概率 vs 实际 10 日上涨比例)\n")
-        L.append("| 预测区间 | 预测均值 | 实际统计 | 校准偏差(pp) |\n|:--|--:|:--|--:|")
-        for cb in metrics["calibration_bullish_prob"]:
-            L.append(f"| {cb['bin']} | {cb['pred_mean']} | {rb(cb)} | {cb['calib_gap_pp']} |")
+        L.append("\n## 5. bullish_score 评分分组实现命中率 (10 日 MTM)\n")
+        L.append("评分未经概率校准，不是预测胜率；bullish_prob / calibration_bullish_prob 仅为兼容保留的内部字段名。\n")
+        L.append("| 评分区间 | 评分均值 | 分组实现统计 |\n|:--|--:|:--|")
+        for cb in metrics.get("bullish_score_groups", metrics.get("calibration_bullish_prob", [])):
+            L.append(f"| {cb['bin']} | {cb.get('score_mean', cb.get('pred_mean'))} | {rb(cb)} |")
 
         L.append("\n## 6. 支撑带星级 → 回踩 S1 (≤2.5%) 后 10 日\n")
         L.append("| 分组 | 统计 |\n|:--|:--|")
         for k, b in metrics["support_band"].items():
             L.append(f"| {k} | {rb(b)} |")
 
-        L.append("\n## 7. 交易计划盈亏比分档 → 路径止损后 10 日实际\n")
+        L.append("\n## 7. 交易计划盈亏比分档 → 路径模拟成交收益 (目标10日，可顺延)\n")
         L.append("| R:R 区间 | 统计 | 止损触发率 |\n|:--|:--|--:|")
         for b in metrics["rr_bins_path10"]:
             L.append(f"| {b['bin']} | {rb(b)} | {b['sl_hit_rate']} |")
 
-        L.append("\n## 7b. 止损宽度参数扫描 (入场价基准, 全部可成交样本)\n")
+        L.append("\n## 7b. 止损宽度参数扫描 (入场价基准, 排除截尾未成交)\n")
+        L.append("无止损行是固定期限 MTM 参照，不是可执行对照；差值混合持有期及样本差异，不代表同口径策略增益。\n")
         sw = metrics.get("stop_loss_sweep", {})
         L.append(f"样本 ATR/价格 中位数: {sw.get('atr_pct_median')}%。止损的价值应看 **均值是否受损、p05 左尾是否被截断、标准差是否下降**，而非命中率。\n")
         for h in SL_SWEEP_HORIZONS:
@@ -643,9 +749,9 @@ class EvalEngine:
             if not rows:
                 continue
             L.append(f"\n**持有 {h} 日**\n")
-            L.append("| 止损方案 | n | 命中 | 均值 | 均值 vs 无止损(pp) | 中位 | p05 左尾 | 标准差 | PF | 触发率 |\n|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+            L.append("| 止损方案 | n | 截尾数 | 命中 | 均值 | 均值 vs MTM参照(pp) | 中位 | p05 左尾 | 标准差 | PF | 已成交触发率 |\n|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
             for b in rows:
-                L.append(f"| {b['variant']} | {b['n']} | {b['hit']}% | {b['mean']}% | {b['mean_vs_nostop_pp']} | {b['median']}% | {b['p05']}% | {b['std']} | {b['profit_factor']} | {b['sl_hit_rate']}% |")
+                L.append(f"| {b['variant']} | {b['n']} | {b.get('censored_n')} | {b['hit']}% | {b['mean']}% | {b['mean_vs_nostop_pp']} | {b['median']}% | {b['p05']}% | {b['std']} | {b['profit_factor']} | {b['sl_hit_rate']}% |")
 
         L.append("\n## 8. 单股样本内回测胜率 (bt_win10) 是否有预测力\n")
         btm = metrics["insample_backtest_validity"]

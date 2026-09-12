@@ -3,8 +3,8 @@
 
 设计原则 (对齐 ALGORITHM_DOC §14 评估纪律):
 1. 点时间: 所有特征只用当日收盘可得信息, 入场按 T+1 开盘价计算交易口径收益;
-2. 可证伪: 每个概率都附带样本数 n 与 Wilson 95% 置信区间, 不许无样本推断;
-3. 分箱经验校准 + PAVA 保序 (isotonic): 输出的是"历史条件命中率"而非拍脑袋评分;
+2. 可证伪: 小样本拒绝输出概率; 分箱原始命中率区间仅作启发式参考;
+3. 向历史基率收缩的分箱估计 + 清洗重叠标签的滚动样本外诊断, 不强制单调性;
 4. 诚实分层: 历史可得的特征(价格/量能/两融杠杆)进入校准模型; 实时情绪面
    (涨停/跌停/涨跌家数)仅作当日"冰点确认"展示, 不进入概率(无历史数据, 无法校准)。
 
@@ -26,7 +26,13 @@ import numpy as np
 import pandas as pd
 import requests
 
+from probability_calibration import (
+    MODEL_VERSION, MIN_BIN_SAMPLES, fit_bins, walk_forward, weighted_pava,
+)
+
 logger = logging.getLogger(__name__)
+FEATURE_COLUMNS = ("ice_p_ret20", "ice_p_dev", "ice_p_vol", "ice_p_margin",
+                   "ice_p_ret60", "ice_p_consec")
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 EVAL_DIR = os.path.join(os.path.dirname(__file__), "eval_reports")
@@ -253,8 +259,13 @@ class IceEngine:
         df = self.fetch_index_daily(symbol, lookback)
         if df.empty or len(df) < 260:
             return pd.DataFrame()
-        df = df.sort_values("date").reset_index(drop=True)
+        df = df.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+        # Daily close calibration must not consume today's unfinished intraday candle.
+        now = pd.Timestamp.now(tz="Asia/Shanghai")
+        if (now.hour, now.minute) < (15, 10):
+            df = df[df["date"] < now.strftime("%Y-%m-%d")].reset_index(drop=True)
         close = df["close"]
+        df["ma200"] = close.rolling(200).mean()
         low60 = df["low"].rolling(60).min()
         vol20 = df["volume"].rolling(20).mean()
 
@@ -273,17 +284,18 @@ class IceEngine:
         # 两融: 融资余额及其 5 日变化(同步日对齐, 滞后1日用 T-1 可知值)
         margin = self.fetch_margin_history()
         if not margin.empty:
-            m = margin.sort_values("date").reset_index(drop=True)
+            m = margin.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+            m["rzye"] = m["rzye"].where(m["rzye"] > 0)
             m["rzye_prev5"] = m["rzye"].shift(5)
             m["margin5d_pct"] = ((m["rzye"] / m["rzye_prev5"] - 1) * 100).round(2)
             df = df.merge(m[["date", "rzye", "margin5d_pct"]], on="date", how="left")
         else:
             df["rzye"] = np.nan
             df["margin5d_pct"] = np.nan
-        df["margin5d_pct"] = df["margin5d_pct"].ffill().shift(1)  # 盘中仅 T-1 融资数据可得
+        df["margin5d_pct"] = df["margin5d_pct"].shift(1)  # 缺报不无限沿用旧值; 仅 T-1 可知数据
 
         # 冰点百分位特征: 各原始量相对自身近 250 日窗口的"冰度"百分位 (0~1, 越大越冰)
-        # 优势: 分数天然近似均匀分布 → 每个校准分箱样本量充足, 置信区间可信;
+        # 多个相关百分位的加权和不保证均匀分布; 极端分箱必须单独检查样本数。
         # 口径: "当前状态相对近一年有多极端" (适合择时; 与指数绝对水平无关)
         ice_raws = {
             "ice_p_ret20": -df["ret20"],          # 20日跌幅
@@ -295,14 +307,15 @@ class IceEngine:
         }
         for name, raw in ice_raws.items():
             df[name] = raw.rolling(250, min_periods=120).apply(
-                lambda w: float((w < w.iloc[-1]).mean()), raw=False)
+                lambda w: float((w.dropna() < w.iloc[-1]).mean()) if pd.notna(w.iloc[-1]) else np.nan,
+                raw=False)
 
         # 标签: 点时间前视 (仅历史)
         df["fwd10"] = close.shift(-REBOUND_FWD) / close - 1
         # 交易口径: T+1 开盘买入, T+FWD 收盘卖出 (真实可获得的期望收益)
         df["trade_ret"] = (close.shift(-REBOUND_FWD) / df["open"].shift(-1) - 1) * 100
         df["fwd10"] = df["fwd10"] * 100
-        df["rebound"] = (df["fwd10"] >= REBOUND_THRESHOLD).astype(int)
+        df["rebound"] = (df["fwd10"] >= REBOUND_THRESHOLD).astype(float).where(df["fwd10"].notna())
         return df
 
     @staticmethod
@@ -340,27 +353,19 @@ class IceEngine:
     @staticmethod
     def _pava(vals: np.ndarray, weights: np.ndarray) -> np.ndarray:
         """Pool Adjacent Violators (保序回归), 返回单调不减校准值"""
-        out = vals.astype(float).copy()
-        w = weights.astype(float).copy()
-        i = 0
-        while i < len(out) - 1:
-            if out[i] <= out[i + 1]:
-                i += 1
-            else:
-                tot_w = w[i] + w[i + 1]
-                out[i] = out[i + 1] = (out[i] * w[i] + out[i + 1] * w[i + 1]) / tot_w
-                w[i] = w[i + 1] = tot_w
-                if i > 0:
-                    i -= 1
-        return out
+        return weighted_pava(vals, weights)
 
     def calibrate(self, symbol: str = "sh000001") -> Dict[str, Any]:
         frame = self.build_frame(symbol)
         if frame.empty:
             return {"error": "no index data"}
         # 只用"当日特征与标签都可得"的历史样本
-        f = frame.dropna(subset=["fwd10", "ice_p_ret20", "ice_p_dev", "ice_p_ret60", "ice_p_vol", "ice_p_margin", "ice_p_consec"]).copy()
+        f = frame.dropna(subset=["fwd10", *FEATURE_COLUMNS]).copy()
+        if f.empty:
+            return {"error": "no complete historical features and labels"}
         f["ice_score"] = f.apply(self._ice_score, axis=1)
+        model = fit_bins(f["ice_score"], f["rebound"])
+        validation = walk_forward(f["ice_score"], f["rebound"], f.index, REBOUND_FWD)
 
         bins = [(0, 20), (20, 40), (40, 60), (60, 80), (80, 101)]
         labels = ["0-20", "20-40", "40-60", "60-80", "80-100"]
@@ -374,7 +379,7 @@ class IceEngine:
             ci_lo, ci_hi = self._wilson(hit, n) if n else (0.0, 0.0)
             # 日频采样 × 10日前视 → 前视窗口高度重叠, 独立样本假设下的 Wilson CI 偏窄;
             # 有效样本量按 n/前视窗口 折减, 给出"去重叠保守 CI"(展示口径), 原始 CI 留档
-            n_eff = max(1, n // REBOUND_FWD)
+            n_eff = max(1, n // REBOUND_FWD) if n else 0
             elo, ehi = self._wilson(hit, n_eff) if n else (0.0, 0.0)
             table.append({"bin": lab, "n": int(n), "n_eff_overlap_adj": int(n_eff),
                           "hit_rate_10d": None if np.isnan(hit) else round(float(hit) * 100, 1),
@@ -383,16 +388,18 @@ class IceEngine:
                           "mean_fwd10_pct": None if np.isnan(mean10) else round(float(mean10), 2),
                           "mean_trade_ret_pct": None if np.isnan(trade) else round(float(trade), 2)})
 
-        # PAVA 保序 (以 n 为权重), 得到单调校准概率
-        hits = np.array([np.nan if t["hit_rate_10d"] is None else t["hit_rate_10d"] / 100 for t in table])
-        ns = np.array([max(t["n"], 1) for t in table])
-        pava = self._pava(np.where(np.isnan(hits), 0.0, hits), ns)
+        # Monotonic rebound probability is a hypothesis, not a constraint supported by data.
         for i, t in enumerate(table):
-            t["calibrated_prob"] = round(float(pava[i]) * 100, 1)
+            t["calibrated_prob"] = (round(float(model["probabilities"][i]) * 100, 1)
+                                    if t["n"] >= MIN_BIN_SAMPLES else None)
+            t["probability_status"] = "historical_estimate" if t["n"] >= MIN_BIN_SAMPLES else "insufficient_bin"
+            if not t["n"]:
+                for key in ("ci_low", "ci_high", "ci_eff_low", "ci_eff_high"):
+                    t[key] = None
 
         base = f["rebound"].mean() * 100
         # 体制分层: 指数收盘 > ma200 记多头体制 (仅报告, 不乘入概率)
-        f["above_ma200"] = f["close"] > f["close"].rolling(200).mean()
+        f["above_ma200"] = (f["close"] > f["ma200"]).where(f["ma200"].notna())
         bull = f[f["above_ma200"] == True]
         bear = f[f["above_ma200"] == False]
         regime = {}
@@ -410,6 +417,10 @@ class IceEngine:
         result = {
             "symbol": symbol,
             "generated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "model_version": MODEL_VERSION,
+            "asof_date": str(frame["date"].iloc[-1]),
+            "training_last_signal_date": str(f["date"].iloc[-1]),
+            "validation": validation,
             "sample_days": int(len(f)),
             "baseline_rebound_hit_10d_pct": round(float(base), 1),
             "baseline_mean_fwd10_pct": round(float(f["fwd10"].mean()), 2),
@@ -421,7 +432,7 @@ class IceEngine:
                 "score": "各特征相对自身近250日窗口的冰度百分位加权平均 (价格35%/量能与融资35%/深度与连跌30%)",
                 "price": "20日跌幅 / 20日线乖离 / 60日回撤 / 连跌天数 的百分位",
                 "funding": "量能收缩度(倒数) 与 融资余额5日去杠杆幅度 的百分位",
-                "label": "收盘价口径未来10日涨幅≥2.5%; trade口径 T+1开盘买/T+11收盘卖",
+                "label": "收盘价口径未来10日涨幅≥2.5%; trade口径 T+1开盘买/T+10收盘卖（毛收益，未扣费用；指数本身不可直接交易）",
             },
         }
         self._calibs[symbol] = result
@@ -442,15 +453,18 @@ class IceEngine:
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as fh:
-                    self._calibs[symbol] = json.load(fh)
-                self._calib_ts[symbol] = time.time()
-                return self._calibs[symbol]
+                    cached = json.load(fh)
+                if (cached.get("model_version") == MODEL_VERSION and cached.get("symbol") == symbol
+                        and time.time() - os.path.getmtime(path) < CALIB_MEM_TTL):
+                    self._calibs[symbol] = cached
+                    self._calib_ts[symbol] = os.path.getmtime(path)
+                    return cached
             except Exception:
                 pass
         return self.calibrate(symbol)
 
     # ------------------------------------------------------------------
-    # 预测 (v2.7 stale-while-revalidate: TTL 内直返; 过期先回旧值, 后台刷新)
+    # 预测: TTL 内直返，过期同步核验，失败时不返回旧概率
     # ------------------------------------------------------------------
     def predict(self, symbol: str = "sh000001") -> Dict[str, Any]:
         symbol = self.normalize_symbol(symbol)
@@ -459,13 +473,13 @@ class IceEngine:
         if ent:
             if now - ent[0] < PRED_TTL:
                 return ent[1]
-            # 过期: 立即回旧值, 同时后台刷新 (情绪面等远端数据不再阻塞切 tab)
-            self._refresh_predict_async(symbol)
-            return ent[1]
+            # 过期概率必须重新核验特征，不能在刷新失败时无限作为成功结果返回。
 
         res = self._predict_sync(symbol)
         if res.get("status") == "success":
             self._pred_cache[symbol] = (time.time(), res)
+        else:
+            self._pred_cache.pop(symbol, None)
         return res
 
     def _refresh_predict_async(self, symbol: str) -> None:
@@ -480,6 +494,8 @@ class IceEngine:
                 res = self._predict_sync(symbol)
                 if res.get("status") == "success":
                     self._pred_cache[symbol] = (time.time(), res)
+                else:
+                    self._pred_cache.pop(symbol, None)
             except Exception as e:
                 logger.warning(f"Ice predict async refresh failed {symbol}: {e}")
             finally:
@@ -495,18 +511,27 @@ class IceEngine:
         if "bins" not in calib:
             return {"status": "unavailable", "message": "校准数据缺失"}
 
-        frame = self.build_frame(symbol, lookback=300)
+        # ret60 needs 60 warm-up rows plus the full 250-row percentile window.
+        frame = self.build_frame(symbol, lookback=800)
         if frame.empty:
             return {"status": "unavailable", "message": "指数K线获取失败"}
         row = frame.iloc[-1]
+        if str(row["date"]) != calib.get("asof_date"):
+            calib = self.calibrate(symbol)
+            if "bins" not in calib or calib.get("asof_date") != str(row["date"]):
+                return {"status": "unavailable", "symbol": symbol, "message": "校准与行情日期不一致"}
+        missing = [c for c in FEATURE_COLUMNS if not np.isfinite(row.get(c, np.nan))]
+        if missing:
+            return {"status": "unavailable", "symbol": symbol, "message": "特征缺失，不能套用完整特征校准表",
+                    "missing_features": missing, "rebound_prob_10d_pct": None}
         score = self._ice_score(row)
 
-        # 按校准分箱插值得到概率
+        # Fixed-bin historical estimate, not interpolation or an OOS performance promise.
         table = calib["bins"]
         prob, ci_lo, ci_hi, bin_n = None, None, None, None
         for t in table:
             lo, hi = {"0-20": (0, 20), "20-40": (20, 40), "40-60": (40, 60),
-                      "60-80": (60, 80), "80-100": (80, 100)}[t["bin"]]
+                      "60-80": (60, 80), "80-100": (80, 101)}[t["bin"]]
             if lo <= score < hi:
                 prob, ci_lo, ci_hi, bin_n = (t["calibrated_prob"], t["ci_low"], t["ci_high"], t["n"])
                 break
@@ -518,7 +543,7 @@ class IceEngine:
         ci_elo, ci_ehi = ci_lo, ci_hi
         for t in table:
             lo, hi = {"0-20": (0, 20), "20-40": (20, 40), "40-60": (40, 60),
-                      "60-80": (60, 80), "80-100": (80, 100)}[t["bin"]]
+                      "60-80": (60, 80), "80-100": (80, 101)}[t["bin"]]
             if lo <= score < hi:
                 ci_elo, ci_ehi = t.get("ci_eff_low", t["ci_low"]), t.get("ci_eff_high", t["ci_high"])
                 break
@@ -537,6 +562,12 @@ class IceEngine:
             "status": "success",
             "symbol": symbol,
             "calibrated_on": calib.get("symbol", symbol),
+            "model_version": MODEL_VERSION,
+            "asof_date": str(row["date"]),
+            "probability_status": "historical_estimate" if prob is not None else "insufficient_bin",
+            "validation": {k: v for k, v in calib.get("validation", {}).items()
+                           if k not in ("predictions", "baselines", "outcomes", "origins", "train_label_ends", "train_sizes", "bin_sizes")},
+            "ci_method": "raw_bin_wilson_n_div_10_heuristic_not_model_interval",
             "update_time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ice_score_0_100": score,
             "rebound_prob_10d_pct": prob,
@@ -550,8 +581,10 @@ class IceEngine:
             "lift_vs_baseline_pp": None if prob is None else round(prob - calib.get("baseline_rebound_hit_10d_pct", 0), 1),
             "factors": factors,
             "live_sentiment": live,
-            "disclaimer": ("基于该指数自身历史的分箱校准估计(非预测承诺); 展示CI为去重叠保守口径(n/10有效样本); "
-                           "情绪面为全市场快照, 仅当日展示未参与校准; 融资余额特征为沪深两市口径"),
+            "disclaimer": ("基于该指数历史的向基率收缩分箱估计，未强制冰度与反弹单调; "
+                           "区间仅为原始分箱命中率的n/10启发式Wilson参考，不是收缩模型置信区间或严格去重叠保证; "
+                           "样本外验证不足或未优于基率时不构成预测有效证据; "
+                           "仅使用已完成日线; 情绪不参与校准; 融资采用沪深口径且披露时点仍需官方数据核验"),
         }
 
 

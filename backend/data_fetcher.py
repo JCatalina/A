@@ -270,11 +270,13 @@ class DataFetcher:
                     low = min(price, open_p)
 
                 # 换手率：优先官方字段，缺失时按 流通股本 反算（vol已为股）
-                if official_turnover is not None and official_turnover > 0:
+                if official_turnover is not None and official_turnover >= 0:
                     real_turnover = official_turnover
+                    turnover_provenance = {"status": "reliable", "basis": "realtime_official"}
                 else:
                     float_shares = self.get_float_shares(code)
                     real_turnover = round(vol / float_shares * 100, 4) if float_shares > 0 and vol > 0 else 0.0
+                    turnover_provenance = {"status": "estimated", "basis": "current_float_shares"}
 
                 # 涨跌停检测 (主板10%, 创业板/科创板20%)
                 is_kcb_or_cyb = code.startswith(('300', '301', '688', '689'))
@@ -293,6 +295,7 @@ class DataFetcher:
                     "amount": amount,
                     "change_pct": change_pct_val,
                     "turnover": real_turnover,
+                    "turnover_provenance": turnover_provenance,
                     "prev_close": prev_close,
                     "is_limit_up": is_limit_up,
                     "is_limit_down": is_limit_down
@@ -312,7 +315,7 @@ class DataFetcher:
         sym = self._get_symbol_prefix(code)
         float_shares = self.get_float_shares(code)
 
-        records: List[Dict[str, float]] = []
+        records: List[Dict[str, Any]] = []
         vol_unit = 1.0
         try:
             records = self._fetch_tencent_qfq_records(sym, period, count)
@@ -337,7 +340,7 @@ class DataFetcher:
             df = self._merge_realtime_bar(code, df)
         return df
 
-    def _fetch_tencent_qfq_records(self, sym: str, period: str, count: int) -> List[Dict[str, float]]:
+    def _fetch_tencent_qfq_records(self, sym: str, period: str, count: int) -> List[Dict[str, Any]]:
         """腾讯前复权K线 (web.ifzq.gtimg.cn)，行序: date,open,close,high,low,volume(手)"""
         kind = "day" if period == "daily" else "week"
         url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
@@ -347,6 +350,7 @@ class DataFetcher:
         node = (js.get("data") or {}).get(sym, {}) or {}
         # v2.6: 键名随周期变化(日K=qfqday/day, 周K=qfqweek/week)。
         # 此前只读 qfqday/day → 周K恒为空并静默回退新浪不复权数据, 日/周价格基准不一致。
+        adjustment = "qfq" if node.get(f"qfq{kind}") else "raw"
         raw = node.get(f"qfq{kind}") or node.get(kind) or []
         records = []
         for item in raw:
@@ -358,11 +362,13 @@ class DataFetcher:
                 "c": float(item[2]),
                 "h": float(item[3]),
                 "l": float(item[4]),
-                "v": float(item[5])
+                "v": float(item[5]),
+                "_source": "tencent",
+                "_adjustment": adjustment
             })
         return records
 
-    def _fetch_sina_records(self, sym: str, period: str, count: int) -> List[Dict[str, float]]:
+    def _fetch_sina_records(self, sym: str, period: str, count: int) -> List[Dict[str, Any]]:
         """新浪K线 (不复权回退源)，行序: day,open,high,low,close,volume(股)"""
         scale = "240" if period == "daily" else "1200"
         url = (f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
@@ -380,13 +386,15 @@ class DataFetcher:
                     "c": float(item["close"]),
                     "h": float(item["high"]),
                     "l": float(item["low"]),
-                    "v": float(item["volume"])
+                    "v": float(item["volume"]),
+                    "_source": "sina",
+                    "_adjustment": "raw"
                 })
         return records
 
-    def _build_kline_df(self, records: List[Dict[str, float]], vol_unit: float,
+    def _build_kline_df(self, records: List[Dict[str, Any]], vol_unit: float,
                         float_shares: float, code: str) -> pd.DataFrame:
-        """由原始行情记录构建标准K线DataFrame (成交量统一为股, 含涨跌停标记与真实换手率)"""
+        """由原始行情记录构建标准K线DataFrame (成交量统一为股, 含涨跌停标记与估算换手率)"""
         rows = []
         prev_c = None
         is_kcb_or_cyb = code.startswith(('300', '301', '688', '689'))
@@ -400,7 +408,7 @@ class DataFetcher:
             else:
                 chg_pct = round((c - o) / o * 100, 2) if o > 0 else 0.0
 
-            # 真实换手率: volume(股) / 流通股本(股) * 100
+            # 兼容估算列：历史成交量 / 当前流通股本（可能为默认回退股本），非历史真实换手率
             real_turnover = round(v / float_shares * 100, 4) if float_shares > 0 and v > 0 else 0.0
 
             is_limit_up = False
@@ -423,7 +431,27 @@ class DataFetcher:
                 "is_limit_up": is_limit_up,
                 "is_limit_down": is_limit_down
             })
-        return pd.DataFrame(rows)
+        df = pd.DataFrame(rows)
+        sources = {r.get("_source", "unknown") for r in records}
+        adjustments = {r.get("_adjustment", "unknown") for r in records}
+        source = next(iter(sources)) if len(sources) == 1 else "unknown"
+        adjustment = next(iter(adjustments)) if len(adjustments) == 1 else "unknown"
+        df.attrs.update({
+            "source": source,
+            "adjustment": adjustment,
+            "adjustment_note": (
+                "腾讯请求qfq但返回raw，不复权回退。" if source == "tencent" and adjustment == "raw"
+                else "新浪raw不复权回退。" if source == "sina"
+                else "数据源返回qfq，复权因子随查询时点变化。" if adjustment == "qfq"
+                else "复权口径未知。"
+            ) + "仅记录来源与返回口径，未解决历史点时间复权或跨周期价格基准一致性。",
+            "turnover_provenance": {
+                "status": "estimated", "basis": "current_float_shares",
+                "denominator_shares": float_shares,
+                "note": "历史成交量除以当前流通股本（可能为默认回退估值），非历史可靠换手；仅保留兼容展示。"
+            }
+        })
+        return df
 
     def _merge_realtime_bar(self, code: str, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -436,6 +464,19 @@ class DataFetcher:
         if not rt or rt["close"] <= 0 or rt["high"] <= 0 or rt["low"] <= 0:
             return df
 
+        metadata = dict(df.attrs)
+        rt_provenance = rt.get("turnover_provenance", {"status": "unknown", "basis": "unknown"})
+        metadata["realtime_merge"] = {
+            "source": "tencent", "adjustment": "raw", "date": rt["date"],
+            "turnover_provenance": rt_provenance,
+            "note": "实时未复权报价合并，未验证其与历史复权价格基准一致性。"
+        }
+        # 单日官方快照不构成整段历史可靠换手证明。
+        if metadata.get("turnover_provenance", {}).get("status") == "reliable":
+            metadata["turnover_provenance"] = {
+                "status": "unknown", "basis": "mixed",
+                "note": "历史序列合并了实时快照，整段历史换手口径未重新验证。"
+            }
         last_k_date = str(df["date"].iloc[-1])
         if last_k_date != rt["date"]:
             if rt["volume"] <= 0:
@@ -453,7 +494,9 @@ class DataFetcher:
                 "is_limit_up": rt.get("is_limit_up", False),
                 "is_limit_down": rt.get("is_limit_down", False)
             }
-            return pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            merged = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            merged.attrs = metadata
+            return merged
 
         # 最后一根已是当日: 动态刷新最新价、高低点与量能
         i = df.index[-1]
@@ -466,6 +509,7 @@ class DataFetcher:
         df.loc[i, "change_pct"] = rt["change_pct"]
         if rt.get("amount", 0) > 0:
             df.loc[i, "amount"] = rt["amount"]
+        df.attrs = metadata
         return df
 
     # ------------------------------------------------------------

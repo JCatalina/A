@@ -4,9 +4,9 @@ from typing import Dict, List, Tuple, Any, Optional
 
 class PredictionEngine:
     """
-    大概率走势与胜率预测引擎
+    启发式方向评分与交易规则引擎
     融合周K+日K双周期共振、历史形态相似度回溯统计、与结构化量化交易计划生成
-    改进：严格胜率定义、真实回测、量价确认、ATR动态止损、自适应评分权重
+    启发式量价评分、样本内价格路径描述、ATR止损规则；不提供校准胜率或可交易回测背书
     """
 
     # 单程交易成本 (佣金+印花税+冲击成本)
@@ -30,7 +30,7 @@ class PredictionEngine:
         """
         df_daily_calc = indicators_daily.get("df", df_daily)
         # 门槛与回测一致(60根): 不足60根时 MA60 恒为NaN、趋势维度无法计算，
-        # 输出的概率缺乏趋势信息支撑，宁可不出结果也不给出半残预测 (次新股保护)
+        # 输出的评分缺乏趋势信息支撑，宁可不出结果也不给出半残预测 (次新股保护)
         if df_daily_calc.empty or len(df_daily_calc) < 60:
             return {}
 
@@ -51,6 +51,14 @@ class PredictionEngine:
         # -------------------------------------------------------------
         w_trend, w_chips, w_momentum, w_position = PredictionEngine._adaptive_weights(
             df_daily_calc, indicators_weekly
+        )
+
+        # 禁用维度后按实际参与项归一化，避免中性50分被压低。
+        if not PredictionEngine.POSITION_DIM_ENABLED:
+            w_position = 0.0
+        total_weight = w_trend + w_chips + w_momentum + w_position
+        w_trend, w_chips, w_momentum, w_position = (
+            w / total_weight for w in (w_trend, w_chips, w_momentum, w_position)
         )
 
         # -------------------------------------------------------------
@@ -102,19 +110,19 @@ class PredictionEngine:
         poc = chips_d.get("poc", current_price)
 
         if profit_ratio >= 80:
-            chip_score += 25  # 获利盘极高，无套牢盘阻力
+            chip_score += 25  # 模型估算的现价以下筹码占比较高
         elif profit_ratio >= 60:
             chip_score += 15
         elif profit_ratio <= 15:
-            chip_score -= 20  # 上方全是套牢盘
+            chip_score -= 20  # 模型估算的现价以上筹码占比较高
 
         if conc_90 <= 10.0:
-            chip_score += 15  # 单峰高度控盘
+            chip_score += 15  # 模型估算分布集中，不代表主力控盘
         elif conc_90 >= 25.0:
             chip_score -= 10  # 筹码发散
 
         if current_price >= poc * 0.98 and current_price <= poc * 1.03:
-            chip_score += 10  # 紧贴主力成本线
+            chip_score += 10  # 接近模型估算的筹码峰值
 
         chip_score = max(5, min(95, chip_score))
 
@@ -190,7 +198,7 @@ class PredictionEngine:
         position_score = max(5, min(95, position_score))
 
         # -------------------------------------------------------------
-        # 2. 历史相似形态胜率回测计算 (严格修正版)
+        # 2. 历史相似形态价格路径描述 (非可交易回测)
         # -------------------------------------------------------------
         backtest_result = PredictionEngine._backtest_similar_patterns(
             df_daily_calc,
@@ -200,39 +208,39 @@ class PredictionEngine:
         )
 
         # -------------------------------------------------------------
-        # 3. 综合多头置信度与走势预测判定 (使用自适应权重)
+        # 3. 综合方向评分 (0-100，中性50；不是校准概率)
         # -------------------------------------------------------------
-        composite_score = int(
+        composite_score = round(max(0.0, min(100.0,
             trend_score * w_trend +
             chip_score * w_chips +
             momentum_score * w_momentum +
-            position_score * w_position * (1.0 if PredictionEngine.POSITION_DIM_ENABLED else 0.0)
-        )
+            position_score * w_position
+        )), 1)
+        # 历史相似形态统计仅作描述，不混入方向评分。
+        bullish_score = composite_score
+        bearish_score = round(100.0 - bullish_score, 1)
 
-        # v2.6: 单股回测胜率经点时间评估证实无预测力(pooled Rank-IC=0.005, t=0.64, §14.2),
-        # 不再以任何权重混入 bullish_prob(§14.3 明确要求), 仅作为历史描述在 UI 展示。
-        bullish_prob = round(float(composite_score), 1)
-
-        bullish_prob = max(15.0, min(92.0, bullish_prob))
+        # deprecated 兼容字段：保留旧数值类型和15-92截断规则，不代表真实胜率。
+        bullish_prob = max(15.0, min(92.0, bullish_score))
         bearish_prob = round(100.0 - bullish_prob, 1)
 
-        # 走势信号类型判定
-        if bullish_prob >= 75 and (s_dist_pct <= 3.0 or divergences.get("bullish_divergence")):
+        # 原有阈值原样保留；权重归一化后尚未重新验证，不是校准概率阈值。
+        if bullish_score >= 75 and (s_dist_pct <= 3.0 or divergences.get("bullish_divergence")):
             signal_type = "BUY_SUPPORT_PULLBACK"
-            signal_title = "⭐ 强支撑共振·高胜率买点"
+            signal_title = "⭐ 支撑共振·偏多评分信号"
             signal_color = "#00F5A0" # 霓虹翠绿
-            signal_action = "强烈建议：现价处于强支撑共振带，多指标底背离/企稳，向上盈亏比极高，建议分批逢低吸纳。"
-        elif bullish_prob >= 70 and r_dist_pct <= 1.5 and vol_ratio >= 1.5:
+            signal_action = "规则提示：价格接近支撑或出现底背离，模型方向评分偏多；并非已验证买点，需结合风险与后续确认。"
+        elif bullish_score >= 70 and r_dist_pct <= 1.5 and vol_ratio >= 1.5:
             signal_type = "BUY_BREAKOUT"
             signal_title = "🚀 放量主升·突破买入信号"
             signal_color = "#00D2FF"
-            signal_action = "突破买点：放量冲击大级别压力带，主力筹码单峰锁定，突破阻力后上方空间完全打开。"
-        elif bearish_prob >= 65 and r_dist_pct <= 1.5:
+            signal_action = "规则提示：放量接近压力带且模型方向评分偏多；筹码分布仅为估算，不代表主力锁仓或必然突破。"
+        elif bearish_score >= 65 and r_dist_pct <= 1.5:
             signal_type = "SELL_RESISTANCE_REJECT"
             signal_title = "⚠️ 触及强压力·减仓预警"
             signal_color = "#FF5252"
             signal_action = "风险预警：临近强阻力带且动能背离/超买，面临波段回落压力，建议逢高止盈锁定利润。"
-        elif bearish_prob >= 65 and s_dist_pct < 0:
+        elif bearish_score >= 65 and s_dist_pct < 0:
             signal_type = "SELL_BREAKDOWN"
             signal_title = "⛔ 破位止损·离场观望"
             signal_color = "#FF3366"
@@ -309,7 +317,7 @@ class PredictionEngine:
             "stop_loss_risk": f"-{expected_loss_pct:.1f}%",
             "rr_ratio": rr_ratio,
             "rr_quality": "异常（止损位≥现价或无盈利空间，禁止入场）" if rr_ratio <= 0 else ("极佳 (≥3:1)" if rr_ratio >= 3.0 else ("良好 (≥2:1)" if rr_ratio >= 2.0 else "一般 (<2:1)")),
-            "holding_period": "3 ~ 8 个交易日 (短线波段)" if bullish_prob >= 70 else "1 ~ 3 个月 (中线波段)",
+            "holding_period": "3 ~ 8 个交易日 (短线波段)" if bullish_score >= 70 else "1 ~ 3 个月 (中线波段)",
             "stop_loss_method": f"止损下限 {PredictionEngine.SL_ATR_MULT:g}×ATR (S1 只能放宽不能收紧), 单笔风险上限 {PredictionEngine.SL_MAX_RISK_PCT:g}%"
         }
 
@@ -323,6 +331,16 @@ class PredictionEngine:
         }
 
         return {
+            "bullish_score": bullish_score,
+            "bearish_score": bearish_score,
+            "probability_status": "uncalibrated",
+            "probability_note": "多空评分为0-100启发式方向分，中性50；未进行概率校准，不代表上涨/下跌概率或交易胜率。旧概率字段仅为兼容的截断评分，已弃用。",
+            "deprecated_fields": {
+                "bullish_probability": "deprecated: 使用bullish_score；此字段为15-92截断评分而非概率",
+                "bearish_probability": "deprecated: 使用bearish_score；此字段为100减旧多头字段而非概率"
+            },
+            "signal_rule_status": "unvalidated_after_weight_normalization",
+            "signal_rule_note": "原有信号及持有期阈值保留，权重归一化后未经重新验证。",
             "bullish_probability": bullish_prob,
             "bearish_probability": bearish_prob,
             "composite_score": composite_score,
@@ -400,19 +418,28 @@ class PredictionEngine:
         is_uptrend: bool
     ) -> Dict[str, Any]:
         """
-        在历史K线中回测相似形态的上涨概率统计
-        v2.2 改进：
+        样本内相似形态价格路径描述，不是可交易策略回测或实时胜率估计。
+        假设信号日收盘入场，自下一根K线检查止损；未模拟次日开盘成交、
+        实际成交后T+1限制、跳空滑点和涨跌停成交约束。
+        v2.2 历史规则：
         1. 数据不足时返回 insufficient_data 而非虚假高胜率
-        2. 路径依赖止损模拟：持仓期间盘中低点触碰 2×ATR 动态止损线则视为止损出局(亏损)
+        2. 路径依赖止损模拟：持仓期间盘中低点触碰配置倍数×ATR 动态止损线则视为止损出局(亏损)
         3. 扣除交易成本
         4. 样本去重叠间隔提升至 10 根K线，降低 10日/20日窗口自相关
         """
+        description = {
+            "analysis_type": "in_sample_price_path_description",
+            "is_tradable_backtest": False,
+            "entry_assumption": "signal_day_close",
+            "execution_note": "样本内价格路径描述：按信号日收盘价假设入场，自下一根K线检查止损；未按次日开盘成交，未完整模拟实际成交后T+1、跳空滑点或涨跌停成交约束，不可视作可交易回测或实时胜率。"
+        }
         cost = PredictionEngine.TRANSACTION_COST_PCT * 2  # 双向成本 ~1%
 
         if len(df) < 60:
             return {
+                **description,
                 "status": "insufficient_data",
-                "message": "K线数据不足60根，无法进行有效回测",
+                "message": "K线数据不足60根，无法进行有效历史路径统计",
                 "sample_count": 0,
                 "win_rate_5d": None,
                 "win_rate_10d": None,
@@ -423,6 +450,7 @@ class PredictionEngine:
         # 退化防护: 三个相似条件全部未激活时，"相似形态"退化为全样本统计，结果无意义
         if not any([is_near_support, is_oversold, is_uptrend]):
             return {
+                **description,
                 "status": "insufficient_data",
                 "message": "当前时点未激活任何相似形态条件(回踩支撑/超卖/多头趋势)，无法定义相似样本",
                 "sample_count": 0,
@@ -495,8 +523,9 @@ class PredictionEngine:
 
         if not samples or len(samples) < 5:
             return {
+                **description,
                 "status": "insufficient_data",
-                "message": f"相似形态样本不足 (仅{len(samples)}个)，回测结果不可靠",
+                "message": f"相似形态样本不足 (仅{len(samples)}个)，历史路径统计不可靠",
                 "sample_count": len(samples),
                 "win_rate_5d": None,
                 "win_rate_10d": None,
@@ -510,6 +539,7 @@ class PredictionEngine:
         avg_gain = round(float(np.mean([s["gain_10d"] for s in samples])), 1)
 
         return {
+            **description,
             "status": "sufficient_data",
             "sample_count": len(samples),
             "win_rate_5d": win_5d,
