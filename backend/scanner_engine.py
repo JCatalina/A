@@ -21,7 +21,7 @@ DEMO_CODES = [
 
 class ScannerEngine:
     """
-    全A股盘后高胜率批量扫描与选股雷达引擎
+    全A股盘后规则筛选批量扫描与选股雷达引擎
     """
 
     def __init__(self, data_fetcher: DataFetcher):
@@ -143,7 +143,7 @@ class ScannerEngine:
     @staticmethod
     def match_strategies(res: Dict[str, Any]) -> List[str]:
         """
-        统一的四大高胜率策略匹配器 (盘后扫描与演示数据共用，保证口径一致)
+        统一的四大规则筛选策略匹配器 (盘后扫描与演示数据共用，保证口径一致)
         策略条件与 ALGORITHM_DOC.md 第6节对齐
         """
         pred = res.get("prediction", {}) or {}
@@ -209,7 +209,7 @@ class ScannerEngine:
 
     def scan_market(self, strategy: str = "ALL", limit_stocks: int = 150, max_workers: int = 8) -> List[Dict[str, Any]]:
         """
-        批量扫描股票池并按高胜率策略筛选
+        批量扫描股票池并按规则筛选策略筛选
         strategy: 'ALL', 'SUPPORT_PULLBACK', 'BREAKOUT_PRESSURE', 'MAIN_WAVE_TREND', 'OVERSOLD_DIVERGENCE'
         结果统一以全量命中列表写入 last_results["ALL"]，读取路径按策略实时过滤，
         保证"全部/单策略"各视图与最新一次扫描严格一致（不再按 strategy 分键存储产生新旧错位）。

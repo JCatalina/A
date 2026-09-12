@@ -62,8 +62,7 @@ class IceEngine:
         self._daily_cache: Dict[tuple, tuple] = {}       # (symbol, count) -> (ts, df), 日K TTL 缓存
         self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
         self._http_lock = threading.RLock()              # requests.Session 多线程并发保护
-        self._pred_lock = threading.Lock()
-        self._pred_refreshing: set = set()               # 后台刷新去重键集合
+        self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
 
     @staticmethod
     def _calib_path(symbol: str) -> str:
@@ -473,7 +472,6 @@ class IceEngine:
         if ent:
             if now - ent[0] < PRED_TTL:
                 return ent[1]
-            # 过期概率必须重新核验特征，不能在刷新失败时无限作为成功结果返回。
 
         res = self._predict_sync(symbol)
         if res.get("status") == "success":
@@ -481,28 +479,6 @@ class IceEngine:
         else:
             self._pred_cache.pop(symbol, None)
         return res
-
-    def _refresh_predict_async(self, symbol: str) -> None:
-        """后台刷新过期冰点结果 (同键去重, 静默失败不影响已有结果)"""
-        with self._pred_lock:
-            if symbol in self._pred_refreshing:
-                return
-            self._pred_refreshing.add(symbol)
-
-        def _run():
-            try:
-                res = self._predict_sync(symbol)
-                if res.get("status") == "success":
-                    self._pred_cache[symbol] = (time.time(), res)
-                else:
-                    self._pred_cache.pop(symbol, None)
-            except Exception as e:
-                logger.warning(f"Ice predict async refresh failed {symbol}: {e}")
-            finally:
-                with self._pred_lock:
-                    self._pred_refreshing.discard(symbol)
-
-        threading.Thread(target=_run, name=f"ice-refresh-{symbol}", daemon=True).start()
 
     def _predict_sync(self, symbol: str) -> Dict[str, Any]:
         """同步计算冰点反弹概率 (无缓存逻辑)"""
