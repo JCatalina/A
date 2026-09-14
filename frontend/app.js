@@ -20,6 +20,86 @@ let currentMacroData = null;
 const macroCache = {};
 let iceRequestId = 0;
 
+// 美股大盘研判视图状态 (日K/周K/月K 三周期，无分时级别)
+let currentUsSymbol = "usdji";
+let currentUsScale = "day";
+let currentUsData = null;
+let usMacroKlineChartInst = null;
+let usMacroPollPending = false;
+let usMacroRenderedUpdateTime = "";
+const usMacroCache = {};
+
+// ==========================================================================
+// 大盘研判面板描述符
+// A股面板与美股面板共用全套渲染函数, 差异仅在 DOM id、接口地址与周期口径;
+// A股侧的 scale/data/图表实例仍读写原有全局变量, 既有调用点无需改动。
+// ==========================================================================
+const CN_MACRO_PANEL = {
+    key: "cn",
+    api: "/api/index/analysis",
+    chartTitle: "大盘指数多周期走势图",
+    chartTitleSel: "#indexWorkspace .m-chart-title",
+    seriesName: "大盘K线",
+    scaleNames: { "240": "日K线", "1200": "周K线", "60": "60分钟", "30": "30分钟" },
+    // 跨年度周期在X轴显示 年-月-日, 其余仅显示 月-日
+    longDateScales: ["1200"],
+    cache: macroCache,
+    get symbol() { return currentMacroSymbol; },
+    get scale() { return currentMacroScale; },
+    set scale(v) { currentMacroScale = v; },
+    get data() { return currentMacroData; },
+    set data(v) { currentMacroData = v; },
+    get chartInst() { return macroKlineChartInst; },
+    set chartInst(v) { macroKlineChartInst = v; },
+    get pollPending() { return macroPollPending; },
+    set pollPending(v) { macroPollPending = v; },
+    get renderedUpdateTime() { return macroRenderedUpdateTime; },
+    set renderedUpdateTime(v) { macroRenderedUpdateTime = v; },
+    ids: {
+        name: "macroIndexName", price: "macroIndexPrice", chg: "macroIndexChg", desc: "macroIndexDesc",
+        updateMeta: "macroUpdateMeta",
+        opMain: "opLicenseMain", opDesc: "opLicenseDesc", opPos: "opPosText",
+        pointTitles: ["macroPoint1Title", "macroPoint2Title", "macroPoint3Title", "macroPoint4Title"],
+        pointContents: ["macroPoint1Content", "macroPoint2Content", "macroPoint3Content", "macroPoint4Content"],
+        supports: "macroSupportItems", resistances: "macroResistanceItems",
+        periodsGrid: "periodsQuadGrid",
+        chartDom: "macroKlineChart"
+    }
+};
+
+const US_MACRO_PANEL = {
+    key: "us",
+    api: "/api/us/index/analysis",
+    chartTitle: "美股指数多周期走势图",
+    chartTitleSel: "#usWorkspace .m-chart-title",
+    seriesName: "美股指数K线",
+    scaleNames: { day: "日K线", week: "周K线", month: "月K线" },
+    // 周K与月K均跨年度, X轴需带年份
+    longDateScales: ["week", "month"],
+    cache: usMacroCache,
+    get symbol() { return currentUsSymbol; },
+    get scale() { return currentUsScale; },
+    set scale(v) { currentUsScale = v; },
+    get data() { return currentUsData; },
+    set data(v) { currentUsData = v; },
+    get chartInst() { return usMacroKlineChartInst; },
+    set chartInst(v) { usMacroKlineChartInst = v; },
+    get pollPending() { return usMacroPollPending; },
+    set pollPending(v) { usMacroPollPending = v; },
+    get renderedUpdateTime() { return usMacroRenderedUpdateTime; },
+    set renderedUpdateTime(v) { usMacroRenderedUpdateTime = v; },
+    ids: {
+        name: "usMacroIndexName", price: "usMacroIndexPrice", chg: "usMacroIndexChg", desc: "usMacroIndexDesc",
+        updateMeta: "usMacroUpdateMeta",
+        opMain: "usOpLicenseMain", opDesc: "usOpLicenseDesc", opPos: "usOpPosText",
+        pointTitles: ["usMacroPoint1Title", "usMacroPoint2Title", "usMacroPoint3Title", "usMacroPoint4Title"],
+        pointContents: ["usMacroPoint1Content", "usMacroPoint2Content", "usMacroPoint3Content", "usMacroPoint4Content"],
+        supports: "usMacroSupportItems", resistances: "usMacroResistanceItems",
+        periodsGrid: "usPeriodsQuadGrid",
+        chartDom: "usMacroKlineChart"
+    }
+};
+
 // v2.8: 服务常驻轮询状态 (防并发重入 / 无变化不重复渲染)
 let marketIndicesLoading = false;
 let macroPollPending = false;      // 大盘研判静默轮询在途标记
@@ -1051,130 +1131,227 @@ function bindMacroEvents() {
     });
 
     // 大盘指数胶囊切换
-    document.querySelectorAll(".index-capsule-tabs .index-capsule-btn").forEach(btn => {
-        btn.addEventListener("click", (e) => {
-            document.querySelectorAll(".index-capsule-tabs .index-capsule-btn").forEach(b => b.classList.remove("active"));
-            const targetBtn = e.target.closest(".index-capsule-btn");
-            if (targetBtn) {
-                targetBtn.classList.add("active");
-                currentMacroSymbol = targetBtn.dataset.symbol || "sh000001";
-                loadMacroIndexAnalysis(currentMacroSymbol);
-                loadIceRebound(currentMacroSymbol);   // 冰点面板跟随所选指数
-            }
-        });
+    bindMacroCapsules(CN_MACRO_PANEL, "#indexCapsuleTabs", (symbol) => {
+        currentMacroSymbol = symbol;
+        loadMacroIndexAnalysis(currentMacroSymbol);
+        loadIceRebound(currentMacroSymbol);   // 冰点面板跟随所选指数
     });
 
     // 大盘K线周期切换 (日K:240 / 周K:1200 / 60分:60 / 30分:30)
-    document.querySelectorAll(".macro-chart-toolbar .m-btn").forEach(btn => {
+    bindMacroScaleButtons(CN_MACRO_PANEL, "#indexWorkspace .macro-chart-toolbar");
+}
+
+/**
+ * 绑定指数胶囊切换。
+ * 选择器必须限定到各自容器: A股与美股面板复用同一套 class, 全局选择会跨面板串选。
+ */
+function bindMacroCapsules(panel, containerSel, onSelect) {
+    const btnSel = `${containerSel} .index-capsule-btn`;
+    document.querySelectorAll(btnSel).forEach(btn => {
+        btn.addEventListener("click", (e) => {
+            const targetBtn = e.target.closest(".index-capsule-btn");
+            if (!targetBtn) return;
+            document.querySelectorAll(btnSel).forEach(b => b.classList.remove("active"));
+            targetBtn.classList.add("active");
+            onSelect(targetBtn.dataset.symbol || panel.symbol);
+        });
+    });
+}
+
+/**
+ * 绑定K线周期切换: 优先用已加载的全周期数据秒切, 仅在该周期缺失时才回源请求
+ */
+function bindMacroScaleButtons(panel, toolbarSel) {
+    const btnSel = `${toolbarSel} .m-btn`;
+    document.querySelectorAll(btnSel).forEach(btn => {
         btn.addEventListener("click", async (e) => {
-            document.querySelectorAll(".macro-chart-toolbar .m-btn").forEach(b => b.classList.remove("active"));
             const targetBtn = e.target.closest(".m-btn");
             if (!targetBtn) return;
-            
+            document.querySelectorAll(btnSel).forEach(b => b.classList.remove("active"));
             targetBtn.classList.add("active");
-            currentMacroScale = targetBtn.dataset.scale || "240";
+            panel.scale = targetBtn.dataset.scale || panel.scale;
 
             // 1. 优先从已有全周期数据中秒切图表
-            if (currentMacroData && currentMacroData.all_kline_data && currentMacroData.all_kline_data[currentMacroScale] && currentMacroData.all_kline_data[currentMacroScale].length > 0) {
-                renderMacroKlineChart(currentMacroData.all_kline_data[currentMacroScale], currentMacroData.clustered_levels);
-                setTimeout(() => macroKlineChartInst?.resize(), 50);
-            } else {
-                // 2. 否则请求后端接口获取指定周期K线
-                try {
-                    const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(currentMacroSymbol)}&scale=${encodeURIComponent(currentMacroScale)}`);
-                    const json = await res.json();
-                    if (json.data) {
-                        currentMacroData = json.data;
-                        const kData = (json.data.all_kline_data && json.data.all_kline_data[currentMacroScale]) 
-                                      ? json.data.all_kline_data[currentMacroScale] 
-                                      : json.data.kline_data;
-                        renderMacroKlineChart(kData, json.data.clustered_levels);
-                        setTimeout(() => macroKlineChartInst?.resize(), 50);
-                    }
-                } catch (err) {
-                    console.error("Scale change error", err);
+            const cachedK = panel.data?.all_kline_data?.[panel.scale];
+            if (cachedK && cachedK.length > 0) {
+                renderMacroKlineChart(cachedK, panel.data.clustered_levels, panel);
+                setTimeout(() => panel.chartInst?.resize(), 50);
+                return;
+            }
+            // 2. 否则请求后端接口获取指定周期K线
+            try {
+                const res = await fetch(`${panel.api}?symbol=${encodeURIComponent(panel.symbol)}&scale=${encodeURIComponent(panel.scale)}`);
+                const json = await res.json();
+                if (json.data) {
+                    panel.data = json.data;
+                    const kData = json.data.all_kline_data?.[panel.scale] || json.data.kline_data;
+                    renderMacroKlineChart(kData, json.data.clustered_levels, panel);
+                    setTimeout(() => panel.chartInst?.resize(), 50);
                 }
+            } catch (err) {
+                console.error("Scale change error", panel.key, err);
             }
         });
     });
+}
+
+// ==========================================================================
+// 美股大盘研判 — 事件绑定、指数联动与行情条
+// ==========================================================================
+
+/**
+ * 绑定美股面板事件: 顶部Tab、指数胶囊、行情条点选、K线周期
+ */
+function bindUsMacroEvents() {
+    document.getElementById("tabUsView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabUsView", "usWorkspace");
+        loadUsMarketIndices();
+        loadMacroIndexAnalysis(currentUsSymbol, { panel: US_MACRO_PANEL });
+        setTimeout(() => usMacroKlineChartInst?.resize(), 150);
+    });
+
+    bindMacroCapsules(US_MACRO_PANEL, "#usIndexCapsuleTabs", selectUsIndex);
+    bindMacroScaleButtons(US_MACRO_PANEL, "#usWorkspace .macro-chart-toolbar");
+
+    // 行情条内容每次轮询都会重建, 故用容器事件委托而非逐项绑定
+    document.getElementById("usMarketTicker")?.addEventListener("click", (e) => {
+        const item = e.target.closest(".us-ticker-item");
+        if (item?.dataset.symbol) selectUsIndex(item.dataset.symbol);
+    });
+
+    // 美股面板可见时才轮询, 避免用户停留在A股视图时给行情源施加无谓负载
+    setInterval(() => {
+        const ws = document.getElementById("usWorkspace");
+        if (!ws || ws.style.display === "none") return;
+        loadUsMarketIndices();
+        loadMacroIndexAnalysis(currentUsSymbol, { panel: US_MACRO_PANEL, silent: true });
+    }, 60000);
+}
+
+/**
+ * 切换当前美股指数 (胶囊与行情条共用, 保持两处高亮同步)
+ */
+function selectUsIndex(symbol) {
+    currentUsSymbol = symbol;
+    document.querySelectorAll("#usIndexCapsuleTabs .index-capsule-btn").forEach(b => {
+        b.classList.toggle("active", b.dataset.symbol === symbol);
+    });
+    loadMacroIndexAnalysis(symbol, { panel: US_MACRO_PANEL });
+}
+
+/**
+ * 美股四大指数行情条
+ */
+async function loadUsMarketIndices() {
+    const el = document.getElementById("usMarketTicker");
+    if (!el) return;
+    try {
+        const res = await fetch("/api/us/market/indices");
+        const json = await res.json();
+        const list = json.data || [];
+        if (list.length === 0) {
+            el.innerHTML = '<div class="ticker-loading">暂未获取到美股指数行情</div>';
+            return;
+        }
+        const items = list.map(idx => {
+            const isUp = Number(idx.change_pct) >= 0;
+            const active = idx.code === currentUsSymbol ? " active" : "";
+            return `
+                <div class="us-ticker-item ${isUp ? "up" : "down"}${active}" data-symbol="${idx.code}">
+                    <span class="ut-name">${idx.name}</span>
+                    <span class="ut-price">${Number(idx.price).toFixed(2)}</span>
+                    <span class="ut-chg">${isUp ? "+" : ""}${Number(idx.change_pct).toFixed(2)}%</span>
+                </div>`;
+        }).join("");
+        el.innerHTML = `${items}<div class="us-ticker-time">行情源报价 ${list[0].quote_time || "--"}</div>`;
+    } catch (e) {
+        console.error("Error loading US indices", e);
+        el.innerHTML = '<div class="ticker-loading">美股指数行情获取失败</div>';
+    }
 }
 
 /**
  * 载入大盘指数多周期深度研判数据
  */
 async function loadMacroIndexAnalysis(symbol, opts = {}) {
+    const panel = opts.panel || CN_MACRO_PANEL;
     const silent = !!opts.silent;   // 静默轮询: 防重入, 且 update_time 未变时只存档不重渲染
-    if (silent && macroPollPending) return;
-    if (silent) macroPollPending = true;
+    if (silent && panel.pollPending) return;
+    if (silent) panel.pollPending = true;
     try {
         // 先渲染本指数上次的响应快照(若有), 请求返回后再覆盖 — 切回看过的指数秒开
-        if (!silent && macroCache[symbol]) renderMacroAnalysis(macroCache[symbol]);
+        if (!silent && panel.cache[symbol]) renderMacroAnalysis(panel.cache[symbol], panel);
 
-        const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(symbol)}&scale=${encodeURIComponent(currentMacroScale)}`);
+        const res = await fetch(`${panel.api}?symbol=${encodeURIComponent(symbol)}&scale=${encodeURIComponent(panel.scale)}`);
         const json = await res.json();
         if (json.status !== "success" || !json.data) {
-            if (!silent && !macroCache[symbol]) console.warn("未能获取大盘指数数据");
+            if (!silent && !panel.cache[symbol]) console.warn("未能获取指数研判数据", panel.key, symbol);
             return;
         }
-        macroCache[symbol] = json.data;
+        panel.cache[symbol] = json.data;
         // 响应回来时若已切到别的指数, 只存档不渲染, 避免旧指数内容闪烁覆盖;
         // 静默轮询仅在服务端产出新结果(update_time 变化)时才重渲染, 不打断用户浏览图表
-        if (symbol === currentMacroSymbol && (!silent || json.data.update_time !== macroRenderedUpdateTime)) {
-            renderMacroAnalysis(json.data);
-            macroRenderedUpdateTime = json.data.update_time || "";
+        if (symbol === panel.symbol && (!silent || json.data.update_time !== panel.renderedUpdateTime)) {
+            renderMacroAnalysis(json.data, panel);
+            panel.renderedUpdateTime = json.data.update_time || "";
         }
     } catch (e) {
-        console.error("Error loading macro index analysis", e);
+        console.error("Error loading macro index analysis", panel.key, e);
     } finally {
-        if (silent) macroPollPending = false;
+        if (silent) panel.pollPending = false;
     }
 }
 
-function renderMacroAnalysis(data) {
-    currentMacroData = data;
-    renderMacroHeader(data);
-    renderMacroConclusion(data.conclusion);
-    renderMacroLevels(data.clustered_levels);
-    renderPeriodsQuad(data.periods);
+function renderMacroAnalysis(data, panel = CN_MACRO_PANEL) {
+    panel.data = data;
+    renderMacroHeader(data, panel);
+    renderMacroConclusion(data.conclusion, panel);
+    renderMacroLevels(data.clustered_levels, panel);
+    renderPeriodsQuad(data.periods, panel);
 
-    const kData = (data.all_kline_data && data.all_kline_data[currentMacroScale])
-                  ? data.all_kline_data[currentMacroScale]
+    const kData = (data.all_kline_data && data.all_kline_data[panel.scale])
+                  ? data.all_kline_data[panel.scale]
                   : data.kline_data;
-    renderMacroKlineChart(kData, data.clustered_levels);
-    setTimeout(() => macroKlineChartInst?.resize(), 80);
+    renderMacroKlineChart(kData, data.clustered_levels, panel);
+    setTimeout(() => panel.chartInst?.resize(), 80);
 }
 
 /**
  * 渲染大盘指数头部摘要
  */
-function renderMacroHeader(data) {
-    document.getElementById("macroIndexName").innerText = data.name;
-    document.getElementById("macroIndexPrice").innerText = data.current_price.toFixed(2);
+function renderMacroHeader(data, panel = CN_MACRO_PANEL) {
+    const ids = panel.ids;
+    document.getElementById(ids.name).innerText = data.name;
+    document.getElementById(ids.price).innerText = data.current_price.toFixed(2);
     
     const isUp = data.change_pct >= 0;
-    const chgEl = document.getElementById("macroIndexChg");
+    const chgEl = document.getElementById(ids.chg);
     chgEl.innerText = `${isUp ? '+' : ''}${data.change_pct.toFixed(2)}%`;
     chgEl.style.background = isUp ? "rgba(0, 245, 160, 0.15)" : "rgba(255, 51, 102, 0.15)";
     chgEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
     
-    document.getElementById("macroIndexDesc").innerText = data.desc;
+    document.getElementById(ids.desc).innerText = data.desc;
 
-    // 动态展示最新实时时间戳
-    const updateMetaEl = document.getElementById("macroUpdateMeta");
+    // 动态展示最新实时时间戳; 美股附带行情源报价时间 (与本地计算时间常隔一个交易日)
+    const updateMetaEl = document.getElementById(ids.updateMeta);
     if (updateMetaEl) {
-        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.update_time || new Date().toLocaleString()}</strong>`;
+        const quoteTime = data.quote_time && data.quote_time !== "--"
+            ? ` · 行情源报价: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.quote_time}</strong>`
+            : "";
+        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.update_time || new Date().toLocaleString()}</strong>${quoteTime}`;
     }
 }
 
 /**
  * 渲染大盘核心结论与操作许可 (与截图对齐)
  */
-function renderMacroConclusion(conclusion) {
+function renderMacroConclusion(conclusion, panel = CN_MACRO_PANEL) {
     if (!conclusion) return;
+    const ids = panel.ids;
 
-    const opMain = document.getElementById("opLicenseMain");
-    const opDesc = document.getElementById("opLicenseDesc");
-    const opPos = document.getElementById("opPosText");
+    const opMain = document.getElementById(ids.opMain);
+    const opDesc = document.getElementById(ids.opDesc);
+    const opPos = document.getElementById(ids.opPos);
 
     opMain.innerText = conclusion.op_license || "大方向不明，先观望";
     opMain.style.color = conclusion.op_color || "var(--neon-gold)";
@@ -1182,31 +1359,23 @@ function renderMacroConclusion(conclusion) {
     opPos.innerText = conclusion.suggested_pos || "30% ~ 50%";
 
     // 四维度解析
-    const p1 = conclusion.macro_direction || {};
-    document.getElementById("macroPoint1Title").innerText = p1.title || "中期大级别方向";
-    document.getElementById("macroPoint1Content").innerText = p1.content || "";
-
-    const p2 = conclusion.short_term_timing || {};
-    document.getElementById("macroPoint2Title").innerText = p2.title || "当前时点节奏";
-    document.getElementById("macroPoint2Content").innerText = p2.content || "";
-
-    const p3 = conclusion.compare_prev || {};
-    document.getElementById("macroPoint3Title").innerText = p3.title || "相较上一收盘";
-    document.getElementById("macroPoint3Content").innerText = p3.content || "";
-
-    const p4 = conclusion.next_step || {};
-    document.getElementById("macroPoint4Title").innerText = p4.title || "下一步等待与防守";
-    document.getElementById("macroPoint4Content").innerText = p4.content || "";
+    const fallbackTitles = ["中期大级别方向", "当前时点节奏", "相较上一收盘", "下一步等待与防守"];
+    [conclusion.macro_direction, conclusion.short_term_timing,
+     conclusion.compare_prev, conclusion.next_step].forEach((point, i) => {
+        const p = point || {};
+        document.getElementById(ids.pointTitles[i]).innerText = p.title || fallbackTitles[i];
+        document.getElementById(ids.pointContents[i]).innerText = p.content || "";
+    });
 }
 
 /**
  * 渲染大盘专属支撑/压力位矩阵
  */
-function renderMacroLevels(levels) {
+function renderMacroLevels(levels, panel = CN_MACRO_PANEL) {
     if (!levels) return;
 
-    const sContainer = document.getElementById("macroSupportItems");
-    const rContainer = document.getElementById("macroResistanceItems");
+    const sContainer = document.getElementById(panel.ids.supports);
+    const rContainer = document.getElementById(panel.ids.resistances);
 
     const supports = levels.supports || [];
     const resistances = levels.resistances || [];
@@ -1229,10 +1398,10 @@ function renderMacroLevels(levels) {
 }
 
 /**
- * 渲染四大周期对比卡片 (30分钟 / 60分钟 / 日线 / 周线) - 像素级对齐截图
+ * 渲染多周期对比卡片 (A股: 30分钟/60分钟/日线/周线; 美股: 月线/周线/日线)
  */
-function renderPeriodsQuad(periods) {
-    const grid = document.getElementById("periodsQuadGrid");
+function renderPeriodsQuad(periods, panel = CN_MACRO_PANEL) {
+    const grid = document.getElementById(panel.ids.periodsGrid);
     if (!grid || !periods) return;
 
     grid.innerHTML = periods.map(p => `
@@ -1268,7 +1437,7 @@ function renderPeriodsQuad(periods) {
 
             <!-- 技术描述与更新时间 -->
             <div class="p-tech-desc">
-                <div style="font-size: 10px; color: var(--color-text-dim); margin-bottom: 2px;">时间: ${p.last_time}</div>
+                <div style="font-size: 10px; color: var(--color-text-dim); margin-bottom: 2px;">时间: ${p.last_time}${p.in_progress ? ' · <span style="color: var(--neon-gold); font-weight: 700;">周期进行中</span>' : ''}</div>
                 <div>${p.status_desc}</div>
             </div>
 
@@ -1284,28 +1453,29 @@ function renderPeriodsQuad(periods) {
 /**
  * 渲染大盘K线图表 (ECharts)
  */
-function renderMacroKlineChart(klineData, levels) {
-    const macroKlineDom = document.getElementById("macroKlineChart");
+function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
+    const macroKlineDom = document.getElementById(panel.ids.chartDom);
     if (!macroKlineDom) return;
 
-    if (!macroKlineChartInst) {
-        macroKlineChartInst = echarts.init(macroKlineDom);
+    if (!panel.chartInst) {
+        panel.chartInst = echarts.init(macroKlineDom);
     }
+    const chartInst = panel.chartInst;
 
     // 动态更新标题上的周期标识
-    const scaleNameMap = { "240": "日K线", "1200": "周K线", "60": "60分钟", "30": "30分钟" };
-    const chartTitleEl = document.querySelector(".m-chart-title");
+    const scaleNameMap = panel.scaleNames;
+    const chartTitleEl = document.querySelector(panel.chartTitleSel);
     if (chartTitleEl) {
-        const curScaleName = scaleNameMap[currentMacroScale] || "日K线";
-        chartTitleEl.innerHTML = `大盘指数多周期走势图 <span style="font-size:12px; color:var(--neon-cyan); font-weight:700; margin-left:8px; background:rgba(2,132,199,0.12); padding:2px 8px; border-radius:4px; border:1px solid rgba(2,132,199,0.3);">[${curScaleName}]</span>`;
+        const curScaleName = scaleNameMap[panel.scale] || "日K线";
+        chartTitleEl.innerHTML = `${panel.chartTitle} <span style="font-size:12px; color:var(--neon-cyan); font-weight:700; margin-left:8px; background:rgba(2,132,199,0.12); padding:2px 8px; border-radius:4px; border:1px solid rgba(2,132,199,0.3);">[${curScaleName}]</span>`;
     }
 
     if (!klineData || klineData.length === 0) {
-        macroKlineChartInst.clear();
+        chartInst.clear();
         return;
     }
 
-    macroKlineChartInst.clear();
+    chartInst.clear();
 
     const dates = klineData.map(item => item.date);
     const kValues = klineData.map(item => [item.open, item.close, item.low, item.high]);
@@ -1366,7 +1536,7 @@ function renderMacroKlineChart(klineData, levels) {
             formatter: function(params) {
                 if (!params || params.length === 0) return '';
                 const dateStr = params[0].axisValue;
-                const curScaleName = scaleNameMap[currentMacroScale] || "日K线";
+                const curScaleName = scaleNameMap[panel.scale] || "日K线";
                 let resHtml = `<div style="font-weight:800; color:var(--neon-cyan); margin-bottom:4px; border-bottom:1px solid #e2e8f0; padding-bottom:3px;">
                     ${dateStr} <span style="font-size:11px; color:#64748b; font-weight:normal;">(${curScaleName})</span>
                 </div>`;
@@ -1433,8 +1603,8 @@ function renderMacroKlineChart(klineData, levels) {
                         if (!val) return '';
                         // 分时线 (如 2026-08-28 14:30:00) -> 08-28 14:30
                         if (val.length > 10) return val.substring(5, 16);
-                        // 周K线 (跨年度数据) -> 25-06-12 / 26-08-28
-                        if (currentMacroScale === "1200") return val.substring(2); 
+                        // 跨年度周期 (A股周K / 美股周K与月K) -> 25-06-12 / 26-08-28
+                        if (panel.longDateScales.includes(panel.scale)) return val.substring(2);
                         // 日K线 -> 08-28
                         return val.substring(5);
                     }
@@ -1462,7 +1632,7 @@ function renderMacroKlineChart(klineData, levels) {
         ],
         series: [
             {
-                name: '大盘K线',
+                name: panel.seriesName,
                 type: 'candlestick',
                 data: kValues,
                 itemStyle: {
@@ -1496,9 +1666,9 @@ function renderMacroKlineChart(klineData, levels) {
         ]
     };
 
-    macroKlineChartInst.setOption(option, true);
+    chartInst.setOption(option, true);
     setTimeout(() => {
-        macroKlineChartInst?.resize();
+        chartInst?.resize();
     }, 40);
 }
 
@@ -1583,42 +1753,49 @@ let currentMrdiScale = "240";
 let currentMrdiData = null;
 let mrdiTechChartInst = null;
 
+// 顶部 Tab -> 工作区映射。stockWorkspace 用 grid 布局, 其余为 flex。
+const WORKSPACE_TABS = [
+    { tab: "tabIndexView", ws: "indexWorkspace" },
+    { tab: "tabUsView", ws: "usWorkspace" },
+    { tab: "tabMrdiView", ws: "mrdiWorkspace" },
+    { tab: "tabStockView", ws: "stockWorkspace" }
+];
+
+/**
+ * 顶部主视图切换: 隐藏全部工作区后只显示目标, 保证新增面板不会残留在其他视图下
+ */
+function switchWorkspaceView(activeTabId, showWsId) {
+    WORKSPACE_TABS.forEach(({ tab, ws }) => {
+        document.getElementById(tab)?.classList.toggle("active", tab === activeTabId);
+        const wsEl = document.getElementById(ws);
+        if (!wsEl) return;
+        wsEl.style.display = ws !== showWsId ? "none" : (ws === "stockWorkspace" ? "grid" : "flex");
+    });
+}
+
 /**
  * 绑定 MRDI 面板事件（由 bindMacroEvents 调用链扩展）
  */
 function bindMrdiEvents() {
-    // 顶部 Tab 切换: 增加第三个 MRDI 面板
     const tabMrdi = document.getElementById("tabMrdiView");
     const tabStock = document.getElementById("tabStockView");
     const tabIndex = document.getElementById("tabIndexView");
-    const stockWs = document.getElementById("stockWorkspace");
-    const indexWs = document.getElementById("indexWorkspace");
-    const mrdiWs = document.getElementById("mrdiWorkspace");
 
-    function switchToView(activeTab, showEl) {
-        [tabStock, tabIndex, tabMrdi].forEach(t => t?.classList.remove("active"));
-        activeTab?.classList.add("active");
-        if (stockWs) stockWs.style.display = "none";
-        if (indexWs) indexWs.style.display = "none";
-        if (mrdiWs) mrdiWs.style.display = "none";
-        if (showEl) showEl.style.display = showEl === stockWs ? "grid" : "flex";
-    }
-
-    // 重新绑定前两个 Tab (覆盖 bindMacroEvents 中简单逻辑以支持三面板切换)
+    // 重新绑定前两个 Tab (覆盖 bindMacroEvents 中简单逻辑以支持多面板切换)
     tabStock?.addEventListener("click", () => {
-        switchToView(tabStock, stockWs);
+        switchWorkspaceView("tabStockView", "stockWorkspace");
         klineChartInst?.resize(); chipsChartInst?.resize();
         radarChartInst?.resize(); probGaugeInst?.resize();
     });
 
     tabIndex?.addEventListener("click", () => {
-        switchToView(tabIndex, indexWs);
+        switchWorkspaceView("tabIndexView", "indexWorkspace");
         loadMacroIndexAnalysis(currentMacroSymbol);
         setTimeout(() => macroKlineChartInst?.resize(), 150);
     });
 
     tabMrdi?.addEventListener("click", () => {
-        switchToView(tabMrdi, mrdiWs);
+        switchWorkspaceView("tabMrdiView", "mrdiWorkspace");
         if (!mrdiTechChartInst) {
             const dom = document.getElementById("mrdiTechChart");
             if (dom) mrdiTechChartInst = echarts.init(dom);
@@ -2525,7 +2702,8 @@ function calcEMA(data, period) {
     return result;
 }
 
-// 初始化时绑定 MRDI 事件
+// 初始化时绑定 MRDI 与美股面板事件 (美股数据在首次切入该 Tab 时才加载, 不拖慢首屏)
 document.addEventListener("DOMContentLoaded", () => {
     bindMrdiEvents();
+    bindUsMacroEvents();
 });

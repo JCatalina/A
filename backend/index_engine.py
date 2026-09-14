@@ -34,6 +34,11 @@ class IndexEngine:
     # v2.7: 原始行情数据分级 TTL — 数据抓取与指标计算分离, 计算永远在缓存之上实时进行
     KLINE_TTL = {"30": 20, "60": 20, "240": 60, "1200": 300}
     REALTIME_TTL = 10
+    # v2.9: 指数元数据与默认标的下沉为类属性, 供跨市场子类(如美股)覆盖而不改动缓存/研判主干
+    META_MAP = INDEX_META_MAP
+    DEFAULT_SYMBOL = "sh000001"
+    # 预热/研判所需的各周期K线根数 (60分130根、周K260根保证 MA120/MA250 为真实窗口)
+    PERIOD_COUNTS = {"30": 100, "60": 130, "240": 250, "1200": 260}
 
     def __init__(self):
         self.session = requests.Session()
@@ -402,10 +407,10 @@ class IndexEngine:
         - 原始K线另有分级 TTL 缓存, 指标计算永远在缓存之上实时进行 (数据抓取与计算分离)。
         """
         symbol = symbol.strip().lower()
-        if symbol not in INDEX_META_MAP:
-            symbol = "sh000001"
+        if symbol not in self.META_MAP:
+            symbol = self.DEFAULT_SYMBOL
         scale = str(scale)
-        cache_ttl = {"30": 20, "60": 20, "240": 60, "1200": 300}.get(scale, 60)
+        cache_ttl = self.KLINE_TTL.get(scale, 60)
         cache_key = f"{symbol}:{scale}"
 
         cached = self._macro_cache.get(cache_key)
@@ -443,13 +448,14 @@ class IndexEngine:
 
     def _analyze_sync(self, symbol: str, scale: str) -> Dict[str, Any]:
         """同步计算大盘研判 (无缓存逻辑): 拉取四大周期K线 + 指标/聚类/结论"""
-        meta = INDEX_META_MAP[symbol]
+        meta = self.META_MAP[symbol]
 
         # 1. 获取四大周期K线 (v2.6: 60分100→130根、周K120→260根, 保证MA120/MA250为真实窗口而非expanding伪值)
-        df_30m = self.fetch_index_kline(symbol, scale="30", count=100)
-        df_60m = self.fetch_index_kline(symbol, scale="60", count=130)
-        df_daily = self.fetch_index_kline(symbol, scale="240", count=250)
-        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=260)
+        counts = self.PERIOD_COUNTS
+        df_30m = self.fetch_index_kline(symbol, scale="30", count=counts["30"])
+        df_60m = self.fetch_index_kline(symbol, scale="60", count=counts["60"])
+        df_daily = self.fetch_index_kline(symbol, scale="240", count=counts["240"])
+        df_weekly = self.fetch_index_kline(symbol, scale="1200", count=counts["1200"])
 
         if df_daily.empty:
             return {}
@@ -605,8 +611,8 @@ class IndexEngine:
 
     def warm_all(self) -> None:
         """启动预热 (v2.7): 后台预拉全部指数 x 四大周期原始K线与实时快照, 首次切换 tab 即命中缓存"""
-        counts = {"30": 100, "60": 130, "240": 250, "1200": 260}
-        for sym in INDEX_META_MAP:
+        counts = self.PERIOD_COUNTS
+        for sym in self.META_MAP:
             for scale, count in counts.items():
                 try:
                     self.fetch_index_kline(sym, scale=scale, count=count)
@@ -616,4 +622,5 @@ class IndexEngine:
                 self.fetch_index_realtime(sym)
             except Exception as e:
                 logger.warning(f"Index warm realtime failed {sym}: {e}")
-        logger.info("IndexEngine warm_all finished")
+        # 用实际类名, 便于在日志中区分 A股(IndexEngine) 与美股(USIndexEngine) 两路预热
+        logger.info(f"{type(self).__name__} warm_all finished")

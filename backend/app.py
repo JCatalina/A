@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from data_fetcher import DataFetcher
 from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
+from us_index_engine import USIndexEngine
 from ice_engine import IceEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -25,6 +26,8 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=ice_engine.warm_all, daemon=True, name="ice-prewarm").start()
     # v2.7: 大盘四大指数 x 四大周期原始K线预热, 首次切换 index tab 即命中缓存
     threading.Thread(target=index_engine.warm_all, daemon=True, name="index-prewarm").start()
+    # v2.9: 美股四大指数 x 日/周/月三周期预热, 首次切换 us tab 即命中缓存
+    threading.Thread(target=us_index_engine.warm_all, daemon=True, name="us-index-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(data_fetcher, scanner_engine, index_engine, ice_engine)
     _scheduler.start()
@@ -50,6 +53,7 @@ app.add_middleware(
 data_fetcher = DataFetcher()
 scanner_engine = ScannerEngine(data_fetcher)
 index_engine = IndexEngine()
+us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
 
 @app.get("/api/index/analysis")
@@ -70,6 +74,31 @@ def get_index_ice_rebound(
 ):
     """大盘冰点反弹概率: 该指数自身历史的分箱校准(近250日相对冰度) + 当日情绪面快照"""
     return ice_engine.predict(symbol)
+
+
+USIndexSymbol = Literal["usdji", "usinx", "usixic", "usndx"]
+
+
+@app.get("/api/us/index/analysis")
+def get_us_index_macro_analysis(
+    symbol: USIndexSymbol = Query("usdji", description="美股指数: usdji(道指), usinx(标普500), usixic(纳指综合), usndx(纳指100)"),
+    scale: Literal["day", "week", "month"] = Query("day", description="K线周期: day(日K), week(周K), month(月K)")
+):
+    """
+    美股大盘多周期研判 (日K/周K/月K)。
+    腾讯美股行情无 30/60 分钟K线接口, 故不提供分时级别; 改为向上取真实月K,
+    形成"月线定战略 / 周线定波段 / 日线定节拍"的三周期结构。
+    """
+    res = us_index_engine.analyze_index_macro(symbol, scale=scale)
+    if not res:
+        return JSONResponse(status_code=404, content={"status": "error", "message": f"未获取到美股指数 {symbol} 的多周期行情数据"})
+    return {"status": "success", "data": res}
+
+
+@app.get("/api/us/market/indices")
+def get_us_indices():
+    """美股四大核心指数行情条快照"""
+    return {"status": "success", "data": us_index_engine.get_us_indices()}
 
 
 # 静态前端路径

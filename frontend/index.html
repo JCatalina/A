@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=2.6.0">
+    <link rel="stylesheet" href="/static/style.css?v=2.9.0">
 </head>
 <body>
     <div class="app-container">
@@ -30,6 +30,7 @@
                 <!-- 页面视图切换 Tab -->
                 <div class="nav-view-switch">
                     <button class="nav-tab active" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
+                    <button class="nav-tab" id="tabUsView" data-target="usWorkspace">🗽 美股大盘研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                 </div>
@@ -400,7 +401,139 @@
 
         </main>
 
-        <!-- 主内容工作区 3: MRDI 动量共振与多周期决策模型 -->
+        <!-- 主内容工作区 3: 美股大盘多周期研判 (US Macro Workspace) -->
+        <main class="index-macro-workspace us-macro-workspace" id="usWorkspace" style="display: none;">
+
+            <!-- 美股四大指数行情条 -->
+            <div class="us-ticker" id="usMarketTicker">
+                <div class="ticker-loading">正在同步美股大盘指数...</div>
+            </div>
+
+            <!-- 顶部指数选择胶囊栏 -->
+            <div class="macro-index-nav">
+                <div class="index-capsule-tabs" id="usIndexCapsuleTabs">
+                    <button class="index-capsule-btn active" data-symbol="usdji">🏛️ 道琼斯工业</button>
+                    <button class="index-capsule-btn" data-symbol="usinx">📊 标普500</button>
+                    <button class="index-capsule-btn" data-symbol="usixic">🚀 纳斯达克综合</button>
+                    <button class="index-capsule-btn" data-symbol="usndx">⚙️ 纳斯达克100</button>
+                </div>
+                <div class="index-status-summary-tag" id="usMacroIndexStatusTag">
+                    <span class="idx-name" id="usMacroIndexName">道琼斯工业</span>
+                    <span class="idx-price" id="usMacroIndexPrice">--</span>
+                    <span class="idx-chg" id="usMacroIndexChg">--%</span>
+                    <span class="idx-sub" id="usMacroIndexDesc">美股蓝筹/工业龙头风向标</span>
+                </div>
+            </div>
+
+            <!-- 口径提示: 美股与A股面板的周期与规则差异 -->
+            <div class="us-scope-note">
+                <strong>口径说明</strong>
+                行情源无美股 30/60 分钟K线，故本面板不含分时级别，改为向上取交易所口径<strong>真实月K</strong>（可回溯约10年），
+                形成「月线定战略 · 周线定波段 · 日线定节拍」三周期结构。
+                美股无涨跌停、盘前盘后可交易，隔夜跳空常直接吃掉日内结构；方向分与仓位建议为规则型技术评分，非胜率承诺。
+            </div>
+
+            <!-- 核心结论大卡片 -->
+            <div class="macro-conclusion-card">
+                <div class="card-header-row">
+                    <div class="header-left-title">
+                        <span class="dot-indicator"></span>
+                        <h2>◎ 美股核心研判结论</h2>
+                    </div>
+                    <div class="header-right-meta" id="usMacroUpdateMeta">当前数据实时多周期同步</div>
+                </div>
+
+                <!-- 正式操作许可大文字框 -->
+                <div class="op-license-box">
+                    <div class="op-license-sub">正式操作许可</div>
+                    <div class="op-license-main" id="usOpLicenseMain">大方向不明，先观望</div>
+                    <div class="op-license-desc" id="usOpLicenseDesc">月线当前方向不明确；短周期信号不能代替大方向，当前建议耐心观望等待大级别确认。</div>
+                    <div class="op-license-pos" id="usOpLicensePos">
+                        <span>建议总体仓位:</span>
+                        <strong class="highlight-gold" id="usOpPosText">30% ~ 50%</strong>
+                    </div>
+                </div>
+
+                <!-- 结论四维度解析条目 -->
+                <div class="conclusion-points-grid">
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">中长期战略方向 · 月线</span>
+                            <h3 id="usMacroPoint1Title">中长期方向暂不明确</h3>
+                        </div>
+                        <p class="point-text" id="usMacroPoint1Content">月线数据加载中，尚未形成大级别方向判断。</p>
+                    </div>
+
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">当前时点 · 周线与日线</span>
+                            <h3 id="usMacroPoint2Title">等待周线与日线结构确认</h3>
+                        </div>
+                        <p class="point-text" id="usMacroPoint2Content">周线与日线结构数据加载中。</p>
+                    </div>
+
+                    <div class="point-card">
+                        <div class="point-header">
+                            <span class="point-badge">相较上一收盘</span>
+                            <h3 id="usMacroPoint3Title">最新报价同步中</h3>
+                        </div>
+                        <p class="point-text" id="usMacroPoint3Content">正在同步最新美股行情快照。</p>
+                    </div>
+
+                    <div class="point-card highlight-card">
+                        <div class="point-header">
+                            <span class="point-badge green">下一步等待与防守底线</span>
+                            <h3 id="usMacroPoint4Title">等待大级别放量突破或回踩企稳</h3>
+                        </div>
+                        <p class="point-text" id="usMacroPoint4Content">支撑压力价格带计算中。</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 美股多维支撑位与压力位矩阵 -->
+            <div class="macro-levels-banner">
+                <div class="macro-levels-col support">
+                    <div class="macro-level-title">🟢 美股核心支撑价格带 (下探低吸/防守线)</div>
+                    <div class="macro-level-items" id="usMacroSupportItems">
+                        <!-- 动态填充支撑 -->
+                    </div>
+                </div>
+                <div class="macro-levels-col resistance">
+                    <div class="macro-level-title">🔴 美股核心压力价格带 (冲高止盈/遇阻区)</div>
+                    <div class="macro-level-items" id="usMacroResistanceItems">
+                        <!-- 动态填充压力 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 多周期研判对比三联卡片 (月线 / 周线 / 日线) -->
+            <div class="periods-quad-container">
+                <div class="section-title-bar">
+                    <span class="title-icon">📊</span>
+                    <h2>美股指数多周期结构剖析与理解矩阵</h2>
+                    <span class="title-sub">（月线定战略方向与仓位上限，周线确认波段与中期趋势，日线决定短线节拍）</span>
+                </div>
+                <div class="periods-quad-grid periods-trio-grid" id="usPeriodsQuadGrid">
+                    <!-- 动态生成 月线、周线、日线 卡片 -->
+                </div>
+            </div>
+
+            <!-- 美股K线图表视窗 -->
+            <div class="macro-chart-box">
+                <div class="macro-chart-toolbar">
+                    <span class="m-chart-title">美股指数多周期走势图</span>
+                    <div class="m-period-btns">
+                        <button class="m-btn active" data-scale="day">日K线</button>
+                        <button class="m-btn" data-scale="week">周K线</button>
+                        <button class="m-btn" data-scale="month">月K线</button>
+                    </div>
+                </div>
+                <div class="macro-kline-container" id="usMacroKlineChart" style="width: 100%; height: 480px; min-height: 480px;"></div>
+            </div>
+
+        </main>
+
+        <!-- 主内容工作区 4: MRDI 动量共振与多周期决策模型 -->
         <main class="mrdi-workspace" id="mrdiWorkspace" style="display: none;">
 
             <!-- 页面介绍 -->
@@ -750,6 +883,6 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=2.4.0"></script>
+    <script src="/static/app.js?v=2.9.0"></script>
 </body>
 </html>
