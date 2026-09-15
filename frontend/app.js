@@ -187,17 +187,16 @@ function renderIcePanel(json = {}) {
     set("iceProbNum", "--");
     set("iceScoreVal", "--");
     set("iceUpdateTime", "--");
-    ["iceCI", "iceLift", "iceFactors", "iceSentiment", "iceValidation", "iceDisclaimer"].forEach(id => set(id, ""));
+    ["iceCI", "iceLift", "iceFactors", "iceSentiment", "iceValidation", "iceDisclaimer",
+        "iceSymmetry", "iceBand"].forEach(id => set(id, ""));
     const fill = document.getElementById("iceScoreFill");
     if (fill) fill.style.width = "0%";
     const liftEl = document.getElementById("iceLift");
     if (liftEl) liftEl.className = "ice-lift";
 
     const f = json.factors || {};
-    const missingFeatures = json.missing_features?.length > 0 ||
-        (json.status === "success" && ![f.price_ret20_pct, f.consec_down_days, f.volume_ratio_20d, f.margin5d_pct].every(Number.isFinite));
-    if (json.status !== "success" || missingFeatures) {
-        set("iceValidation", missingFeatures ? "特征缺失，历史估计暂不可用" : (json.message || "历史估计暂不可用"));
+    if (json.status !== "success" || !Number.isFinite(json.rebound_prob_10d_pct)) {
+        set("iceValidation", json.message || "概率暂不可用");
         set("iceDisclaimer", json.disclaimer || "仅供历史参考，不构成预测承诺或投资建议。");
         return;
     }
@@ -206,25 +205,38 @@ function renderIcePanel(json = {}) {
     const validationLabels = {
         insufficient_oos: "样本外验证不足",
         no_oos_edge: "样本外未优于基率",
-        positive_oos_skill: "样本外 Brier 评分优于基率（不保证未来表现）"
+        positive_oos_skill: "样本外 Brier 评分优于基率（不保证未来表现）",
+        validated_oos_skill: "样本外 Brier 优于基率且通过区块自助检验（不保证未来表现）"
     };
     const probabilityLabels = {
+        vol_conditional_validated: "波动率条件化概率（样本外已验证）",
+        vol_conditional_unvalidated: "波动率条件化概率（样本外未验证）",
         historical_estimate: "历史估计",
         insufficient_bin: "分箱样本不足，暂无概率估计",
         uncalibrated: "未校准，仅供历史参考"
     };
-    set("iceValidation", `${probabilityLabels[json.probability_status] || "历史估计（概率状态未提供或未知）"} · ` +
+    const partitions = Number.isFinite(validation.partitions_positive) && Number.isFinite(validation.partitions)
+        ? ` · 切分 ${validation.partitions_positive}/${validation.partitions} 为正` : "";
+    set("iceValidation", `${probabilityLabels[json.probability_status] || "概率状态未提供或未知"} · ` +
         `${validationLabels[validation.status] || "样本外状态未提供或未知"} · ` +
-        `样本外有效样本数 n=${Number.isFinite(validation.n) ? validation.n : "--"}` +
-        (Number.isFinite(validation.brier_skill) ? ` · Brier skill=${validation.brier_skill.toFixed(4)}` : ""));
+        `样本外 n=${Number.isFinite(validation.n) ? validation.n : "--"}` +
+        (Number.isFinite(validation.n_eff_overlap_adj) ? `（去重叠 ${validation.n_eff_overlap_adj}）` : "") +
+        (Number.isFinite(validation.brier_skill) ? ` · Brier skill=${validation.brier_skill.toFixed(4)}` : "") +
+        (Number.isFinite(validation.bootstrap_p_value) ? ` · p=${validation.bootstrap_p_value.toFixed(3)}` : "") +
+        partitions);
     set("iceDisclaimer", json.disclaimer || "仅供历史参考，不构成预测承诺或投资建议。");
     set("iceUpdateTime", `${json.update_time || "--"} · 数据截至 ${json.asof_date || "--"}`);
 
     const prob = json.rebound_prob_10d_pct;
     if (Number.isFinite(prob)) {
         set("iceProbNum", prob.toFixed(1));
-        if (Number.isFinite(json.ci_low_pct) && Number.isFinite(json.ci_high_pct)) {
-            set("iceCI", `原始分箱区间参考 [${json.ci_low_pct}~${json.ci_high_pct}]%（n/10启发式，非模型置信区间） · 档内样本 ${json.calib_bin ?? "--"}`);
+        if (Number.isFinite(json.drop_prob_10d_pct)) {
+            set("iceSymmetry", `同口径下跌 ≥2.5% 概率 ${json.drop_prob_10d_pct.toFixed(1)}% · 模型只判波动幅度，不判方向`);
+        }
+        const hint = json.reliability_hint;
+        if (hint && Number.isFinite(json.ci_low_pct) && Number.isFinite(json.ci_high_pct)) {
+            set("iceCI", `历史上报出 ${hint.mean_pred_pct}% 时实际发生 ${hint.realized_pct}%` +
+                `（样本 ${json.calib_bin ?? "--"}，Wilson 区间 ${json.ci_low_pct}~${json.ci_high_pct}%）`);
         }
         const lift = json.lift_vs_baseline_pp;
         if (Number.isFinite(lift) && Number.isFinite(json.baseline_rebound_pct) && liftEl) {
@@ -233,16 +245,27 @@ function renderIcePanel(json = {}) {
             liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
         }
     }
+    const band = json.band68_pct;
+    if (Array.isArray(band) && band.every(Number.isFinite)) {
+        const coverage = json.band_coverage?.band_68;
+        set("iceBand", `10日 68% 波动区间 ${band[0]}% ~ +${band[1]}%` +
+            (coverage ? `（历史实际覆盖 ${coverage.realized_pct}%）` : ""));
+    }
     const sc = json.ice_score_0_100;
     if (Number.isFinite(sc)) {
-        set("iceScoreVal", sc.toFixed(0) + " 分");
+        set("iceScoreVal", sc.toFixed(0) + " 分 · 仅状态描述");
         if (fill) fill.style.width = Math.max(0, Math.min(100, sc)) + "%";
+    } else {
+        set("iceScoreVal", "特征缺失");
     }
+    const num = (v, digits = 2, sign = false) => Number.isFinite(v)
+        ? (sign && v >= 0 ? "+" : "") + v.toFixed(digits) : "--";
     const chips = [
-        `${f.price_ret20_pct >= 0 ? "+" : ""}${f.price_ret20_pct}% / 20日`,
-        `连跌 ${f.consec_down_days} 日`,
-        `量能比 ${f.volume_ratio_20d}`,
-        `融资5日 ${f.margin5d_pct >= 0 ? "+" : ""}${f.margin5d_pct}%`,
+        `10日波动率 ${num(json.sigma10_pct, 1)}%`,
+        `${num(f.price_ret20_pct, 2, true)}% / 20日`,
+        `连跌 ${Number.isFinite(f.consec_down_days) ? f.consec_down_days : "--"} 日`,
+        `量能比 ${num(f.volume_ratio_20d)}`,
+        `融资5日 ${num(f.margin5d_pct, 2, true)}%`,
     ].map(t => `<span class="ice-chip">${t}</span>`).join("");
     const facEl = document.getElementById("iceFactors");
     if (facEl) facEl.innerHTML = chips;

@@ -1,18 +1,21 @@
 """
-大盘冰点反弹概率引擎 (Ice Rebound Probability Engine) — v2.6
+大盘10日反弹概率引擎 (Ice Rebound Probability Engine) — v3
 
-设计原则 (对齐 ALGORITHM_DOC §14 评估纪律):
-1. 点时间: 所有特征只用当日收盘可得信息, 入场按 T+1 开盘价计算交易口径收益;
-2. 可证伪: 小样本拒绝输出概率; 分箱原始命中率区间仅作启发式参考;
-3. 向历史基率收缩的分箱估计 + 清洗重叠标签的滚动样本外诊断, 不强制单调性;
-4. 诚实分层: 历史可得的特征(价格/量能/两融杠杆)进入校准模型; 实时情绪面
-   (涨停/跌停/涨跌家数)仅作当日"冰点确认"展示, 不进入概率(无历史数据, 无法校准)。
+模型: P(未来10日涨幅 >= +2.5%) = 1 - Phi(2.5 / sigma10), sigma10 由 Parkinson 高低价、
+EWMA(0.94) 收盘平方与 250 日长期方差锚三者混合后按 sqrt(10) 折算。零漂移、零拟合参数,
+每一个预测天然点时间。
 
-特征组:
-A. 价格行为(Technical Extremes) — 20日涨幅 / 乖离率 / 距60日低点 / 连跌天数 / 60日回撤
-B. 量能资金(Volume & Liquidity) — 量能相对20日均量收缩度 / 两融余额5日变化(去杠杆)
-标签: 未来10交易日 close-to-close 涨幅; "反弹事件" = 涨幅 >= +2.5%
-交易口径: T+1 开盘买入, T+10 收盘卖出 (约9个交易日持仓, 展示真实可获得的期望收益)
+为什么是这个模型: 标签是"阈值穿越"事件, 其概率主要由波动幅度决定, 而波动率具有聚集性、
+可预测; 方向不可预测。2011 年以来 4 个指数的滚动样本外检验里, 该模型 Brier 评分稳定优于
+"始终报历史基率"(skill +0.031~+0.038, 区块自助 p<=0.045); 而原先的冰点分分箱模型、以及
+把价格/量能/两融/冰点分作为漂移或逻辑回归特征的所有变体, 样本外都不优于基率。
+
+因此:
+1. 冰点分(0-100)保留为状态描述, 实测无增量预测力, 不参与概率;
+2. 情绪面(涨停/跌停/涨跌家数)同样只作当日展示, 无历史数据可校准;
+3. 概率是波动幅度陈述而非方向判断 —— 同口径 P(跌幅 >= 2.5%) 与之相等, 必须一并展示;
+4. 检验纪律: 前视重叠标签清洗 + 全部 horizon+1 个互不重叠切分 + 移动块自助 p 值 +
+   样本外可靠性分桶, 任一环节不达标就如实标注, 不粉饰。
 """
 import json
 import logging
@@ -27,7 +30,8 @@ import pandas as pd
 import requests
 
 from probability_calibration import (
-    MODEL_VERSION, MIN_BIN_SAMPLES, fit_bins, walk_forward, weighted_pava,
+    MODEL_VERSION, MIN_BIN_SAMPLES, exceedance_probability, fit_bins, walk_forward,
+    walk_forward_pointwise, weighted_pava,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,13 +44,18 @@ MARGIN_CACHE = os.path.join(CACHE_DIR, "margin_history.json")
 
 REBOUND_THRESHOLD = 2.5      # 10日涨幅 >= 2.5% 计为一次"反弹"
 REBOUND_FWD = 10             # 前视窗口(交易日)
-# 校准历史长度: 腾讯日K单次上限约2000根(2200起返回空), 取满以保证极端冰点分箱(80-100)
-# 的样本量跨越多轮牛熊; 800根只剩约612个可用样本, 极冷档常不足 MIN_BIN_SAMPLES 而无概率输出。
-HISTORY_BARS = 2000
-MARGIN_HISTORY_DAYS = 2400   # 两融历史须覆盖上述K线区间, 否则老样本因融资特征缺失被丢弃
+# 校准历史长度: 取满两融历史起点(2010-03-31)以来的全部交易日, 使样本跨越 2015 股灾、
+# 2018 熊市、2020 疫情与 2022 调整等真实尾部; 短窗口(800根≈612样本)会让极冷档样本不足而无输出。
+HISTORY_BARS = 4000
+MARGIN_HISTORY_DAYS = 4000   # 两融历史须覆盖上述K线区间, 否则老样本因融资特征缺失被丢弃
+VOL_EWMA_LAMBDA = 0.94       # RiskMetrics 衰减系数
+VOL_ANCHOR_WINDOW = 250      # 长期方差锚定窗口
+VOL_WEIGHTS = (0.4, 0.3, 0.3)  # Parkinson / EWMA / 长期锚 的方差权重 (先验设定, 未在标签上调参)
 MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h (内存与磁盘统一 TTL, 常驻进程也按此周期刷新)
 CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
-DAILY_KLINE_TTL = 60         # v2.7: 指数日K原始数据内存缓存 (数据抓取与计算分离)
+# 日K是每日一次的历史数据, 且 build_frame 在 15:10 前本就丢弃当日未完成K线, 分钟级重拉
+# 既无信息增量又会触发行情源限流(实测东财会直接断连), 因此缓存按半小时计。
+DAILY_KLINE_TTL = 1800
 PRED_TTL = 60                # v2.7: 冰点面板结果缓存 TTL (stale-while-revalidate)
 # 支持的指数 (各自独立校准: 特征与标签同指数, 严禁跨指数借表)
 KNOWN_ICE_SYMBOLS = ("sh000001", "sz399001", "sz399006", "sh000688")
@@ -64,6 +73,7 @@ class IceEngine:
         self._live_ts = 0.0
         self._live_cache: Optional[Dict[str, Any]] = None
         self._daily_cache: Dict[tuple, tuple] = {}       # (symbol, count) -> (ts, df), 日K TTL 缓存
+        self._daily_source: Dict[tuple, str] = {}        # (symbol, count) -> 实际命中的行情源
         self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
         self._http_lock = threading.RLock()              # requests.Session 多线程并发保护
 
@@ -110,22 +120,67 @@ class IceEngine:
     # 数据获取
     # ------------------------------------------------------------------
     def fetch_index_daily(self, symbol: str = "sh000001", count: int = HISTORY_BARS) -> pd.DataFrame:
-        """腾讯前复权日K (量单位:手), 含均价估算成交额; v2.7 60s 内存 TTL 缓存"""
+        """指数日K; 主源东财(可回溯至2010, 带真实成交额), 腾讯为备源; 60s 内存 TTL 缓存"""
         key = (symbol, count)
         cached = self._daily_cache.get(key)
         if cached and (time.time() - cached[0]) < DAILY_KLINE_TTL:
             return cached[1]
 
+        rows, source = self._fetch_daily_eastmoney(symbol, count), "eastmoney"
+        if not rows:
+            rows, source = self._fetch_daily_tencent(symbol, count), "tencent_fallback"
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            self._daily_source[key] = source
+            self._daily_cache[key] = (time.time(), df)
+        return df
+
+    def _fetch_daily_eastmoney(self, symbol: str, count: int, attempts: int = 3) -> List[Dict[str, Any]]:
+        """push2his 日K: 历史远长于腾讯接口, 且 f57 为真实成交额而非均价估算
+
+        长历史请求偶发被对端直接断开, 且与参数无关, 重试即可; 用尽重试才降级到备源,
+        因为备源历史只有一半, 静默降级会让校准样本量凭空缩水。
+        """
+        secid = f"{'1' if symbol.startswith('sh') else '0'}.{symbol[2:]}"
+        url = ("https://push2his.eastmoney.com/api/qt/stock/kline/get"
+               f"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58"
+               f"&klt=101&fqt=1&end=20500101&lmt={count}")
+        raw = []
+        for attempt in range(attempts):
+            try:
+                with self._http_lock:
+                    js = self.session.get(url, timeout=12).json()
+                raw = (js.get("data") or {}).get("klines") or []
+                if raw:
+                    break
+            except Exception as e:
+                logger.warning(f"Ice eastmoney kline failed {symbol} (try {attempt + 1}): {e}")
+                time.sleep(0.5 * (attempt + 1))
+        rows = []
+        for line in raw:
+            parts = str(line).split(",")
+            if len(parts) < 7:
+                continue
+            try:
+                o, c, h, l, v, amt = (float(x) for x in parts[1:7])
+            except ValueError:
+                continue
+            rows.append({"date": parts[0], "open": o, "close": c, "high": h, "low": l,
+                         "volume": v * 100.0, "amount": amt})
+        return rows
+
+    def _fetch_daily_tencent(self, symbol: str, count: int) -> List[Dict[str, Any]]:
+        """备源: 腾讯前复权日K (量单位:手), 成交额只能用均价估算"""
         url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-               f"param={symbol},day,,,{count},qfq")
+               f"param={symbol},day,,,{min(count, 2000)},qfq")
         try:
             with self._http_lock:
                 js = self.session.get(url, timeout=8).json()
             node = (js.get("data") or {}).get(symbol, {}) or {}
             raw = node.get("qfqday") or node.get("day") or []
         except Exception as e:
-            logger.warning(f"Ice index kline fetch failed {symbol}: {e}")
-            raw = []
+            logger.warning(f"Ice tencent kline failed {symbol}: {e}")
+            return []
         rows = []
         for item in raw:
             if not isinstance(item, (list, tuple)) or len(item) < 6:
@@ -134,13 +189,10 @@ class IceEngine:
             rows.append({
                 "date": str(item[0]).split(" ")[0],
                 "open": o, "close": c, "high": h, "low": l,
-                "volume": v * 100.0,                       # 手 -> 股口径
-                "amount_proxy": v * 100.0 * (o + c) / 2,   # 成交额估算(分位/比值用)
+                "volume": v * 100.0,                  # 手 -> 股口径
+                "amount": v * 100.0 * (o + c) / 2,    # 备源无成交额字段, 用均价估算
             })
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            self._daily_cache[key] = (time.time(), df)
-        return df
+        return rows
 
     def fetch_margin_history(self, days: int = MARGIN_HISTORY_DAYS) -> pd.DataFrame:
         """两融余额历史 (RZYE=融资余额), 东财 datacenter, 磁盘缓存"""
@@ -309,9 +361,20 @@ class IceEngine:
             "ice_p_consec": df["consec_down"].astype(float),
         }
         for name, raw in ice_raws.items():
-            df[name] = raw.rolling(250, min_periods=120).apply(
-                lambda w: float((w.dropna() < w.iloc[-1]).mean()) if pd.notna(w.iloc[-1]) else np.nan,
-                raw=False)
+            df[name] = self._rolling_rank(raw, 250, 120)
+
+        # 10日波动率预测: 概率模型的唯一输入。三个估计量都只用 T 日及以前的价格:
+        # Parkinson 高低价(效率高) + EWMA 收盘平方(反应快) + 250日长期锚(波动均值回复),
+        # 方差加权混合后按 sqrt(10) 折算到前视窗口。权重是先验选择, 未在标签上拟合。
+        logret = np.log(close).diff()
+        park_var = (np.log(df["high"] / df["low"]) ** 2).rolling(20).mean() / (4 * math.log(2))
+        ewma_var = logret.pow(2).ewm(alpha=1 - VOL_EWMA_LAMBDA, adjust=False).mean()
+        anchor_var = logret.rolling(VOL_ANCHOR_WINDOW).std() ** 2
+        blend_var = (VOL_WEIGHTS[0] * park_var + VOL_WEIGHTS[1] * ewma_var
+                     + VOL_WEIGHTS[2] * anchor_var)
+        df["sigma_daily_pct"] = np.sqrt(blend_var.where(blend_var > 0)) * 100
+        df["sigma10_pct"] = df["sigma_daily_pct"] * math.sqrt(REBOUND_FWD)
+        df["vol_prob"] = exceedance_probability(df["sigma10_pct"], REBOUND_THRESHOLD)
 
         # 标签: 点时间前视 (仅历史)
         df["fwd10"] = close.shift(-REBOUND_FWD) / close - 1
@@ -320,6 +383,20 @@ class IceEngine:
         df["fwd10"] = df["fwd10"] * 100
         df["rebound"] = (df["fwd10"] >= REBOUND_THRESHOLD).astype(float).where(df["fwd10"].notna())
         return df
+
+    @staticmethod
+    def _rolling_rank(series: pd.Series, window: int = 250, min_periods: int = 120) -> pd.Series:
+        """当前值在其滚动窗口(含自身)中的严格小于占比; 向量化实现, 与逐窗口 apply 等价"""
+        values = series.to_numpy(dtype=float)
+        out = np.full(len(values), np.nan)
+        if len(values):
+            padded = np.concatenate([np.full(window - 1, np.nan), values])
+            windows = np.lib.stride_tricks.sliding_window_view(padded, window)
+            counts = (~np.isnan(windows)).sum(axis=1)
+            below = (windows < values[:, None]).sum(axis=1)
+            usable = (counts >= min_periods) & ~np.isnan(values)
+            out[usable] = below[usable] / counts[usable]
+        return pd.Series(out, index=series.index)
 
     @staticmethod
     def _ice_score(row: pd.Series) -> float:
@@ -354,14 +431,62 @@ class IceEngine:
         return (max(0.0, center - half), min(1.0, center + half))
 
     @staticmethod
+    def _reliability_lookup(validation: Dict[str, Any], prob: float) -> Optional[Dict[str, Any]]:
+        """当模型报出这个量级的概率时, 样本外实际发生了多少次"""
+        for row in validation.get("reliability") or []:
+            lo, hi = (float(x) for x in str(row.get("bucket", "")).split("-"))
+            if lo <= prob < hi and row.get("n"):
+                return row
+        return None
+
+    @staticmethod
     def _pava(vals: np.ndarray, weights: np.ndarray) -> np.ndarray:
         """Pool Adjacent Violators (保序回归), 返回单调不减校准值"""
         return weighted_pava(vals, weights)
+
+    def _calibrate_vol_model(self, frame: pd.DataFrame) -> Optional[Dict[str, Any]]:
+        """波动率条件化阈值穿越模型的样本外诊断。
+
+        模型本身不拟合任何参数, 因此"校准"只是在不重叠、已清洗前视重叠的检验点上，
+        把它与"始终报历史基率"对比, 并给出可靠性表与区间覆盖率。
+        """
+        v = frame.dropna(subset=["fwd10", "vol_prob"]).copy()
+        if v.empty:
+            return None
+        validation = walk_forward_pointwise(v["vol_prob"], v["rebound"], v.index, REBOUND_FWD)
+
+        coverage = {}
+        origins = validation.pop("origins", None) or []   # 仅用于覆盖率统计, 不入库
+        if origins:
+            sub = frame.loc[origins]
+            for z, label in ((1.0, "band_68"), (1.645, "band_90")):
+                inside = (sub["fwd10"].abs() <= z * sub["sigma10_pct"]).mean()
+                coverage[label] = {"nominal_pct": round((1 - 2 * float(
+                    exceedance_probability(1.0, z))) * 100, 1),
+                    "realized_pct": round(float(inside) * 100, 1), "n": len(sub)}
+
+        return {
+            "spec": (f"sigma_d^2 = {VOL_WEIGHTS[0]}*Parkinson20^2 + {VOL_WEIGHTS[1]}*EWMA({VOL_EWMA_LAMBDA})^2"
+                     f" + {VOL_WEIGHTS[2]}*Std{VOL_ANCHOR_WINDOW}^2; "
+                     f"P = 1 - Phi({REBOUND_THRESHOLD} / (sigma_d*sqrt({REBOUND_FWD})))"),
+            "fitted_parameters": 0,
+            "drift_assumption": "zero",
+            "sample_days": int(len(v)),
+            "validation": validation,
+            "band_coverage": coverage,
+            "symmetry_note": ("零漂移正态下 P(涨≥2.5%) 与 P(跌≥2.5%) 相等: "
+                              "该概率描述波动幅度而非方向"),
+        }
 
     def calibrate(self, symbol: str = "sh000001") -> Dict[str, Any]:
         frame = self.build_frame(symbol)
         if frame.empty:
             return {"error": "no index data"}
+        vol_model = self._calibrate_vol_model(frame)
+        if vol_model is None:
+            return {"error": "no complete volatility history and labels"}
+
+        # 冰点分分箱表: 保留为描述性对照 (逐指数历史条件频率), 不再是概率来源。
         # 只用"当日特征与标签都可得"的历史样本
         f = frame.dropna(subset=["fwd10", *FEATURE_COLUMNS]).copy()
         if f.empty:
@@ -423,16 +548,23 @@ class IceEngine:
             "model_version": MODEL_VERSION,
             "asof_date": str(frame["date"].iloc[-1]),
             "training_last_signal_date": str(f["date"].iloc[-1]),
-            "validation": validation,
+            "kline_source": self._daily_source.get((symbol, HISTORY_BARS)),
+            "vol_model": vol_model,
+            "ice_bin_reference": {
+                "validation": {k: v for k, v in validation.items()
+                               if k not in ("predictions", "baselines", "outcomes", "origins",
+                                            "train_label_ends", "train_sizes", "bin_sizes")},
+                "bins": table,
+                "note": "冰点分分箱是描述性对照, 不再产出面板概率"},
             "sample_days": int(len(f)),
             "baseline_rebound_hit_10d_pct": round(float(base), 1),
             "baseline_mean_fwd10_pct": round(float(f["fwd10"].mean()), 2),
             "rebound_threshold_pct": REBOUND_THRESHOLD,
             "fwd_window": REBOUND_FWD,
-            "bins": table,
             "regime": regime,
             "feature_definition": {
-                "score": "各特征相对自身近250日窗口的冰度百分位加权平均 (价格35%/量能与融资35%/深度与连跌30%)",
+                "probability": vol_model["spec"],
+                "score": "各特征相对自身近250日窗口的冰度百分位加权平均 (价格35%/量能与融资35%/深度与连跌30%)；仅作状态描述",
                 "price": "20日跌幅 / 20日线乖离 / 60日回撤 / 连跌天数 的百分位",
                 "funding": "量能收缩度(倒数) 与 融资余额5日去杠杆幅度 的百分位",
                 "label": "收盘价口径未来10日涨幅≥2.5%; trade口径 T+1开盘买/T+10收盘卖（毛收益，未扣费用；指数本身不可直接交易）",
@@ -485,10 +617,10 @@ class IceEngine:
         return res
 
     def _predict_sync(self, symbol: str) -> Dict[str, Any]:
-        """同步计算冰点反弹概率 (无缓存逻辑)"""
+        """同步计算 10日阈值穿越概率 (无缓存逻辑)"""
         symbol = self.normalize_symbol(symbol)
         calib = self._load_calibration(symbol) or {}
-        if "bins" not in calib:
+        if "vol_model" not in calib:
             return {"status": "unavailable", "message": "校准数据缺失"}
 
         # ret60 needs 60 warm-up rows plus the full 250-row percentile window.
@@ -498,35 +630,27 @@ class IceEngine:
         row = frame.iloc[-1]
         if str(row["date"]) != calib.get("asof_date"):
             calib = self.calibrate(symbol)
-            if "bins" not in calib or calib.get("asof_date") != str(row["date"]):
+            if "vol_model" not in calib or calib.get("asof_date") != str(row["date"]):
                 return {"status": "unavailable", "symbol": symbol, "message": "校准与行情日期不一致"}
+
+        sigma10 = float(row.get("sigma10_pct", np.nan))
+        if not np.isfinite(sigma10) or sigma10 <= 0:
+            return {"status": "unavailable", "symbol": symbol, "message": "波动率估计缺失，无法输出概率",
+                    "rebound_prob_10d_pct": None}
+        prob = round(float(exceedance_probability(sigma10, REBOUND_THRESHOLD)) * 100, 1)
+
+        vol_model = calib["vol_model"]
+        validation = vol_model.get("validation", {})
+        hit = self._reliability_lookup(validation, prob / 100)
+        ci_lo, ci_hi = (None, None)
+        if hit:
+            # 相邻信号日共享前视窗口, Wilson 用去重叠后的有效样本数, 否则区间假宽松
+            lo, hi = self._wilson(hit["realized_pct"] / 100, hit["n_eff_overlap_adj"])
+            ci_lo, ci_hi = round(lo * 100, 1), round(hi * 100, 1)
+
+        # 冰点分仍然计算, 但只作状态描述; 缺特征时置空而不是当成 0 分位
         missing = [c for c in FEATURE_COLUMNS if not np.isfinite(row.get(c, np.nan))]
-        if missing:
-            return {"status": "unavailable", "symbol": symbol, "message": "特征缺失，不能套用完整特征校准表",
-                    "missing_features": missing, "rebound_prob_10d_pct": None}
-        score = self._ice_score(row)
-
-        # Fixed-bin historical estimate, not interpolation or an OOS performance promise.
-        table = calib["bins"]
-        prob, ci_lo, ci_hi, bin_n = None, None, None, None
-        for t in table:
-            lo, hi = {"0-20": (0, 20), "20-40": (20, 40), "40-60": (40, 60),
-                      "60-80": (60, 80), "80-100": (80, 101)}[t["bin"]]
-            if lo <= score < hi:
-                prob, ci_lo, ci_hi, bin_n = (t["calibrated_prob"], t["ci_low"], t["ci_high"], t["n"])
-                break
-        if prob is None and score >= 100:
-            t = table[-1]
-            prob, ci_lo, ci_hi, bin_n = (t["calibrated_prob"], t["ci_low"], t["ci_high"], t["n"])
-
-        # 展示口径采用"去重叠保守 CI"(10日前视重叠样本折减有效样本量)
-        ci_elo, ci_ehi = ci_lo, ci_hi
-        for t in table:
-            lo, hi = {"0-20": (0, 20), "20-40": (20, 40), "40-60": (40, 60),
-                      "60-80": (60, 80), "80-100": (80, 101)}[t["bin"]]
-            if lo <= score < hi:
-                ci_elo, ci_ehi = t.get("ci_eff_low", t["ci_low"]), t.get("ci_eff_high", t["ci_high"])
-                break
+        score = None if missing else self._ice_score(row)
 
         live = self.fetch_live_sentiment()
         factors = {
@@ -544,27 +668,36 @@ class IceEngine:
             "calibrated_on": calib.get("symbol", symbol),
             "model_version": MODEL_VERSION,
             "asof_date": str(row["date"]),
-            "probability_status": "historical_estimate" if prob is not None else "insufficient_bin",
-            "validation": {k: v for k, v in calib.get("validation", {}).items()
-                           if k not in ("predictions", "baselines", "outcomes", "origins", "train_label_ends", "train_sizes", "bin_sizes")},
-            "ci_method": "raw_bin_wilson_n_div_10_heuristic_not_model_interval",
+            "probability_status": ("vol_conditional_validated"
+                                   if validation.get("status") == "validated_oos_skill"
+                                   else "vol_conditional_unvalidated"),
+            "validation": {k: v for k, v in validation.items()
+                           if k not in ("predictions", "baselines", "outcomes", "origins")},
+            "ci_method": "oos_reliability_bucket_wilson",
             "update_time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ice_score_0_100": score,
+            "ice_score_status": "state_gauge_not_in_probability" if score is not None else "incomplete_features",
+            "missing_features": missing,
             "rebound_prob_10d_pct": prob,
-            "ci_low_pct": ci_elo,
-            "ci_high_pct": ci_ehi,
-            "ci_raw_low_pct": ci_lo,
-            "ci_raw_high_pct": ci_hi,
-            "calib_bin": "n/a" if bin_n is None else f"n={bin_n}",
+            "drop_prob_10d_pct": prob,   # 零漂移对称: 同一波动率下跌破 -2.5% 的概率相同
+            "sigma10_pct": round(sigma10, 2),
+            "band68_pct": [round(-sigma10, 1), round(sigma10, 1)],
+            "band90_pct": [round(-1.645 * sigma10, 1), round(1.645 * sigma10, 1)],
+            "band_coverage": vol_model.get("band_coverage"),
+            "ci_low_pct": ci_lo,
+            "ci_high_pct": ci_hi,
+            "calib_bin": "n/a" if not hit else f"n={hit['n']}(去重叠 {hit['n_eff_overlap_adj']})",
+            "reliability_hint": hit,
             "baseline_rebound_pct": calib.get("baseline_rebound_hit_10d_pct"),
             "baseline_mean_fwd10_pct": calib.get("baseline_mean_fwd10_pct"),
-            "lift_vs_baseline_pp": None if prob is None else round(prob - calib.get("baseline_rebound_hit_10d_pct", 0), 1),
+            "lift_vs_baseline_pp": round(prob - calib.get("baseline_rebound_hit_10d_pct", 0), 1),
             "factors": factors,
             "live_sentiment": live,
-            "disclaimer": ("基于该指数历史的向基率收缩分箱估计，未强制冰度与反弹单调; "
-                           "区间仅为原始分箱命中率的n/10启发式Wilson参考，不是收缩模型置信区间或严格去重叠保证; "
-                           "样本外验证不足或未优于基率时不构成预测有效证据; "
-                           "仅使用已完成日线; 情绪不参与校准; 融资采用沪深口径且披露时点仍需官方数据核验"),
+            "disclaimer": ("概率来自该指数自身的波动率预测与零漂移正态假设，不含方向判断: "
+                           "同口径下跌破 -2.5% 的概率与之相等，高概率只意味着波动放大而非看多; "
+                           "区间是样本外可靠性分桶的实际发生率 Wilson 区间，非模型参数区间; "
+                           "冰点分与情绪面仅作状态描述，实测无增量预测力，不参与概率; "
+                           "仅使用已完成日线; 融资采用沪深口径且披露时点仍需官方数据核验"),
         }
 
 

@@ -11,7 +11,8 @@ import pandas as pd
 
 from ice_engine import IceEngine, FEATURE_COLUMNS
 from probability_calibration import (
-    MODEL_VERSION, fit_bins, score_bins, walk_forward, weighted_pava,
+    MODEL_VERSION, exceedance_probability, fit_bins, score_bins, walk_forward,
+    walk_forward_pointwise, weighted_pava,
 )
 
 
@@ -77,6 +78,53 @@ class CalibrationTests(unittest.TestCase):
         result = walk_forward([50] * 200, [0, 1] * 100, np.arange(200))
         self.assertEqual(result["status"], "insufficient_oos")
 
+    def test_exceedance_probability_matches_the_normal_tail(self):
+        self.assertAlmostEqual(exceedance_probability(10.0, 0.0), 0.5)
+        self.assertAlmostEqual(exceedance_probability(1.0, 1.0), 0.15865525, places=7)
+        # 波动越大越容易穿越正阈值; 阈值对称时上下概率相等
+        self.assertGreater(exceedance_probability(8.0, 2.5), exceedance_probability(4.0, 2.5))
+        self.assertAlmostEqual(exceedance_probability(4.0, 2.5),
+                               1 - exceedance_probability(4.0, -2.5))
+
+    def test_pointwise_walk_forward_cannot_see_the_future(self):
+        rng = np.random.default_rng(3)
+        positions = np.arange(900)
+        labels = (rng.random(900) < .3).astype(float)
+        probs = np.full(900, .3)
+        before = walk_forward_pointwise(probs, labels, positions)
+        changed = labels.copy()
+        changed[800:] = 1.0
+        after = walk_forward_pointwise(probs, changed, positions)
+        keep = [i for i, o in enumerate(before["origins"]) if o < 790]
+        np.testing.assert_allclose([before["reliability"][0]["n"]], [after["reliability"][0]["n"]])
+        self.assertTrue(keep)
+        self.assertEqual(before["origins"][:len(keep)], after["origins"][:len(keep)])
+
+    def test_pointwise_skill_separates_an_informed_model_from_a_blind_one(self):
+        rng = np.random.default_rng(9)
+        positions = np.arange(2000)
+        truth = np.where(np.arange(2000) % 2 == 0, .8, .1)
+        labels = (rng.random(2000) < truth).astype(float)
+        informed = walk_forward_pointwise(truth, labels, positions)
+        blind = walk_forward_pointwise(np.full(2000, .45), labels, positions)
+        harmful = walk_forward_pointwise(np.full(2000, .95), labels, positions)
+        self.assertGreater(informed["brier_skill"], .4)
+        self.assertEqual(informed["status"], "validated_oos_skill")
+        self.assertLess(informed["bootstrap_p_value"], .05)
+        # 常数=真实基率只是把基率估计得更准, 不算信息; 明显错误的常数必须被判为无优势
+        self.assertLess(abs(blind["brier_skill"]), .05)
+        self.assertLess(harmful["brier_skill"], -.3)
+        self.assertEqual(harmful["status"], "no_oos_edge")
+
+    def test_overlap_is_not_counted_as_independent_evidence(self):
+        positions = np.arange(1500)
+        labels = np.tile([1., 0., 0., 1.], 375)
+        result = walk_forward_pointwise(np.full(1500, .5), labels, positions, horizon=10)
+        self.assertEqual(result["n_eff_overlap_adj"], result["n"] // 11)
+        self.assertEqual(result["partitions"], 11)
+        for row in result["reliability"]:
+            self.assertLess(row["n_eff_overlap_adj"], row["n"])
+
 
 class IceIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -112,20 +160,46 @@ class IceIntegrationTests(unittest.TestCase):
         self.margin = self.margin.iloc[:-1 - 1]
         frame = self.engine.build_frame()
         self.assertTrue(pd.isna(frame.iloc[-1]["ice_p_margin"]))
-        self.engine._load_calibration = lambda symbol: {
-            "bins": [], "asof_date": str(frame.iloc[-1]["date"])}
-        result = self.engine._predict_sync("sh000001")
-        self.assertEqual(result["status"], "unavailable")
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("ice_engine.EVAL_DIR", folder):
+                result = self.engine._predict_sync("sh000001")
+        # 冰点分缺特征时置空而非当成 0 分位; 概率只依赖价格波动率, 仍须给出
+        self.assertEqual(result["status"], "success")
+        self.assertIsNone(result["ice_score_0_100"])
         self.assertIn("ice_p_margin", result["missing_features"])
+        self.assertIsNotNone(result["rebound_prob_10d_pct"])
+
+    def test_probability_needs_volatility_not_the_ice_score(self):
+        frame = self.engine.build_frame()
+        frame.loc[frame.index[-1], "sigma10_pct"] = np.nan
+        with patch.object(self.engine, "build_frame", return_value=frame):
+            self.engine._load_calibration = lambda symbol: {
+                "vol_model": {}, "asof_date": str(frame.iloc[-1]["date"])}
+            result = self.engine._predict_sync("sh000001")
+        self.assertEqual(result["status"], "unavailable")
+        self.assertIsNone(result["rebound_prob_10d_pct"])
+
+    def test_probability_is_a_volatility_statement_not_a_direction_call(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("ice_engine.EVAL_DIR", folder):
+                result = self.engine._predict_sync("sh000001")
+        self.assertEqual(result["rebound_prob_10d_pct"], result["drop_prob_10d_pct"])
+        sigma = result["sigma10_pct"]
+        self.assertEqual(result["band68_pct"], [round(-sigma, 1), round(sigma, 1)])
+        # 波动越大, 穿越 +2.5% 的概率越高, 且始终落在 (0, 50)
+        self.assertLess(result["rebound_prob_10d_pct"], 50)
+        self.assertGreater(result["rebound_prob_10d_pct"], 0)
 
     def test_calibration_and_prediction_offline(self):
         with tempfile.TemporaryDirectory() as folder:
             with patch("ice_engine.EVAL_DIR", folder):
                 calib = self.engine.calibrate()
                 self.assertEqual(calib["model_version"], MODEL_VERSION)
-                self.assertIn("validation", calib)
-                self.assertEqual(sum(b["n"] for b in calib["bins"]), calib["sample_days"])
-                for b in calib["bins"]:
+                self.assertEqual(calib["vol_model"]["fitted_parameters"], 0)
+                self.assertIn("validation", calib["vol_model"])
+                bins = calib["ice_bin_reference"]["bins"]
+                self.assertEqual(sum(b["n"] for b in bins), calib["sample_days"])
+                for b in bins:
                     if b["n"] < 30:
                         self.assertIsNone(b["calibrated_prob"])
                 result = self.engine._predict_sync("sh000001")
@@ -150,19 +224,15 @@ class IceIntegrationTests(unittest.TestCase):
             frame = self.engine.build_frame()
         self.assertEqual(frame.iloc[-1]["date"], "2026-09-10")
 
-    def test_score_100_uses_last_bin_interval(self):
+    def test_volatility_is_the_only_probability_input(self):
+        """两个冰点分天差地别但波动率相同的日子, 必须给出相同概率。"""
         frame = self.engine.build_frame()
+        cold, warm = frame.iloc[-1].copy(), frame.iloc[-1].copy()
         for col in FEATURE_COLUMNS:
-            frame.loc[frame.index[-1], col] = 1.
-        self.engine.build_frame = lambda *args, **kwargs: frame
-        self.engine._load_calibration = lambda symbol: {
-            "symbol": symbol, "asof_date": str(frame.iloc[-1]["date"]),
-            "baseline_rebound_hit_10d_pct": 35.,
-            "bins": [{"bin": "80-100", "n": 40, "calibrated_prob": 40.,
-                      "ci_low": 25., "ci_high": 55., "ci_eff_low": 10., "ci_eff_high": 80.}]}
-        result = self.engine._predict_sync("sh000001")
-        self.assertEqual(result["ice_score_0_100"], 100.)
-        self.assertEqual(result["ci_low_pct"], 10.)
+            cold[col], warm[col] = 1.0, 0.0
+        self.assertGreater(IceEngine._ice_score(cold), IceEngine._ice_score(warm))
+        self.assertEqual(exceedance_probability(cold["sigma10_pct"], 2.5),
+                         exceedance_probability(warm["sigma10_pct"], 2.5))
 
     def test_short_margin_cache_does_not_truncate_history(self):
         engine = IceEngine()
