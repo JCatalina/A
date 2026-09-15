@@ -1,0 +1,165 @@
+{
+  "symbol": "sz399001",
+  "model_version": "direction-regime-rel-v1",
+  "generated_at": "2026-09-15 17:31:11",
+  "asof_date": "2026-09-15",
+  "sample_days": 3970,
+  "baseline_up10_pct": 51.8,
+  "fwd_window": 10,
+  "validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 3710,
+    "n_eff_overlap_adj": 337,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.2540307225734302,
+    "baseline_brier": 0.2514497435965653,
+    "brier_skill": -0.010264392955619428,
+    "bootstrap_p_value": 0.98175,
+    "partition_skill_min": -0.020867267334069517,
+    "partition_skill_max": 0.003319612240739178,
+    "log_loss": 0.7013753244843752,
+    "baseline_log_loss": 0.6960590350119836,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.25-0.35",
+        "n": 13,
+        "mean_pred_pct": 32.8,
+        "realized_pct": 92.3,
+        "n_eff_overlap_adj": 1
+      },
+      {
+        "bucket": "0.35-0.45",
+        "n": 151,
+        "mean_pred_pct": 41.3,
+        "realized_pct": 65.6,
+        "n_eff_overlap_adj": 13
+      },
+      {
+        "bucket": "0.45-1.00",
+        "n": 3546,
+        "mean_pred_pct": 52.8,
+        "realized_pct": 50.8,
+        "n_eff_overlap_adj": 322
+      }
+    ],
+    "partitions_positive": 1,
+    "partitions": 11
+  },
+  "ice_as_direction_validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 3840,
+    "n_eff_overlap_adj": 349,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.30996636240308495,
+    "baseline_brier": 0.2520784957300431,
+    "brier_skill": -0.22964222515448274,
+    "bootstrap_p_value": 1.0,
+    "partition_skill_min": -0.28433059658715165,
+    "partition_skill_max": -0.18041273451955164,
+    "log_loss": 0.8355946940448871,
+    "baseline_log_loss": 0.6973606332083958,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.00-0.15",
+        "n": 116,
+        "mean_pred_pct": 13.1,
+        "realized_pct": 58.6,
+        "n_eff_overlap_adj": 10
+      },
+      {
+        "bucket": "0.15-0.25",
+        "n": 1269,
+        "mean_pred_pct": 21.1,
+        "realized_pct": 48.3,
+        "n_eff_overlap_adj": 115
+      },
+      {
+        "bucket": "0.25-0.35",
+        "n": 2001,
+        "mean_pred_pct": 29.5,
+        "realized_pct": 52.2,
+        "n_eff_overlap_adj": 181
+      },
+      {
+        "bucket": "0.35-0.45",
+        "n": 454,
+        "mean_pred_pct": 38.0,
+        "realized_pct": 54.8,
+        "n_eff_overlap_adj": 41
+      }
+    ],
+    "partitions_positive": 0,
+    "partitions": 11
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 433,
+      "hit_rate_pct": 48.7
+    },
+    {
+      "cell": 1,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 505,
+      "hit_rate_pct": 53.7
+    },
+    {
+      "cell": 2,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 873,
+      "hit_rate_pct": 48.1
+    },
+    {
+      "cell": 3,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 350,
+      "hit_rate_pct": 52.0
+    },
+    {
+      "cell": 4,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 360,
+      "hit_rate_pct": 45.0
+    },
+    {
+      "cell": 5,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 775,
+      "hit_rate_pct": 56.6
+    },
+    {
+      "cell": 6,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 333,
+      "hit_rate_pct": 47.7
+    },
+    {
+      "cell": 7,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 341,
+      "hit_rate_pct": 62.8
+    }
+  ],
+  "spec": "P(up10)=Laplace-shrunk hit rate in cell (MA200 × ret5_sign × rel20_vs_SH_sign); zero fitted weights"
+}

@@ -1781,6 +1781,8 @@ const WORKSPACE_TABS = [
     { tab: "tabIndexView", ws: "indexWorkspace" },
     { tab: "tabUsView", ws: "usWorkspace" },
     { tab: "tabMrdiView", ws: "mrdiWorkspace" },
+    { tab: "tabDirectionView", ws: "directionWorkspace" },
+    { tab: "tabNextdayView", ws: "nextdayWorkspace" },
     { tab: "tabStockView", ws: "stockWorkspace" }
 ];
 
@@ -2725,8 +2727,194 @@ function calcEMA(data, period) {
     return result;
 }
 
-// 初始化时绑定 MRDI 与美股面板事件 (美股数据在首次切入该 Tab 时才加载, 不拖慢首屏)
+// 初始化时绑定 MRDI / 美股 / 涨跌方向实验室
 document.addEventListener("DOMContentLoaded", () => {
     bindMrdiEvents();
     bindUsMacroEvents();
+    bindDirectionLabEvents();
+    bindNextdayEvents();
 });
+
+let currentDirSymbol = "sh000001";
+let currentNdSymbol = "sh000001";
+
+function bindNextdayEvents() {
+    document.getElementById("tabNextdayView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabNextdayView", "nextdayWorkspace");
+        loadNextday(currentNdSymbol);
+    });
+    document.querySelectorAll("[data-nd-symbol]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("[data-nd-symbol]").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentNdSymbol = btn.getAttribute("data-nd-symbol");
+            loadNextday(currentNdSymbol);
+        });
+    });
+}
+
+async function loadNextday(symbol) {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    const names = {sh000001:"上证指数",sz399001:"深证成指",sz399006:"创业板指",sh000688:"科创50"};
+    set("ndIndexName", names[symbol] || symbol);
+    set("ndProbNum", "--");
+    set("ndValidation", "加载中…");
+    try {
+        const res = await fetch(`/api/index/nextday?symbol=${encodeURIComponent(symbol)}`);
+        renderNextday(await res.json());
+    } catch (e) {
+        set("ndValidation", "请求失败: " + (e?.message || e));
+    }
+}
+
+function renderNextday(json = {}) {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    const statusLabels = {
+        nextday_validated: "样本外已验证",
+        nextday_unvalidated: "样本外未优于基率",
+        nextday_insufficient_oos: "样本外不足",
+    };
+    set("ndUpdateMeta", `${json.update_time || "--"} · 截至 ${json.asof_date || "--"}`);
+    set("ndProbStatus", statusLabels[json.probability_status] || json.probability_status || "--");
+    set("ndDisclaimer", json.disclaimer || "");
+
+    if (json.status !== "success" || !Number.isFinite(json.up_oc_prob_pct)) {
+        set("ndValidation", json.message || "暂不可用");
+        return;
+    }
+    set("ndProbNum", json.up_oc_prob_pct.toFixed(1));
+    const liftEl = document.getElementById("ndLift");
+    if (liftEl && Number.isFinite(json.lift_vs_baseline_pp) && Number.isFinite(json.baseline_up_oc_pct)) {
+        const lift = json.lift_vs_baseline_pp;
+        liftEl.textContent = (lift >= 0 ? "高于无条件基线 +" : "低于无条件基线 ")
+            + Math.abs(lift).toFixed(1) + "pp（基线 " + json.baseline_up_oc_pct + "%）";
+        liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
+    }
+    const f = json.factors || {};
+    const chips = [
+        `今日涨跌 ${Number.isFinite(f.ret1_pct) ? f.ret1_pct : "--"}%`,
+        `量比 ${Number.isFinite(f.vol_ratio_20d) ? f.vol_ratio_20d : "--"}`,
+        `收盘位置 ${Number.isFinite(f.close_location_0_1) ? f.close_location_0_1 : "--"}`,
+        f.ret1_down ? "收跌" : "收涨",
+        f.high_volume ? "放量" : "缩量/平量",
+        f.weak_close ? "收盘偏弱" : "收盘不弱",
+        `单元样本 n=${json.cell_n ?? "--"}`,
+    ].map(t => `<span class="ice-chip">${t}</span>`).join("");
+    const fac = document.getElementById("ndFactors");
+    if (fac) fac.innerHTML = chips;
+    const v = json.validation || {};
+    set("ndValidation",
+        `样本外 n=${v.n ?? "--"}（去重叠 ${v.n_eff_overlap_adj ?? "--"}）` +
+        (Number.isFinite(v.brier_skill) ? ` · Brier skill=${v.brier_skill.toFixed(4)}` : "") +
+        (Number.isFinite(v.bootstrap_p_value) ? ` · p=${v.bootstrap_p_value.toFixed(3)}` : "") +
+        ` · ${v.status || "--"}`);
+}
+
+function bindDirectionLabEvents() {
+    document.getElementById("tabDirectionView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabDirectionView", "directionWorkspace");
+        loadDirectionCompare(currentDirSymbol);
+    });
+    document.querySelectorAll("[data-dir-symbol]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll("[data-dir-symbol]").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentDirSymbol = btn.getAttribute("data-dir-symbol");
+            loadDirectionCompare(currentDirSymbol);
+        });
+    });
+}
+
+async function loadDirectionCompare(symbol) {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    set("dirIndexName", ({sh000001:"上证指数",sz399001:"深证成指",sz399006:"创业板指",sh000688:"科创50"})[symbol] || symbol);
+    set("dirProbNum", "--");
+    set("dirIceProbNum", "--");
+    set("dirVerdictHeadline", "加载中…");
+    try {
+        const res = await fetch(`/api/index/direction/compare?symbol=${encodeURIComponent(symbol)}`);
+        const json = await res.json();
+        renderDirectionCompare(json);
+    } catch (e) {
+        set("dirVerdictHeadline", "请求失败");
+        set("dirValidation", String(e?.message || e));
+    }
+}
+
+function renderDirectionCompare(json = {}) {
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    const dir = json.direction || {};
+    const ice = json.ice || {};
+    const cmp = json.comparison || dir.verdict_vs_ice || {};
+
+    set("dirUpdateMeta", `${dir.update_time || "--"} · 截至 ${dir.asof_date || "--"}`);
+
+    const statusLabels = {
+        direction_validated: "样本外已验证",
+        direction_unvalidated: "样本外未优于基率",
+        direction_insufficient_oos: "样本外不足",
+        vol_conditional_validated: "波动率模型已验证",
+        vol_conditional_unvalidated: "波动率模型未验证",
+        historical_estimate: "历史估计",
+    };
+    set("dirProbStatus", statusLabels[dir.probability_status] || dir.probability_status || "--");
+    set("dirIceStatus", statusLabels[ice.probability_status] || ice.probability_status || ice.status || "--");
+
+    if (dir.status === "success" && Number.isFinite(dir.up_prob_10d_pct)) {
+        set("dirProbNum", dir.up_prob_10d_pct.toFixed(1));
+        const lift = dir.lift_vs_baseline_pp;
+        const liftEl = document.getElementById("dirLift");
+        if (liftEl && Number.isFinite(lift) && Number.isFinite(dir.baseline_up10_pct)) {
+            liftEl.textContent = (lift >= 0 ? "高于无条件基线 +" : "低于无条件基线 ")
+                + Math.abs(lift).toFixed(1) + "pp（基线 " + dir.baseline_up10_pct + "%）";
+            liftEl.className = "ice-lift " + (lift >= 0 ? "pos" : "neg");
+        }
+        const f = dir.factors || {};
+        set("dirFactors",
+            `MA200 ${f.above_ma200 ? "上方" : "下方"} · 5日 ${Number.isFinite(f.ret5_pct) ? f.ret5_pct : "--"}%` +
+            ` · 20日 ${Number.isFinite(f.ret20_pct) ? f.ret20_pct : "--"}%` +
+            ` · 相对上证20日 ${Number.isFinite(f.rel20_vs_sh_pct) ? f.rel20_vs_sh_pct : "--"}%` +
+            ` · 单元 n=${dir.cell_n ?? "--"}`);
+        const v = dir.validation || {};
+        set("dirValidation",
+            `样本外 n=${v.n ?? "--"}（去重叠 ${v.n_eff_overlap_adj ?? "--"}）` +
+            (Number.isFinite(v.brier_skill) ? ` · skill=${v.brier_skill.toFixed(4)}` : "") +
+            (Number.isFinite(v.bootstrap_p_value) ? ` · p=${v.bootstrap_p_value.toFixed(3)}` : "") +
+            (Number.isFinite(v.partitions_positive) ? ` · 切分 ${v.partitions_positive}/${v.partitions}` : ""));
+        set("dirDisclaimer", dir.disclaimer || "");
+    } else {
+        set("dirValidation", dir.message || "方向概率暂不可用");
+    }
+
+    if (ice.status === "success" && Number.isFinite(ice.rebound_prob_10d_pct)) {
+        set("dirIceProbNum", Number(ice.rebound_prob_10d_pct).toFixed(1));
+        if (Number.isFinite(ice.drop_prob_10d_pct)) {
+            set("dirIceSymmetry", `同口径下跌≥2.5% 概率 ${ice.drop_prob_10d_pct}% · 只判波动不判方向`);
+        }
+        if (Array.isArray(ice.band68_pct)) {
+            set("dirIceBand", `10日68%波动区间 ${ice.band68_pct[0]}% ~ +${ice.band68_pct[1]}%`);
+        }
+        const iv = ice.validation || {};
+        set("dirIceValidation",
+            `原面板验证: ${iv.status || "--"}` +
+            (Number.isFinite(iv.brier_skill) ? ` · skill=${iv.brier_skill.toFixed(4)}` : ""));
+    } else {
+        set("dirIceValidation", ice.message || "原冰点面板暂不可用");
+    }
+
+    const fmt = v => Number.isFinite(v) ? ((v >= 0 ? "+" : "") + v.toFixed(4)) : "--";
+    set("dirSkillNew", fmt(cmp.direction_skill));
+    set("dirSkillOld", fmt(cmp.ice_as_direction_skill));
+    set("dirSkillStatus", statusLabels[dir.probability_status] || dir.probability_status || "--");
+    const winnerMap = {
+        direction_model: "新方向模型",
+        ice_as_direction: "旧ICE对照",
+        tie: "接近 / 均无可靠优势",
+    };
+    set("dirWinner", winnerMap[cmp.winner] || cmp.winner || "--");
+    set("dirVerdictHeadline", cmp.summary || "对照结果未返回");
+    set("dirVerdictFoot",
+        "解读: skill>0 且通过区块自助才算『样本外优于永远报基率』。" +
+        "旧 ICE 在涨跌标签上通常为负——说明它擅长波动幅度，不擅长涨跌方向。" +
+        "若新模型也是 unvalidated，请把数字当条件频率，不要当胜率承诺。");
+}

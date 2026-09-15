@@ -1,0 +1,103 @@
+{
+  "symbol": "sh000001",
+  "model_version": "nextday-oc-volprice-v1",
+  "generated_at": "2026-09-15 17:47:55",
+  "asof_date": "2026-09-15",
+  "sample_days": 3980,
+  "baseline_up_oc1_pct": 55.4,
+  "label": "close_{T+1} > open_{T+1}",
+  "validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 3729,
+    "n_eff_overlap_adj": 1864,
+    "min_required": 60,
+    "horizon": 1,
+    "brier": 0.24689047188684057,
+    "baseline_brier": 0.24733406150308243,
+    "brier_skill": 0.0017934837342907795,
+    "bootstrap_p_value": 0.247,
+    "partition_skill_min": -0.004139206328565459,
+    "partition_skill_max": 0.007730228295403041,
+    "log_loss": 0.6869124783951036,
+    "baseline_log_loss": 0.6878073727164802,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.45-1.00",
+        "n": 3729,
+        "mean_pred_pct": 54.7,
+        "realized_pct": 55.3,
+        "n_eff_overlap_adj": 1864
+      }
+    ],
+    "partitions_positive": 1,
+    "partitions": 2
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "ret1_down": false,
+      "vol_ratio_gt1": false,
+      "weak_close": false,
+      "n": 983,
+      "hit_rate_pct": 51.0
+    },
+    {
+      "cell": 1,
+      "ret1_down": false,
+      "vol_ratio_gt1": false,
+      "weak_close": true,
+      "n": 76,
+      "hit_rate_pct": 57.9
+    },
+    {
+      "cell": 2,
+      "ret1_down": false,
+      "vol_ratio_gt1": true,
+      "weak_close": false,
+      "n": 950,
+      "hit_rate_pct": 54.3
+    },
+    {
+      "cell": 3,
+      "ret1_down": false,
+      "vol_ratio_gt1": true,
+      "weak_close": true,
+      "n": 77,
+      "hit_rate_pct": 67.5
+    },
+    {
+      "cell": 4,
+      "ret1_down": true,
+      "vol_ratio_gt1": false,
+      "weak_close": false,
+      "n": 388,
+      "hit_rate_pct": 54.6
+    },
+    {
+      "cell": 5,
+      "ret1_down": true,
+      "vol_ratio_gt1": false,
+      "weak_close": true,
+      "n": 753,
+      "hit_rate_pct": 55.5
+    },
+    {
+      "cell": 6,
+      "ret1_down": true,
+      "vol_ratio_gt1": true,
+      "weak_close": false,
+      "n": 246,
+      "hit_rate_pct": 54.5
+    },
+    {
+      "cell": 7,
+      "ret1_down": true,
+      "vol_ratio_gt1": true,
+      "weak_close": true,
+      "n": 507,
+      "hit_rate_pct": 64.3
+    }
+  ],
+  "spec": "Laplace-shrunk P(up_oc1 | ret1_down × vol_ratio>1 × close_loc<0.4)"
+}

@@ -13,6 +13,8 @@ from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
 from us_index_engine import USIndexEngine
 from ice_engine import IceEngine
+from direction_engine import DirectionEngine
+from nextday_engine import NextDayEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -24,6 +26,10 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=scanner_engine.ensure_demo_results, daemon=True, name="demo-prewarm").start()
     # v2.6: 冰点反弹校准表预热 (四个指数各自独立校准, 磁盘有缓存则秒级)
     threading.Thread(target=ice_engine.warm_all, daemon=True, name="ice-prewarm").start()
+    # v3.1: 涨跌方向引擎预热 (独立模型, 不改动冰点)
+    threading.Thread(target=direction_engine.warm_all, daemon=True, name="direction-prewarm").start()
+    # v3.2: 明日开→收上涨概率预热
+    threading.Thread(target=nextday_engine.warm_all, daemon=True, name="nextday-prewarm").start()
     # v2.7: 大盘四大指数 x 四大周期原始K线预热, 首次切换 index tab 即命中缓存
     threading.Thread(target=index_engine.warm_all, daemon=True, name="index-prewarm").start()
     # v2.9: 美股四大指数 x 日/周/月三周期预热, 首次切换 us tab 即命中缓存
@@ -55,6 +61,36 @@ scanner_engine = ScannerEngine(data_fetcher)
 index_engine = IndexEngine()
 us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
+direction_engine = DirectionEngine(ice_engine)
+nextday_engine = NextDayEngine(ice_engine)
+
+
+@app.get("/api/index/nextday")
+def get_index_nextday(
+    symbol: Literal["sh000001", "sz399001", "sz399006", "sh000688"] = Query(
+        "sh000001", description="指数代码")
+):
+    """明日开→收上涨概率 (量价一期; 四大指数)"""
+    return nextday_engine.predict(symbol)
+
+
+@app.get("/api/index/direction")
+def get_index_direction(
+    symbol: Literal["sh000001", "sz399001", "sz399006", "sh000688"] = Query(
+        "sh000001", description="指数代码")
+):
+    """涨跌方向概率: P(10日后收盘上涨), 与冰点引擎独立"""
+    return direction_engine.predict(symbol)
+
+
+@app.get("/api/index/direction/compare")
+def get_index_direction_compare(
+    symbol: Literal["sh000001", "sz399001", "sz399006", "sh000688"] = Query(
+        "sh000001", description="指数代码")
+):
+    """新旧对照: 方向模型 vs 冰点/波动率模型 (冰点逻辑只读, 不改动)"""
+    return direction_engine.compare(symbol)
+
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -66,6 +102,7 @@ def get_index_macro_analysis(
     if not res:
         return JSONResponse(status_code=404, content={"status": "error", "message": f"未获取到指数 {symbol} 的多周期行情数据"})
     return {"status": "success", "data": res}
+
 
 @app.get("/api/index/ice")
 def get_index_ice_rebound(

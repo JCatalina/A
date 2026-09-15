@@ -4,7 +4,7 @@
 > 🚀 **基于中国A股市场特性的专业量化分析与走势预测平台**  
 > 免Token实时行情直连 · 筹码分布与价格带聚类共振 · 自适应四维量化评分 · 大盘多周期宏观研判 · 美股大盘三周期研判 · 盘后自动化选股雷达
 
-> ⚠️ **口径提示 (2026-09-15 更新)**：个股面板展示的“多头评分”是 0–100 技术规则分，未经概率校准；大盘反弹概率面板是**波动率条件化的阈值穿越概率**（同口径下跌 2.5% 的概率与之相等，只判波动幅度不判方向），样本外 Brier skill 约 +0.031~+0.038，冰点分仅作状态描述、实测无增量预测力，详见 [ALGORITHM_DOC.md §15.4](ALGORITHM_DOC.md)。在线“历史相似形态”是样本内价格路径描述，不是可交易回测。美股面板的方向分与建议仓位同为规则型技术评分，未经概率校准，且因行情源无美股分时K线而不含 30/60 分钟级别。方法与局限详见 [ALGORITHM_REVIEW_2026-09-12.md](ALGORITHM_REVIEW_2026-09-12.md)。
+> ⚠️ **口径提示 (2026-09-15 更新)**：个股面板展示的“多头评分”是 0–100 技术规则分，未经概率校准；大盘反弹概率面板是**波动率条件化的阈值穿越概率**（同口径下跌 2.5% 的概率与之相等，只判波动幅度不判方向）；**明日开收概率**面板预测「明天开→收上涨」（量价一期，四指数），样本外通常未验证；涨跌方向实验室另见独立 Tab。现行规格见 [`docs/spec/`](docs/spec/)（[ice](docs/spec/ice.md) / [direction](docs/spec/direction.md) / [nextday](docs/spec/nextday.md)）；演进决策见 [`docs/adr/`](docs/adr/)。在线“历史相似形态”是样本内价格路径描述，不是可交易回测。美股面板的方向分与建议仓位同为规则型技术评分，未经概率校准，且因行情源无美股分时K线而不含 30/60 分钟级别。方法与局限详见 [ALGORITHM_REVIEW_2026-09-12.md](ALGORITHM_REVIEW_2026-09-12.md)。
 
 ---
 
@@ -93,7 +93,12 @@ A-Share-Quant-System/
 ├── .gitignore                # Git 忽略配置
 ├── requirements.txt          # Python 依赖清单
 ├── README.md                 # 项目使用说明
-├── ALGORITHM_DOC.md          # 详细算法白皮书与量化数学模型说明
+├── ALGORITHM_DOC.md          # 算法白皮书（架构总览；§9+ 历史归档已冻结）
+├── docs/                     # 活规格 + ADR + Changelog（改需求先看这里）
+│   ├── README.md             # 文档体系说明与改动流程
+│   ├── CHANGELOG.md          # 人话变更摘要
+│   ├── adr/                  # 决策记录（为什么改）
+│   └── spec/                 # 现行引擎规格（现在怎么算）
 ├── backend/                  # Python 量化与服务端核心
 │   ├── app.py                # FastAPI 路由与主入口
 │   ├── data_fetcher.py       # 实时行情与日周K线双通道抓取引擎
@@ -102,6 +107,9 @@ A-Share-Quant-System/
 │   ├── prediction_engine.py  # 自适应四维评分、严格回测与交易计划生成
 │   ├── index_engine.py       # 大盘指数四大周期研判与操作许可矩阵
 │   ├── us_index_engine.py    # 美股指数日/周/月三周期研判 (继承 index_engine)
+│   ├── ice_engine.py         # 大盘阈值穿越概率 (ICE v3)
+│   ├── direction_engine.py   # 涨跌方向实验室
+│   ├── nextday_engine.py     # 明日开→收概率
 │   └── scanner_engine.py     # 盘后全市场自动化批量扫描与雷达池
 └── frontend/                 # 现代化 Web 前端看板
     ├── index.html            # 看板页面结构
@@ -113,7 +121,13 @@ A-Share-Quant-System/
 
 ## 📖 核心算法文档
 
-有关系统完整的数学模型、聚类公式、筹码衰减推导与回测判定规则，请详见 [ALGORITHM_DOC.md](ALGORITHM_DOC.md)。
+| 文档 | 用途 |
+|------|------|
+| [`docs/README.md`](docs/README.md) | **入口**：活规格 / ADR / Changelog 怎么用 |
+| [`docs/spec/`](docs/spec/) | 各引擎**当前**怎么算 |
+| [`docs/adr/`](docs/adr/) | 重要改动的**决策记录** |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | 按日期的人话变更摘要 |
+| [ALGORITHM_DOC.md](ALGORITHM_DOC.md) | 架构与数学白皮书（历史修正日志已冻结） |
 
 美股大盘研判 TAB 的范围决策、数据源探测、复用边界、API 契约与未做项，请详见 [美股大盘研判 — 实施总结.md](美股大盘研判%20—%20实施总结.md)。
 

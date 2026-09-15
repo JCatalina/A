@@ -3451,3 +3451,98 @@ body {
         width: 100%;
     }
 }
+
+/* ===== 涨跌方向实验室 ===== */
+.direction-workspace {
+    gap: 16px;
+}
+.dir-page-intro {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    padding: 8px 4px 0;
+}
+.dir-eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: #64748b;
+    font-weight: 600;
+}
+.dir-page-title {
+    margin: 6px 0 4px;
+    font-size: 24px;
+    font-weight: 800;
+    color: #0f172a;
+}
+.dir-page-desc {
+    margin: 0;
+    max-width: 720px;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.55;
+}
+.dir-live-status {
+    font-size: 12px;
+    color: #64748b;
+    white-space: nowrap;
+}
+.dir-compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+.dir-card-new {
+    border: 1px solid rgba(14, 165, 233, 0.35);
+}
+.dir-card-old {
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    opacity: 0.96;
+}
+.dir-verdict-card {
+    padding: 16px 18px 18px;
+}
+.dir-verdict-headline {
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 12px;
+}
+.dir-metric-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+.dir-metric {
+    background: rgba(148, 163, 184, 0.08);
+    border-radius: 10px;
+    padding: 12px;
+}
+.dir-metric-lab {
+    display: block;
+    font-size: 11px;
+    color: #64748b;
+    margin-bottom: 6px;
+}
+.dir-metric-val {
+    font-size: 18px;
+    font-weight: 700;
+    font-family: "JetBrains Mono", monospace;
+    color: #0f172a;
+}
+.dir-verdict-foot {
+    margin: 12px 0 0;
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.5;
+}
+@media (max-width: 1024px) {
+    .dir-compare-grid,
+    .dir-metric-row {
+        grid-template-columns: 1fr;
+    }
+    .dir-page-intro {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

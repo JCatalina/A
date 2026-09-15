@@ -128,6 +128,8 @@ class IceEngine:
 
         rows, source = self._fetch_daily_eastmoney(symbol, count), "eastmoney"
         if not rows:
+            rows, source = self._fetch_daily_sina(symbol, count), "sina_fallback"
+        if not rows:
             rows, source = self._fetch_daily_tencent(symbol, count), "tencent_fallback"
         df = pd.DataFrame(rows)
         if not df.empty:
@@ -167,6 +169,27 @@ class IceEngine:
                 continue
             rows.append({"date": parts[0], "open": o, "close": c, "high": h, "low": l,
                          "volume": v * 100.0, "amount": amt})
+        return rows
+
+    def _fetch_daily_sina(self, symbol: str, count: int) -> List[Dict[str, Any]]:
+        """第二备源: 新浪日K, 同样可回溯至 2010 (量单位:股), 无成交额字段"""
+        url = ("https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+               f"?symbol={symbol}&scale=240&ma=no&datalen={count}")
+        try:
+            with self._http_lock:
+                raw = self.session.get(url, timeout=12,
+                                       headers={"Referer": "https://finance.sina.com.cn/"}).json() or []
+        except Exception as e:
+            logger.warning(f"Ice sina kline failed {symbol}: {e}")
+            return []
+        rows = []
+        for item in raw:
+            try:
+                o, c, h, l, v = (float(item[k]) for k in ("open", "close", "high", "low", "volume"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            rows.append({"date": str(item.get("day", ""))[:10], "open": o, "close": c,
+                         "high": h, "low": l, "volume": v, "amount": v * (o + c) / 2})
         return rows
 
     def _fetch_daily_tencent(self, symbol: str, count: int) -> List[Dict[str, Any]]:

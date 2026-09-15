@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=2.9.0">
+    <link rel="stylesheet" href="/static/style.css?v=3.2.0">
 </head>
 <body>
     <div class="app-container">
@@ -32,6 +32,8 @@
                     <button class="nav-tab active" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
                     <button class="nav-tab" id="tabUsView" data-target="usWorkspace">🗽 美股大盘研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
+                    <button class="nav-tab" id="tabDirectionView" data-target="directionWorkspace">🧭 涨跌方向实验室</button>
+                    <button class="nav-tab" id="tabNextdayView" data-target="nextdayWorkspace">📈 明日开收概率</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                 </div>
             </div>
@@ -882,9 +884,169 @@
 
         </main>
 
+        <!-- 主内容工作区 5: 涨跌方向实验室 (独立于冰点引擎) -->
+        <main class="index-macro-workspace direction-workspace" id="directionWorkspace" style="display: none;">
+            <section class="dir-page-intro">
+                <div>
+                    <span class="dir-eyebrow">DIRECTION LAB · A-SHARE UP/DOWN</span>
+                    <h1 class="dir-page-title">涨跌方向实验室</h1>
+                    <p class="dir-page-desc">预测「10 个交易日后收盘是否上涨」。左侧为新方向模型，右侧为原冰点/波动率面板只读对照；底部给出同一涨跌标签下的样本外技能对比。</p>
+                </div>
+                <div class="dir-live-status">
+                    <span id="dirUpdateMeta">尚未加载</span>
+                </div>
+            </section>
+
+            <div class="macro-index-nav" id="dirIndexNav">
+                <div class="index-capsule-tabs" id="dirCapsuleTabs">
+                    <button class="index-capsule-btn active" data-dir-symbol="sh000001">上证指数</button>
+                    <button class="index-capsule-btn" data-dir-symbol="sz399001">深证成指</button>
+                    <button class="index-capsule-btn" data-dir-symbol="sz399006">创业板指</button>
+                    <button class="index-capsule-btn" data-dir-symbol="sh000688">科创50</button>
+                </div>
+                <div class="index-status-summary-tag">
+                    <span class="idx-name" id="dirIndexName">上证指数</span>
+                    <span class="idx-sub">新旧模型对照 · 不改动原冰点逻辑</span>
+                </div>
+            </div>
+
+            <div class="dir-compare-grid">
+                <div class="glass-card ice-prob-card dir-card dir-card-new">
+                    <div class="card-header">
+                        <span class="header-badge cyan">NEW</span>
+                        <h2>方向概率 · P(10日收涨)</h2>
+                        <span class="header-tip">条件频率 · <span id="dirProbStatus">--</span></span>
+                    </div>
+                    <div class="ice-body">
+                        <div class="ice-gauge-block">
+                            <div class="ice-prob-big" id="dirProbNum">--</div>
+                            <div class="ice-prob-unit">%</div>
+                            <div class="ice-prob-lab">未来 10 交易日收盘上涨的概率</div>
+                            <div class="ice-lift" id="dirLift"></div>
+                            <div class="ice-ci" id="dirFactors"></div>
+                        </div>
+                        <div class="ice-detail-block">
+                            <div class="ice-ci" id="dirValidation"></div>
+                            <div class="ice-ci" id="dirDisclaimer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-card ice-prob-card dir-card dir-card-old">
+                    <div class="card-header">
+                        <span class="header-badge">OLD</span>
+                        <h2>原冰点/波动率面板（只读）</h2>
+                        <span class="header-tip">不参与方向训练 · <span id="dirIceStatus">--</span></span>
+                    </div>
+                    <div class="ice-body">
+                        <div class="ice-gauge-block">
+                            <div class="ice-prob-big" id="dirIceProbNum">--</div>
+                            <div class="ice-prob-unit">%</div>
+                            <div class="ice-prob-lab">原面板数字（波动穿越 / 反弹阈值）</div>
+                            <div class="ice-ci" id="dirIceSymmetry"></div>
+                            <div class="ice-ci" id="dirIceBand"></div>
+                        </div>
+                        <div class="ice-detail-block">
+                            <div class="ice-ci" id="dirIceValidation"></div>
+                            <div class="ice-ci" id="dirIceNote">这不是涨跌方向概率。对照区用同一「10日收涨」标签衡量：若把它误当方向，样本外通常更差。</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card dir-verdict-card">
+                <div class="card-header">
+                    <span class="header-badge">OOS</span>
+                    <h2>样本外谁更准？（同一标签：10 日收盘上涨）</h2>
+                </div>
+                <div class="dir-verdict-body">
+                    <div class="dir-verdict-headline" id="dirVerdictHeadline">加载中…</div>
+                    <div class="dir-metric-row">
+                        <div class="dir-metric">
+                            <span class="dir-metric-lab">新方向模型 Brier skill</span>
+                            <span class="dir-metric-val" id="dirSkillNew">--</span>
+                        </div>
+                        <div class="dir-metric">
+                            <span class="dir-metric-lab">把旧 ICE 当方向 Brier skill</span>
+                            <span class="dir-metric-val" id="dirSkillOld">--</span>
+                        </div>
+                        <div class="dir-metric">
+                            <span class="dir-metric-lab">新模型状态</span>
+                            <span class="dir-metric-val" id="dirSkillStatus">--</span>
+                        </div>
+                        <div class="dir-metric">
+                            <span class="dir-metric-lab">胜出</span>
+                            <span class="dir-metric-val" id="dirWinner">--</span>
+                        </div>
+                    </div>
+                    <p class="dir-verdict-foot" id="dirVerdictFoot"></p>
+                </div>
+            </div>
+        </main>
+
+        <!-- 主内容工作区 6: 明日开→收上涨概率 (量价一期) -->
+        <main class="index-macro-workspace nextday-workspace" id="nextdayWorkspace" style="display: none;">
+            <section class="dir-page-intro">
+                <div>
+                    <span class="dir-eyebrow">NEXT-DAY OPEN→CLOSE · VOLUME &amp; PRICE ONLY</span>
+                    <h1 class="dir-page-title">明日开收概率</h1>
+                    <p class="dir-page-desc">预测「明天开盘到收盘是否上涨」（不含隔夜跳空）。一期只用今日量价状态；情绪指标二期再加。仅四大指数。</p>
+                </div>
+                <div class="dir-live-status"><span id="ndUpdateMeta">尚未加载</span></div>
+            </section>
+
+            <div class="macro-index-nav">
+                <div class="index-capsule-tabs" id="ndCapsuleTabs">
+                    <button class="index-capsule-btn active" data-nd-symbol="sh000001">上证指数</button>
+                    <button class="index-capsule-btn" data-nd-symbol="sz399001">深证成指</button>
+                    <button class="index-capsule-btn" data-nd-symbol="sz399006">创业板指</button>
+                    <button class="index-capsule-btn" data-nd-symbol="sh000688">科创50</button>
+                </div>
+                <div class="index-status-summary-tag">
+                    <span class="idx-name" id="ndIndexName">上证指数</span>
+                    <span class="idx-sub">口径 C · 开→收 · 量价一期</span>
+                </div>
+            </div>
+
+            <div class="glass-card ice-prob-card dir-card-new">
+                <div class="card-header">
+                    <span class="header-badge cyan">OC</span>
+                    <h2>明日开盘→收盘上涨概率</h2>
+                    <span class="header-tip"><span id="ndProbStatus">--</span></span>
+                </div>
+                <div class="ice-body">
+                    <div class="ice-gauge-block">
+                        <div class="ice-prob-big" id="ndProbNum">--</div>
+                        <div class="ice-prob-unit">%</div>
+                        <div class="ice-prob-lab">明天开→收上涨的条件频率估计</div>
+                        <div class="ice-lift" id="ndLift"></div>
+                    </div>
+                    <div class="ice-detail-block">
+                        <div class="ice-factors" id="ndFactors"></div>
+                        <div class="ice-ci" id="ndValidation"></div>
+                        <div class="ice-ci" id="ndDisclaimer"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card dir-verdict-card">
+                <div class="card-header">
+                    <span class="header-badge">NOTE</span>
+                    <h2>怎么读这个数字</h2>
+                </div>
+                <div class="dir-verdict-body">
+                    <p class="dir-verdict-foot" id="ndReadme" style="margin:0">
+                        状态单元 = 今日是否收跌 × 量比是否&gt;1 × 收盘是否偏弱（位于当日高低点下 40%）。
+                        概率是该单元历史上「次日开→收上涨」的频率，并向无条件基率收缩。
+                        离线检验显示四指数样本外优势极弱；若状态为「未验证」，请勿当交易信号。
+                    </p>
+                </div>
+            </div>
+        </main>
+
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=2.9.0"></script>
+    <script src="/static/app.js?v=3.2.0"></script>
 </body>
 </html>

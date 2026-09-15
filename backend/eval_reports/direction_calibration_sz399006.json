@@ -1,0 +1,165 @@
+{
+  "symbol": "sz399006",
+  "model_version": "direction-regime-rel-v1",
+  "generated_at": "2026-09-15 17:31:17",
+  "asof_date": "2026-09-15",
+  "sample_days": 3928,
+  "baseline_up10_pct": 53.0,
+  "fwd_window": 10,
+  "validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 3668,
+    "n_eff_overlap_adj": 333,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.24936297834683221,
+    "baseline_brier": 0.25057997593858966,
+    "brier_skill": 0.00485672323655939,
+    "bootstrap_p_value": 0.3045,
+    "partition_skill_min": -0.007571180959785595,
+    "partition_skill_max": 0.026089003684237055,
+    "log_loss": 0.6920659020766391,
+    "baseline_log_loss": 0.694330040486294,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.35-0.45",
+        "n": 201,
+        "mean_pred_pct": 42.5,
+        "realized_pct": 53.2,
+        "n_eff_overlap_adj": 18
+      },
+      {
+        "bucket": "0.45-1.00",
+        "n": 3467,
+        "mean_pred_pct": 55.3,
+        "realized_pct": 53.1,
+        "n_eff_overlap_adj": 315
+      }
+    ],
+    "partitions_positive": 5,
+    "partitions": 11
+  },
+  "ice_as_direction_validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 3798,
+    "n_eff_overlap_adj": 345,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.2919665961836501,
+    "baseline_brier": 0.25131045454774936,
+    "brier_skill": -0.161776563211683,
+    "bootstrap_p_value": 1.0,
+    "partition_skill_min": -0.21118584210977054,
+    "partition_skill_max": -0.12281766295209517,
+    "log_loss": 0.7847934141371065,
+    "baseline_log_loss": 0.6958079750211424,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.00-0.15",
+        "n": 5,
+        "mean_pred_pct": 14.7,
+        "realized_pct": 0.0,
+        "n_eff_overlap_adj": 1
+      },
+      {
+        "bucket": "0.15-0.25",
+        "n": 592,
+        "mean_pred_pct": 21.8,
+        "realized_pct": 39.4,
+        "n_eff_overlap_adj": 53
+      },
+      {
+        "bucket": "0.25-0.35",
+        "n": 2287,
+        "mean_pred_pct": 31.0,
+        "realized_pct": 54.3,
+        "n_eff_overlap_adj": 207
+      },
+      {
+        "bucket": "0.35-0.45",
+        "n": 913,
+        "mean_pred_pct": 38.1,
+        "realized_pct": 57.7,
+        "n_eff_overlap_adj": 83
+      },
+      {
+        "bucket": "0.45-1.00",
+        "n": 1,
+        "mean_pred_pct": 45.0,
+        "realized_pct": 0.0,
+        "n_eff_overlap_adj": 1
+      }
+    ],
+    "partitions_positive": 0,
+    "partitions": 11
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 441,
+      "hit_rate_pct": 51.2
+    },
+    {
+      "cell": 1,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 451,
+      "hit_rate_pct": 47.5
+    },
+    {
+      "cell": 2,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 845,
+      "hit_rate_pct": 46.0
+    },
+    {
+      "cell": 3,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 281,
+      "hit_rate_pct": 50.2
+    },
+    {
+      "cell": 4,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 280,
+      "hit_rate_pct": 48.9
+    },
+    {
+      "cell": 5,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 871,
+      "hit_rate_pct": 62.3
+    },
+    {
+      "cell": 6,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 382,
+      "hit_rate_pct": 45.5
+    },
+    {
+      "cell": 7,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 377,
+      "hit_rate_pct": 67.9
+    }
+  ],
+  "spec": "P(up10)=Laplace-shrunk hit rate in cell (MA200 × ret5_sign × rel20_vs_SH_sign); zero fitted weights"
+}

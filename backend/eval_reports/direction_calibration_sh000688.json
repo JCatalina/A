@@ -1,0 +1,158 @@
+{
+  "symbol": "sh000688",
+  "model_version": "direction-regime-rel-v1",
+  "generated_at": "2026-09-15 17:31:22",
+  "asof_date": "2026-09-15",
+  "sample_days": 1596,
+  "baseline_up10_pct": 46.3,
+  "fwd_window": 10,
+  "validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 1336,
+    "n_eff_overlap_adj": 121,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.256258431685435,
+    "baseline_brier": 0.25180761729157786,
+    "brier_skill": -0.01767545573771656,
+    "bootstrap_p_value": 0.9475,
+    "partition_skill_min": -0.026136012599923486,
+    "partition_skill_max": -0.005593635439682387,
+    "log_loss": 0.7060392284833908,
+    "baseline_log_loss": 0.696804348892124,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.25-0.35",
+        "n": 21,
+        "mean_pred_pct": 32.2,
+        "realized_pct": 71.4,
+        "n_eff_overlap_adj": 1
+      },
+      {
+        "bucket": "0.35-0.45",
+        "n": 597,
+        "mean_pred_pct": 41.3,
+        "realized_pct": 50.8,
+        "n_eff_overlap_adj": 54
+      },
+      {
+        "bucket": "0.45-1.00",
+        "n": 718,
+        "mean_pred_pct": 49.8,
+        "realized_pct": 42.2,
+        "n_eff_overlap_adj": 65
+      }
+    ],
+    "partitions_positive": 0,
+    "partitions": 11
+  },
+  "ice_as_direction_validation": {
+    "method": "pointwise_purged_all_partitions",
+    "n": 1466,
+    "n_eff_overlap_adj": 133,
+    "min_required": 60,
+    "horizon": 10,
+    "brier": 0.2721710725176499,
+    "baseline_brier": 0.25249809953625724,
+    "brier_skill": -0.07791335070451777,
+    "bootstrap_p_value": 0.97325,
+    "partition_skill_min": -0.14279273756136113,
+    "partition_skill_max": -0.021616363059750787,
+    "log_loss": 0.7451669262871848,
+    "baseline_log_loss": 0.6981869052999983,
+    "status": "no_oos_edge",
+    "reliability": [
+      {
+        "bucket": "0.15-0.25",
+        "n": 196,
+        "mean_pred_pct": 22.6,
+        "realized_pct": 51.0,
+        "n_eff_overlap_adj": 17
+      },
+      {
+        "bucket": "0.25-0.35",
+        "n": 926,
+        "mean_pred_pct": 30.5,
+        "realized_pct": 41.5,
+        "n_eff_overlap_adj": 84
+      },
+      {
+        "bucket": "0.35-0.45",
+        "n": 344,
+        "mean_pred_pct": 38.4,
+        "realized_pct": 54.1,
+        "n_eff_overlap_adj": 31
+      }
+    ],
+    "partitions_positive": 0,
+    "partitions": 11
+  },
+  "cells": [
+    {
+      "cell": 0,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 173,
+      "hit_rate_pct": 48.0
+    },
+    {
+      "cell": 1,
+      "above_ma200": false,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 214,
+      "hit_rate_pct": 50.5
+    },
+    {
+      "cell": 2,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 402,
+      "hit_rate_pct": 43.3
+    },
+    {
+      "cell": 3,
+      "above_ma200": false,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 121,
+      "hit_rate_pct": 40.5
+    },
+    {
+      "cell": 4,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": false,
+      "n": 103,
+      "hit_rate_pct": 38.8
+    },
+    {
+      "cell": 5,
+      "above_ma200": true,
+      "ret5_negative": false,
+      "rel20_positive": true,
+      "n": 281,
+      "hit_rate_pct": 52.7
+    },
+    {
+      "cell": 6,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": false,
+      "n": 177,
+      "hit_rate_pct": 42.9
+    },
+    {
+      "cell": 7,
+      "above_ma200": true,
+      "ret5_negative": true,
+      "rel20_positive": true,
+      "n": 125,
+      "hit_rate_pct": 48.8
+    }
+  ],
+  "spec": "P(up10)=Laplace-shrunk hit rate in cell (MA200 × ret5_sign × rel20_vs_SH_sign); zero fitted weights"
+}
