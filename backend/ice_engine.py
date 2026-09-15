@@ -40,6 +40,10 @@ MARGIN_CACHE = os.path.join(CACHE_DIR, "margin_history.json")
 
 REBOUND_THRESHOLD = 2.5      # 10日涨幅 >= 2.5% 计为一次"反弹"
 REBOUND_FWD = 10             # 前视窗口(交易日)
+# 校准历史长度: 腾讯日K单次上限约2000根(2200起返回空), 取满以保证极端冰点分箱(80-100)
+# 的样本量跨越多轮牛熊; 800根只剩约612个可用样本, 极冷档常不足 MIN_BIN_SAMPLES 而无概率输出。
+HISTORY_BARS = 2000
+MARGIN_HISTORY_DAYS = 2400   # 两融历史须覆盖上述K线区间, 否则老样本因融资特征缺失被丢弃
 MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h (内存与磁盘统一 TTL, 常驻进程也按此周期刷新)
 CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
 DAILY_KLINE_TTL = 60         # v2.7: 指数日K原始数据内存缓存 (数据抓取与计算分离)
@@ -62,7 +66,6 @@ class IceEngine:
         self._daily_cache: Dict[tuple, tuple] = {}       # (symbol, count) -> (ts, df), 日K TTL 缓存
         self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
         self._http_lock = threading.RLock()              # requests.Session 多线程并发保护
-        self._pred_cache: Dict[str, tuple] = {}          # symbol -> (ts, result), 预测结果 TTL 缓存
 
     @staticmethod
     def _calib_path(symbol: str) -> str:
@@ -74,18 +77,17 @@ class IceEngine:
         return s if s in KNOWN_ICE_SYMBOLS else "sh000001"
 
     def warm_all(self) -> None:
-        """启动预热 (v2.7): 校准表 + 全部指数日K原始帧(300/800) + 首份预测结果, 首次切换即命中缓存"""
+        """启动预热 (v2.7): 校准表 + 全部指数日K原始帧 + 首份预测结果, 首次切换即命中缓存"""
         for sym in KNOWN_ICE_SYMBOLS:
             try:
                 self._load_calibration(sym)
             except Exception as e:
                 logger.warning(f"Ice warm_all calib {sym} failed: {e}")
-        for count in (300, 800):
-            for sym in KNOWN_ICE_SYMBOLS:
-                try:
-                    self.fetch_index_daily(sym, count)
-                except Exception as e:
-                    logger.warning(f"Ice warm_all kline {sym}/{count} failed: {e}")
+        for sym in KNOWN_ICE_SYMBOLS:
+            try:
+                self.fetch_index_daily(sym, HISTORY_BARS)
+            except Exception as e:
+                logger.warning(f"Ice warm_all kline {sym} failed: {e}")
         # 预热各指数首份预测 (日K帧已缓存, 情绪面为全局60s缓存, 代价极小)
         for sym in KNOWN_ICE_SYMBOLS:
             try:
@@ -107,7 +109,7 @@ class IceEngine:
     # ------------------------------------------------------------------
     # 数据获取
     # ------------------------------------------------------------------
-    def fetch_index_daily(self, symbol: str = "sh000001", count: int = 800) -> pd.DataFrame:
+    def fetch_index_daily(self, symbol: str = "sh000001", count: int = HISTORY_BARS) -> pd.DataFrame:
         """腾讯前复权日K (量单位:手), 含均价估算成交额; v2.7 60s 内存 TTL 缓存"""
         key = (symbol, count)
         cached = self._daily_cache.get(key)
@@ -140,7 +142,7 @@ class IceEngine:
             self._daily_cache[key] = (time.time(), df)
         return df
 
-    def fetch_margin_history(self, days: int = 900) -> pd.DataFrame:
+    def fetch_margin_history(self, days: int = MARGIN_HISTORY_DAYS) -> pd.DataFrame:
         """两融余额历史 (RZYE=融资余额), 东财 datacenter, 磁盘缓存"""
         if (self._margin_df is not None and len(self._margin_df) >= days * 0.8
                 and time.time() - self._margin_ts < MARGIN_CACHE_TTL):
@@ -149,9 +151,10 @@ class IceEngine:
             try:
                 with open(MARGIN_CACHE, "r", encoding="utf-8") as fh:
                     cached = json.load(fh)
+                # 缓存既要未过期, 也要够长: 否则拉长历史窗口后仍会命中旧的短缓存
                 if time.time() - cached.get("ts", 0) < MARGIN_CACHE_TTL:
                     df = pd.DataFrame(cached["rows"])
-                    if not df.empty:
+                    if len(df) >= days * 0.8:
                         self._margin_df = df
                         self._margin_ts = cached.get("ts", time.time())
                         return df
@@ -160,9 +163,10 @@ class IceEngine:
 
         rows: List[Dict[str, Any]] = []
         page = 1
-        while len(rows) < days and page <= 6:
+        page_size = 500
+        while len(rows) < days and page <= days // page_size + 2:
             url = ("https://datacenter.eastmoney.com/securities/api/data/v1/get"
-                   f"?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageNumber={page}&pageSize=300"
+                   f"?reportName=RPTA_RZRQ_LSHJ&columns=ALL&pageNumber={page}&pageSize={page_size}"
                    "&sortColumns=dim_date&sortTypes=-1&source=WEB&client=WEB")
             try:
                 with self._http_lock:
@@ -177,7 +181,7 @@ class IceEngine:
                         })
                     except (TypeError, ValueError):
                         continue
-                if len(data) < 300:
+                if len(data) < page_size:
                     break
                 page += 1
             except Exception as e:
@@ -254,7 +258,7 @@ class IceEngine:
     # ------------------------------------------------------------------
     # 特征与标签
     # ------------------------------------------------------------------
-    def build_frame(self, symbol: str = "sh000001", lookback: int = 800) -> pd.DataFrame:
+    def build_frame(self, symbol: str = "sh000001", lookback: int = HISTORY_BARS) -> pd.DataFrame:
         df = self.fetch_index_daily(symbol, lookback)
         if df.empty or len(df) < 260:
             return pd.DataFrame()
@@ -488,7 +492,7 @@ class IceEngine:
             return {"status": "unavailable", "message": "校准数据缺失"}
 
         # ret60 needs 60 warm-up rows plus the full 250-row percentile window.
-        frame = self.build_frame(symbol, lookback=800)
+        frame = self.build_frame(symbol, lookback=HISTORY_BARS)
         if frame.empty:
             return {"status": "unavailable", "message": "指数K线获取失败"}
         row = frame.iloc[-1]

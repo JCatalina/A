@@ -1,6 +1,7 @@
 """Deterministic tests; no market network access and no production cache writes."""
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -162,6 +163,20 @@ class IceIntegrationTests(unittest.TestCase):
         result = self.engine._predict_sync("sh000001")
         self.assertEqual(result["ice_score_0_100"], 100.)
         self.assertEqual(result["ci_low_pct"], 10.)
+
+    def test_short_margin_cache_does_not_truncate_history(self):
+        engine = IceEngine()
+        dates = pd.bdate_range("2016-01-01", periods=1000).strftime("%Y-%m-%d")
+        page = {"result": {"data": [{"DIM_DATE": d, "RZYE": 1e10, "ZDF5D": 0} for d in dates[:500]]}}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "margin_history.json"
+            path.write_text(json.dumps({"ts": time.time(),
+                                        "rows": [{"date": d, "rzye": 1e10} for d in dates[:50]]}),
+                            encoding="utf-8")
+            with patch("ice_engine.MARGIN_CACHE", str(path)), \
+                    patch("ice_engine.time.sleep"), patch.object(engine, "session") as session:
+                session.get.return_value.json.return_value = page
+                self.assertEqual(len(engine.fetch_margin_history(900)), 1000)
 
     def test_old_calibration_version_is_not_reused(self):
         with tempfile.TemporaryDirectory() as folder:
