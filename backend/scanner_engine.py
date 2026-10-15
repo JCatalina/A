@@ -24,8 +24,9 @@ class ScannerEngine:
     全A股盘后规则筛选批量扫描与选股雷达引擎
     """
 
-    def __init__(self, data_fetcher: DataFetcher):
+    def __init__(self, data_fetcher: DataFetcher, factor_engine=None):
         self.fetcher = data_fetcher
+        self.factor_engine = factor_engine     # v3.1: 横截面因子模型 (可选, 缺失时输出 available=False)
         self.last_results = {}
         self.is_scanning = False
         self.scan_progress = 0
@@ -90,6 +91,19 @@ class ScannerEngine:
                 clustered_levels=clustered_levels
             )
 
+            # 6b. 横截面因子分 (走前验证过的量价因子模型; 池内查表, 池外用自身日K映射到池内分位)
+            factor_model = {"available": False, "reason": "factor engine not configured"}
+            if self.factor_engine is not None:
+                try:
+                    df_factor = df_daily
+                    if not self.factor_engine.in_universe(code):
+                        # 池外标的: 12-1 动量/52 周高点需要 >252 根, 单独多拉一段 (池内直接查表, 无此开销)
+                        df_factor = self.fetcher.get_kline(code, period="daily", count=330)
+                    factor_model = self.factor_engine.score(code, df_factor)
+                except Exception as e:
+                    logger.warning(f"factor score failed {code}: {e}")
+                    factor_model = {"available": False, "reason": f"error: {e}"}
+
             # 7. 提取基础信息 (字典内为权威中文名称，字典外回退实时列表名称)
             name = self.fetcher.get_stock_name(code, fallback=(stock_info or {}).get("name"))
             industry = self.fetcher.get_stock_industry(code)
@@ -133,6 +147,7 @@ class ScannerEngine:
                 "volume_features": ind_daily.get("volume_features", {}),
                 "clustered_levels": clustered_levels,
                 "prediction": prediction,
+                "factor_model": factor_model,
                 "data_quality": data_quality,
                 "kline_chart_data": kline_chart_data
             }

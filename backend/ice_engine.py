@@ -30,8 +30,8 @@ import pandas as pd
 import requests
 
 from probability_calibration import (
-    MODEL_VERSION, MIN_BIN_SAMPLES, exceedance_probability, fit_bins, walk_forward,
-    walk_forward_pointwise, weighted_pava,
+    MODEL_VERSION, MIN_BIN_SAMPLES, exceedance_probability, fit_bins, har_rv_sigma_horizon_pct,
+    pit_quantile_bands, pit_scale_factor, walk_forward, walk_forward_pointwise, weighted_pava,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,8 @@ MARGIN_HISTORY_DAYS = 4000   # 两融历史须覆盖上述K线区间, 否则老�
 VOL_EWMA_LAMBDA = 0.94       # RiskMetrics 衰减系数
 VOL_ANCHOR_WINDOW = 250      # 长期方差锚定窗口
 VOL_WEIGHTS = (0.4, 0.3, 0.3)  # Parkinson / EWMA / 长期锚 的方差权重 (先验设定, 未在标签上调参)
+BAND_PROBS = (0.16, 0.84, 0.05, 0.95)  # 经验区间分位: 68% 与 90% 名义覆盖
+BAND_MIN_N = 250                      # 经验分位至少需要的已到期标准化样本数
 MARGIN_CACHE_TTL = 6 * 3600  # 两融历史缓存 6h (内存与磁盘统一 TTL, 常驻进程也按此周期刷新)
 CALIB_MEM_TTL = 24 * 3600    # 内存校准表有效期
 # 日K是每日一次的历史数据, 且 build_frame 在 15:10 前本就丢弃当日未完成K线, 分钟级重拉
@@ -119,21 +121,70 @@ class IceEngine:
     # ------------------------------------------------------------------
     # 数据获取
     # ------------------------------------------------------------------
+    @staticmethod
+    def _daily_disk_path(symbol: str) -> str:
+        return os.path.join(CACHE_DIR, f"index_daily_{symbol}.json")
+
     def fetch_index_daily(self, symbol: str = "sh000001", count: int = HISTORY_BARS) -> pd.DataFrame:
-        """指数日K; 主源东财(可回溯至2010, 带真实成交额), 腾讯为备源; 60s 内存 TTL 缓存"""
+        """指数日K, 多源等长回退 + 磁盘留档 (v3.0)。
+
+        主源东财 (可回溯至 2010, 带真实成交额); 其连接偶发被对端直接断开甚至整段时间拒绝。
+        旧实现失败后退到腾讯单次 2000 根, 校准样本量会被静默砍半 (2010+ → 2018+), 四个指数
+        的样本外检验结论随之漂移 (已在 git 历史的 sh000001 校准表中实际发生: kline_source=
+        tencent_fallback, sample_days 1741 vs 3740)。现在的顺序:
+          1) 东财;  2) 腾讯按 end 日期向前翻页拼满 count 根;  3) 新浪 datalen=count;
+          4) 上述全部失败时读取上次成功落盘的完整帧 (标记 disk_cache, 日期可能过期)。
+        任一在线源成功且长度不短于磁盘留档时覆盖留档。
+        """
         key = (symbol, count)
         cached = self._daily_cache.get(key)
         if cached and (time.time() - cached[0]) < DAILY_KLINE_TTL:
             return cached[1]
 
         rows, source = self._fetch_daily_eastmoney(symbol, count), "eastmoney"
-        if not rows:
-            rows, source = self._fetch_daily_tencent(symbol, count), "tencent_fallback"
+        if len(rows) < min(count, 2500) * 0.6:
+            paged = self._fetch_daily_tencent(symbol, count)
+            if len(paged) > len(rows):
+                rows, source = paged, "tencent_paged"
+        if len(rows) < min(count, 2500) * 0.6:
+            sina = self._fetch_daily_sina(symbol, count)
+            if len(sina) > len(rows):
+                rows, source = sina, "sina_fallback"
+
+        disk_rows, disk_meta = self._load_daily_disk(symbol)
+        if not rows or (disk_rows and len(disk_rows) > len(rows) * 1.2):
+            if disk_rows:
+                rows, source = disk_rows, f"disk_cache({disk_meta.get('source')}@{disk_meta.get('saved_at', '')[:10]})"
+        elif rows and len(rows) >= len(disk_rows):
+            self._save_daily_disk(symbol, rows, source)
+
         df = pd.DataFrame(rows)
         if not df.empty:
             self._daily_source[key] = source
             self._daily_cache[key] = (time.time(), df)
         return df
+
+    def _load_daily_disk(self, symbol: str) -> tuple:
+        path = self._daily_disk_path(symbol)
+        if not os.path.exists(path):
+            return [], {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            rows = payload.get("rows") or []
+            return rows, {k: v for k, v in payload.items() if k != "rows"}
+        except Exception as e:
+            logger.warning(f"Ice daily disk cache read failed {symbol}: {e}")
+            return [], {}
+
+    def _save_daily_disk(self, symbol: str, rows: List[Dict[str, Any]], source: str) -> None:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(self._daily_disk_path(symbol), "w", encoding="utf-8") as fh:
+                json.dump({"symbol": symbol, "source": source, "rows": rows,
+                           "saved_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}, fh, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Ice daily disk cache write failed {symbol}: {e}")
 
     def _fetch_daily_eastmoney(self, symbol: str, count: int, attempts: int = 3) -> List[Dict[str, Any]]:
         """push2his 日K: 历史远长于腾讯接口, 且 f57 为真实成交额而非均价估算
@@ -170,28 +221,67 @@ class IceEngine:
         return rows
 
     def _fetch_daily_tencent(self, symbol: str, count: int) -> List[Dict[str, Any]]:
-        """备源: 腾讯前复权日K (量单位:手), 成交额只能用均价估算"""
-        url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-               f"param={symbol},day,,,{min(count, 2000)},qfq")
+        """备源: 腾讯日K (量单位:手), 单页上限 2000 根, 按 end 日期向前翻页拼满 count 根。
+        成交额无字段, 用均价估算 (仅展示用, 不进入任何特征)。"""
+        rows: List[Dict[str, Any]] = []
+        end = ""
+        seen = set()
+        while len(rows) < count:
+            page = min(2000, count - len(rows) + 10)
+            url = (f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+                   f"param={symbol},day,,{end},{page},qfq")
+            try:
+                with self._http_lock:
+                    js = self.session.get(url, timeout=8).json()
+                node = (js.get("data") or {}).get(symbol, {}) or {}
+                raw = node.get("qfqday") or node.get("day") or []
+            except Exception as e:
+                logger.warning(f"Ice tencent kline failed {symbol} (end={end or 'latest'}): {e}")
+                break
+            batch = []
+            for item in raw:
+                if not isinstance(item, (list, tuple)) or len(item) < 6:
+                    continue
+                d = str(item[0]).split(" ")[0]
+                if d in seen:
+                    continue
+                o, c, h, l, v = (float(x) for x in item[1:6])
+                seen.add(d)
+                batch.append({
+                    "date": d, "open": o, "close": c, "high": h, "low": l,
+                    "volume": v * 100.0,                  # 手 -> 股口径
+                    "amount": v * 100.0 * (o + c) / 2,    # 备源无成交额字段, 用均价估算
+                })
+            if not batch:
+                break
+            rows = batch + rows
+            first = batch[0]["date"]
+            # 下一页: 以本页最早日期的前一天为 end
+            end = (pd.Timestamp(first) - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+            if len(raw) < 100:   # 已到达数据源起点
+                break
+            time.sleep(0.2)
+        rows.sort(key=lambda r: r["date"])
+        return rows[-count:]
+
+    def _fetch_daily_sina(self, symbol: str, count: int) -> List[Dict[str, Any]]:
+        """第三备源: 新浪日K (量单位:股), datalen 可直接取 4000 根。"""
+        url = ("http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+               f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={count}")
         try:
             with self._http_lock:
-                js = self.session.get(url, timeout=8).json()
-            node = (js.get("data") or {}).get(symbol, {}) or {}
-            raw = node.get("qfqday") or node.get("day") or []
+                js = self.session.get(url, timeout=10).json()
         except Exception as e:
-            logger.warning(f"Ice tencent kline failed {symbol}: {e}")
+            logger.warning(f"Ice sina kline failed {symbol}: {e}")
             return []
         rows = []
-        for item in raw:
-            if not isinstance(item, (list, tuple)) or len(item) < 6:
+        for item in js if isinstance(js, list) else []:
+            try:
+                o, c, h, l, v = (float(item[k]) for k in ("open", "close", "high", "low", "volume"))
+            except (KeyError, TypeError, ValueError):
                 continue
-            o, c, h, l, v = (float(x) for x in item[1:6])
-            rows.append({
-                "date": str(item[0]).split(" ")[0],
-                "open": o, "close": c, "high": h, "low": l,
-                "volume": v * 100.0,                  # 手 -> 股口径
-                "amount": v * 100.0 * (o + c) / 2,    # 备源无成交额字段, 用均价估算
-            })
+            rows.append({"date": str(item.get("day", "")).split(" ")[0], "open": o, "close": c,
+                         "high": h, "low": l, "volume": v, "amount": v * (o + c) / 2})
         return rows
 
     def fetch_margin_history(self, days: int = MARGIN_HISTORY_DAYS) -> pd.DataFrame:
@@ -382,6 +472,25 @@ class IceEngine:
         df["trade_ret"] = (close.shift(-REBOUND_FWD) / df["open"].shift(-1) - 1) * 100
         df["fwd10"] = df["fwd10"] * 100
         df["rebound"] = (df["fwd10"] >= REBOUND_THRESHOLD).astype(float).where(df["fwd10"].notna())
+
+        # v3.1 区间: 标准化前视收益 z = fwd10 / sigma10 的点时间经验分位 (FHS)。
+        # 审计发现 z 的峰度 13~26 (隐含 t 自由度 ≈4.5), ±1.645σ 名义 90% 区间实际覆盖仅 87~89%;
+        # 经验分位不假设分布形状, 同时保留下行偏斜 (下沿通常比上沿更远)。
+        df["z10"] = df["fwd10"] / df["sigma10_pct"]
+        q = pit_quantile_bands(df["z10"].to_numpy(), REBOUND_FWD, probs=BAND_PROBS, min_n=BAND_MIN_N)
+        for i, name in enumerate(("q16", "q84", "q05", "q95")):
+            df[f"band_{name}"] = q[:, i] * df["sigma10_pct"]
+
+        # 挑战者 (不参与概率, 仅在校准时与冠军同协议对比): HAR-RV(Garman-Klass) 及其点时间方差修正版
+        try:
+            har = har_rv_sigma_horizon_pct(df["high"], df["low"], df["open"], close, REBOUND_FWD)
+            df["sigma10_har_pct"] = har
+            scale = pit_scale_factor((df["fwd10"].to_numpy() / har) ** 2, REBOUND_FWD)
+            df["sigma10_har_scaled_pct"] = har * np.sqrt(scale)
+        except Exception as e:  # 挑战者失败不影响冠军
+            logger.warning(f"Ice HAR challenger failed: {e}")
+            df["sigma10_har_pct"] = np.nan
+            df["sigma10_har_scaled_pct"] = np.nan
         return df
 
     @staticmethod
@@ -463,7 +572,47 @@ class IceEngine:
                 inside = (sub["fwd10"].abs() <= z * sub["sigma10_pct"]).mean()
                 coverage[label] = {"nominal_pct": round((1 - 2 * float(
                     exceedance_probability(1.0, z))) * 100, 1),
-                    "realized_pct": round(float(inside) * 100, 1), "n": len(sub)}
+                    "realized_pct": round(float(inside) * 100, 1), "n": len(sub),
+                    "method": "normal_quantile_legacy"}
+            # 经验分位区间 (展示口径): 只统计经验区间可得的检验点
+            for lo, hi, label, nominal in (("band_q16", "band_q84", "band_68_empirical", 68.0),
+                                           ("band_q05", "band_q95", "band_90_empirical", 90.0)):
+                ok = sub[[lo, hi]].notna().all(axis=1)
+                if ok.any():
+                    s2 = sub[ok]
+                    inside = ((s2["fwd10"] >= s2[lo]) & (s2["fwd10"] <= s2[hi])).mean()
+                    coverage[label] = {"nominal_pct": nominal, "realized_pct": round(float(inside) * 100, 1),
+                                       "n": int(ok.sum()), "method": "pit_empirical_quantile_fhs"}
+            z = sub["z10"].dropna()
+            if len(z) > 30:
+                k = float(((z - z.mean()) ** 4).mean() / (z.var(ddof=0) ** 2))
+                coverage["standardized_return_shape"] = {
+                    "mean_z2": round(float((z ** 2).mean()), 3), "kurtosis": round(k, 2),
+                    "skew": round(float(((z - z.mean()) ** 3).mean() / z.std(ddof=0) ** 3), 3),
+                    "implied_t_df": round(4 + 6 / (k - 3), 1) if k > 3 else None,
+                    "n": int(len(z))}
+
+        # 挑战者: 同一检验协议、同一检验日 (与冠军取交集), 只记录不采用
+        challengers = {}
+        for col, name in (("sigma10_har_pct", "har_rv_gk_normal"),
+                          ("sigma10_har_scaled_pct", "har_rv_gk_scaled_normal")):
+            if col not in frame or frame[col].notna().sum() < 300:
+                continue
+            both = frame.dropna(subset=["fwd10", "vol_prob", col])
+            if both.empty:
+                continue
+            p_ch = exceedance_probability(both[col].to_numpy(), REBOUND_THRESHOLD)
+            p_ch_val = walk_forward_pointwise(p_ch, both["rebound"].to_numpy(), both.index.to_numpy(), REBOUND_FWD)
+            p_champ_val = walk_forward_pointwise(both["vol_prob"].to_numpy(), both["rebound"].to_numpy(),
+                                                 both.index.to_numpy(), REBOUND_FWD)
+            challengers[name] = {
+                "n_common": p_ch_val["n"], "brier_skill": p_ch_val["brier_skill"],
+                "champion_brier_skill_same_days": p_champ_val["brier_skill"],
+                "skill_diff_vs_champion": (None if p_ch_val["brier_skill"] is None or p_champ_val["brier_skill"] is None
+                                           else round(p_ch_val["brier_skill"] - p_champ_val["brier_skill"], 4)),
+                "log_loss": p_ch_val["log_loss"], "status": p_ch_val["status"],
+                "note": "HAR-RV(Corsi 2009) on Garman-Klass variance, expanding OLS, target-maturity purged; "
+                        "diagnostic only, not used for the displayed probability."}
 
         return {
             "spec": (f"sigma_d^2 = {VOL_WEIGHTS[0]}*Parkinson20^2 + {VOL_WEIGHTS[1]}*EWMA({VOL_EWMA_LAMBDA})^2"
@@ -471,9 +620,11 @@ class IceEngine:
                      f"P = 1 - Phi({REBOUND_THRESHOLD} / (sigma_d*sqrt({REBOUND_FWD})))"),
             "fitted_parameters": 0,
             "drift_assumption": "zero",
+            "band_method": "pit_empirical_quantile_fhs (fallback: normal quantile when history < 250 matured days)",
             "sample_days": int(len(v)),
             "validation": validation,
             "band_coverage": coverage,
+            "challengers": challengers,
             "symmetry_note": ("零漂移正态下 P(涨≥2.5%) 与 P(跌≥2.5%) 相等: "
                               "该概率描述波动幅度而非方向"),
         }
@@ -652,6 +803,17 @@ class IceEngine:
         missing = [c for c in FEATURE_COLUMNS if not np.isfinite(row.get(c, np.nan))]
         score = None if missing else self._ice_score(row)
 
+        # 区间: 优先经验分位 (FHS, 含偏斜); 历史不足时退回正态分位并标注
+        band_vals = [row.get(c, np.nan) for c in ("band_q16", "band_q84", "band_q05", "band_q95")]
+        if all(np.isfinite(float(x)) for x in band_vals):
+            band68 = [round(float(band_vals[0]), 1), round(float(band_vals[1]), 1)]
+            band90 = [round(float(band_vals[2]), 1), round(float(band_vals[3]), 1)]
+            band_method = "pit_empirical_quantile_fhs"
+        else:
+            band68 = [round(-sigma10, 1), round(sigma10, 1)]
+            band90 = [round(-1.645 * sigma10, 1), round(1.645 * sigma10, 1)]
+            band_method = "normal_quantile_fallback"
+
         live = self.fetch_live_sentiment()
         factors = {
             "price_ret20_pct": round(float(row["ret20"]), 2),
@@ -681,9 +843,12 @@ class IceEngine:
             "rebound_prob_10d_pct": prob,
             "drop_prob_10d_pct": prob,   # 零漂移对称: 同一波动率下跌破 -2.5% 的概率相同
             "sigma10_pct": round(sigma10, 2),
-            "band68_pct": [round(-sigma10, 1), round(sigma10, 1)],
-            "band90_pct": [round(-1.645 * sigma10, 1), round(1.645 * sigma10, 1)],
+            "band68_pct": band68,
+            "band90_pct": band90,
+            "band_method": band_method,
             "band_coverage": vol_model.get("band_coverage"),
+            "challengers": vol_model.get("challengers"),
+            "kline_source": calib.get("kline_source"),
             "ci_low_pct": ci_lo,
             "ci_high_pct": ci_hi,
             "calib_bin": "n/a" if not hit else f"n={hit['n']}(去重叠 {hit['n_eff_overlap_adj']})",
@@ -695,7 +860,8 @@ class IceEngine:
             "live_sentiment": live,
             "disclaimer": ("概率来自该指数自身的波动率预测与零漂移正态假设，不含方向判断: "
                            "同口径下跌破 -2.5% 的概率与之相等，高概率只意味着波动放大而非看多; "
-                           "区间是样本外可靠性分桶的实际发生率 Wilson 区间，非模型参数区间; "
+                           "68%/90% 涨跌幅区间为标准化历史收益的点时间经验分位 (含厚尾与偏斜)，"
+                           "概率置信区间是样本外可靠性分桶的实际发生率 Wilson 区间，非模型参数区间; "
                            "冰点分与情绪面仅作状态描述，实测无增量预测力，不参与概率; "
                            "仅使用已完成日线; 融资采用沪深口径且披露时点仍需官方数据核验"),
         }

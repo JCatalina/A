@@ -247,9 +247,13 @@ function renderIcePanel(json = {}) {
     }
     const band = json.band68_pct;
     if (Array.isArray(band) && band.every(Number.isFinite)) {
-        const coverage = json.band_coverage?.band_68;
+        // 区间口径随后端 band_method 切换: 经验分位 (FHS) 用 band_68_empirical 的覆盖率, 否则用正态分位的
+        const empirical = json.band_method === "pit_empirical_quantile_fhs";
+        const coverage = (empirical ? json.band_coverage?.band_68_empirical : null) || json.band_coverage?.band_68;
+        const b90 = json.band90_pct;
         set("iceBand", `10日 68% 波动区间 ${band[0]}% ~ +${band[1]}%` +
-            (coverage ? `（历史实际覆盖 ${coverage.realized_pct}%）` : ""));
+            (Array.isArray(b90) && b90.every(Number.isFinite) ? `，90% ${b90[0]}% ~ +${b90[1]}%` : "") +
+            (coverage ? `（历史实际覆盖 ${coverage.realized_pct}%${empirical ? "，经验分位" : ""}）` : ""));
     }
     const sc = json.ice_score_0_100;
     if (Number.isFinite(sc)) {
@@ -916,6 +920,9 @@ function renderPredictionAndPlan(data) {
         if (htBox) htBox.title = `相似样本 ${ht.sample_count} 个；样本内价格路径描述，非可执行交易回测，不代表未来胜率`;
     }
 
+    // 3b. 横截面因子分 (后端 factor_model: 走前验证证据随结果一起下发, 不可用时如实显示原因)
+    renderFactorModel(data.factor_model);
+
     // 4. 四维雷达图
     if (radarChartInst && pred.radar_scores) {
         const scores = pred.radar_scores;
@@ -961,6 +968,41 @@ function renderPredictionAndPlan(data) {
         document.getElementById("planRr").innerText = `${plan.rr_ratio} : 1 (${plan.rr_quality})`;
         document.getElementById("planPeriod").innerText = plan.holding_period || "3~10个交易日";
     }
+}
+
+/**
+ * 横截面因子分位: 只展示后端给出的数字与证据, 不在前端二次解读为买卖方向
+ */
+function renderFactorModel(fm) {
+    const box = document.getElementById("factorModelBox");
+    if (!box) return;
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    if (!fm || !fm.available) {
+        set("factorPct", "不可用");
+        set("factorIc", "--");
+        set("factorBeat", "--");
+        set("factorDrivers", fm?.reason ? `原因: ${fm.reason}` : "");
+        box.title = "因子模型未构建或该股历史不足";
+        return;
+    }
+    const ev = fm.evidence || {};
+    const pct = fm.composite_percentile;
+    set("factorPct", Number.isFinite(pct) ? `${pct.toFixed(0)}%${fm.in_universe ? "" : " (池外映射)"}` : "--");
+    set("factorIc", Number.isFinite(ev.oos_rank_ic_mean)
+        ? `${ev.oos_rank_ic_mean.toFixed(3)} / t=${Number.isFinite(ev.oos_rank_ic_nw_t) ? ev.oos_rank_ic_nw_t.toFixed(1) : "--"}`
+        : "--");
+    const beat = ev.quintile_beat_median_prob_pct || {};
+    set("factorBeat", Number.isFinite(beat.Q5) && Number.isFinite(beat.Q1) ? `${beat.Q5}% vs ${beat.Q1}%` : "--");
+    const drivers = (fm.top_drivers || []).map(d => `${d.label}${d.contribution >= 0 ? "+" : "−"}`).join(" · ");
+    const statusMap = {
+        validated_rank_and_mean_spread: "样本外排序与均值价差均显著",
+        validated_rank_only: "样本外排序显著，但等权均值价差不显著（只作相对强弱概率，不是收益策略）",
+        weak_oos_skill: "样本外弱显著，仅供参考",
+        no_oos_edge: "样本外无预测力",
+        insufficient_oos_sample: "样本外样本不足",
+    };
+    set("factorDrivers", `主要驱动: ${drivers || "--"} · ${statusMap[ev.status] || ev.status || ""} · 截至 ${fm.asof_date || "--"}`);
+    box.title = `${fm.interpretation || ""}\n${(ev.caveats || []).join("\n")}`;
 }
 
 /**

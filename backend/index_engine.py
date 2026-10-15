@@ -229,8 +229,13 @@ class IndexEngine:
         kdj_j = float(last_row.get("kdj_j", 50))
         atr = float(last_row.get("atr", 10.0))
         vol = float(last_row["volume"])
-        vol_ma5 = float(last_row.get("vol_ma5", vol))
-        vol_ratio = round(vol / (vol_ma5 + 1e-9), 2)
+        # v3.0 口径统一: 量比 = 当根量 / 前5根均量(不含当根), 与 IndicatorEngine.vol_ratio 一致。
+        # 原实现分母含当根(vol/vol_ma5), 放量日被自身稀释、缩量日被自身抬高, 且与个股面板口径不同。
+        vr = last_row.get("vol_ratio", np.nan)
+        if pd.isna(vr):
+            vol_ma5_prev = float(last_row.get("vol_ma5_prev", np.nan))
+            vr = vol / vol_ma5_prev if np.isfinite(vol_ma5_prev) and vol_ma5_prev > 0 else 1.0
+        vol_ratio = round(float(vr), 2)
 
         # 1. 计算价格斜率 (ATR / 根)
         delta_p = (c - float(df_calc["close"].iloc[-5])) / 4.0 if len(df_calc) >= 5 else 0.0

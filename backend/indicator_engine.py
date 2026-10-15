@@ -58,12 +58,16 @@ class IndicatorEngine:
         df['kdj_j'] = [3 * k_val - 2 * d_val for k_val, d_val in zip(k_list, d_list)]
 
         # 5. RSI 计算 (6, 12, 24)
+        # v3.0 口径修正: 原实现为 Cutler RSI (简单均值), 与 Wilder 原始定义及通达信/同花顺
+        # RSI = SMA(MAX(C-LC,0),N,1) / SMA(ABS(C-LC),N,1) * 100 不一致 (SMA(X,N,1) 即 alpha=1/N 的
+        # 递推平滑)。两者在极值附近可差 5~10 点, 直接影响 rsi6_lt20 等阈值条件。
+        delta = df['close'].diff()
+        gain_raw = delta.clip(lower=0)
+        loss_raw = (-delta).clip(lower=0)
         for n in [6, 12, 24]:
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=n).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=n).mean()
-            rs = gain / (loss + 1e-9)
-            df[f'rsi_{n}'] = 100 - (100 / (1 + rs))
+            gain = gain_raw.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+            loss = loss_raw.ewm(alpha=1.0 / n, adjust=False, min_periods=n).mean()
+            df[f'rsi_{n}'] = 100.0 * gain / (gain + loss + 1e-12)
 
         # 6. ATR 真实波幅 (14)
         prev_close = df['close'].shift(1)

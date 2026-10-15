@@ -436,9 +436,23 @@ class DataFetcher:
         adjustments = {r.get("_adjustment", "unknown") for r in records}
         source = next(iter(sources)) if len(sources) == 1 else "unknown"
         adjustment = next(iter(adjustments)) if len(adjustments) == 1 else "unknown"
+        # v3.1: 前复权退化检测。腾讯 qfq 按"减去分红"向前调整, 高分红股的早期价格会被压到 0 附近
+        # 甚至为负 (实测 2000 根里 601225/600188 等出现 close<=0 与 -6666% 的单日收益), 以其计算的
+        # 任何收益率/指标都是垃圾。这里只标注不修正, 由严格评估路径 (eval_engine) 拒收。
+        price_sanity = {"status": "ok", "min_close": float(df["close"].min()) if not df.empty else None}
+        if not df.empty:
+            rets = df["close"].pct_change().abs()
+            if (df["close"] <= 0.01).any() or (df["low"] <= 0).any():
+                price_sanity = {"status": "degenerate_adjusted_prices", "min_close": float(df["close"].min()),
+                                "note": "前复权价格<=0.01 或最低价<=0, 历史收益率不可信"}
+            elif (rets > 0.6).any():
+                price_sanity = {"status": "implausible_daily_move", "min_close": float(df["close"].min()),
+                                "max_abs_daily_ret": float(rets.max()),
+                                "note": "出现 >60% 的单日涨跌幅 (A股涨跌停上限 30%), 疑似复权/数据异常"}
         df.attrs.update({
             "source": source,
             "adjustment": adjustment,
+            "price_sanity": price_sanity,
             "adjustment_note": (
                 "腾讯请求qfq但返回raw，不复权回退。" if source == "tencent" and adjustment == "raw"
                 else "新浪raw不复权回退。" if source == "sina"

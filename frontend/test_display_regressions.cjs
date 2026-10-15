@@ -30,6 +30,23 @@ async function main() {
     assert.equal(gauge.series[0].data.length, 0);
     context.renderPredictionAndPlan({prediction: {bullish_probability: 62}});
     assert.equal(element('bullishProbNum').innerText, '62.0');
+    // 因子分位: 缺失时显示不可用与原因, 不得显示 NaN/undefined
+    assert.equal(element('factorPct').textContent, '不可用');
+    context.renderPredictionAndPlan({prediction: {}, factor_model: {available: false, reason: 'factor model not built'}});
+    assert.match(element('factorDrivers').textContent, /factor model not built/);
+    context.renderPredictionAndPlan({prediction: {}, factor_model: {
+        available: true, in_universe: false, composite_percentile: 73.4, asof_date: '2026-10-15',
+        top_drivers: [{factor: 'turn_abn', label: '异常换手', contribution: 0.12}],
+        evidence: {status: 'validated_rank_only', oos_rank_ic_mean: 0.0506, oos_rank_ic_nw_t: 4.04,
+                   quintile_beat_median_prob_pct: {Q1: 46.4, Q5: 51.7}, caveats: ['幸存者偏差']},
+        interpretation: '仅为相对强弱倾向'}});
+    assert.equal(element('factorPct').textContent, '73% (池外映射)');
+    assert.equal(element('factorIc').textContent, '0.051 / t=4.0');
+    assert.equal(element('factorBeat').textContent, '51.7% vs 46.4%');
+    assert.match(element('factorDrivers').textContent, /异常换手\+/);
+    assert.match(element('factorDrivers').textContent, /等权均值价差不显著/);
+    assert.doesNotMatch(element('factorDrivers').textContent, /undefined|NaN/);
+    assert.match(element('factorModelBox').title, /幸存者偏差/);
 
     const success = {
         status: 'success', symbol: 'sh000001', rebound_prob_10d_pct: 42,
@@ -87,7 +104,7 @@ async function main() {
     assert.doesNotMatch(element('screenerList').innerHTML, /多头期望/);
 
     const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-    for (const id of ['iceValidation', 'iceDisclaimer']) assert.ok(html.includes(`id="${id}"`));
+    for (const id of ['iceValidation', 'iceDisclaimer', 'factorModelBox', 'factorPct', 'factorIc', 'factorBeat', 'factorDrivers']) assert.ok(html.includes(`id="${id}"`));
     assert.ok(!html.includes('高胜率'));
     console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener and markup contracts');
 }

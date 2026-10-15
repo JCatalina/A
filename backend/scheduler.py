@@ -39,12 +39,13 @@ HOLIDAYS = frozenset()
 class RefreshScheduler(threading.Thread):
     """常驻后台调度器: 保活 + 盘后自动任务, 所有失败仅记日志, 不影响正常接口"""
 
-    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine):
+    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
         self.index = index_engine
         self.ice = ice_engine
+        self.factor = factor_engine
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
         self._scan_date: Optional[date] = None    # 已完成自动扫描的日期
@@ -182,6 +183,13 @@ class RefreshScheduler(threading.Thread):
                     except Exception as e:
                         logger.warning(f"Ice calibration failed {sym}: {e}")
                 logger.info("Post-close ice calibration finished")
+                # v3.1: 横截面因子面板重建 + 走前评估 (含当日收盘, 先于次日打分)
+                if self.factor is not None:
+                    try:
+                        rep = self.factor.rebuild()
+                        logger.info("Post-close factor rebuild finished: status=%s", rep.get("status"))
+                    except Exception as e:
+                        logger.warning(f"Post-close factor rebuild failed: {e}")
             except Exception as e:
                 logger.warning(f"Post-close ice calibration failed: {e}")
                 if self._calib_date == calib_day:

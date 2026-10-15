@@ -845,6 +845,14 @@ body {
     font-weight: 600;
 }
 
+.ht-note {
+    font-size: 10.5px;
+    color: var(--color-text-dim);
+    margin-top: 6px;
+    line-height: 1.5;
+    word-break: break-all;
+}
+
 .ht-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;

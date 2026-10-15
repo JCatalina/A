@@ -116,6 +116,46 @@ class CalibrationTests(unittest.TestCase):
         self.assertLess(harmful["brier_skill"], -.3)
         self.assertEqual(harmful["status"], "no_oos_edge")
 
+    def test_pit_quantile_bands_only_use_matured_history(self):
+        from probability_calibration import pit_quantile_bands
+        rng = np.random.default_rng(5)
+        z = rng.standard_t(5, 1200)
+        bands = pit_quantile_bands(z, horizon=10, probs=(0.05, 0.95), min_n=250, step=1)
+        self.assertTrue(np.isnan(bands[:259]).all())        # 250 matured rows need t >= 259
+        # 第 t 行只可见 z[:t-9]; 把未来 z 全改掉, 过去的区间不得变化
+        z2 = z.copy()
+        z2[600:] = 50.0
+        bands2 = pit_quantile_bands(z2, horizon=10, probs=(0.05, 0.95), min_n=250, step=1)
+        np.testing.assert_allclose(bands[:609], bands2[:609])
+        self.assertGreater(bands2[700, 1], bands[700, 1])
+        # 分位区间按定义覆盖训练样本约 90%
+        t = 1000
+        inside = np.mean((z[:t - 9] >= bands[t, 0]) & (z[:t - 9] <= bands[t, 1]))
+        self.assertAlmostEqual(inside, 0.9, delta=0.01)
+
+    def test_expanding_ols_recovers_linear_relation_without_lookahead(self):
+        from probability_calibration import expanding_ols_forecast
+        rng = np.random.default_rng(7)
+        n = 900
+        x = rng.normal(size=n)
+        X = np.column_stack([np.ones(n), x])
+        y = 2.0 + 3.0 * x + rng.normal(scale=0.1, size=n)
+        yhat = expanding_ols_forecast(X, y, horizon=10, min_n=100, refit_every=1)
+        self.assertTrue(np.isnan(yhat[:108]).all())
+        np.testing.assert_allclose(yhat[500:], (2.0 + 3.0 * x)[500:], atol=0.1)
+        y2 = y.copy()
+        y2[700:] += 100.0        # 未来目标被污染
+        yhat2 = expanding_ols_forecast(X, y2, horizon=10, min_n=100, refit_every=1)
+        np.testing.assert_allclose(yhat[:709], yhat2[:709])
+
+    def test_pit_scale_factor_shrinks_to_one_then_to_data(self):
+        from probability_calibration import pit_scale_factor
+        z2 = np.full(2000, 2.0)
+        s = pit_scale_factor(z2, horizon=10, prior_n=250, min_n=120)
+        self.assertTrue(np.isnan(s[:128]).all())
+        self.assertLess(s[200], 1.5)              # 少样本时向 1 收缩
+        self.assertGreater(s[1999], 1.85)         # 大样本趋向实际均值 2
+
     def test_overlap_is_not_counted_as_independent_evidence(self):
         positions = np.arange(1500)
         labels = np.tile([1., 0., 0., 1.], 375)
@@ -185,7 +225,14 @@ class IceIntegrationTests(unittest.TestCase):
                 result = self.engine._predict_sync("sh000001")
         self.assertEqual(result["rebound_prob_10d_pct"], result["drop_prob_10d_pct"])
         sigma = result["sigma10_pct"]
-        self.assertEqual(result["band68_pct"], [round(-sigma, 1), round(sigma, 1)])
+        # v3.1: 区间为标准化历史收益的点时间经验分位 (FHS), 不再是 ±σ 正态分位;
+        # 必须包住 0、90% 区间严格宽于 68% 区间, 且宽度与 σ 同量级 (合成正态数据下接近 ±σ)
+        self.assertEqual(result["band_method"], "pit_empirical_quantile_fhs")
+        lo68, hi68 = result["band68_pct"]
+        lo90, hi90 = result["band90_pct"]
+        self.assertLess(lo68, 0); self.assertGreater(hi68, 0)
+        self.assertLess(lo90, lo68); self.assertGreater(hi90, hi68)
+        self.assertAlmostEqual(hi68 - lo68, 2 * sigma, delta=0.6 * sigma)
         # 波动越大, 穿越 +2.5% 的概率越高, 且始终落在 (0, 50)
         self.assertLess(result["rebound_prob_10d_pct"], 50)
         self.assertGreater(result["rebound_prob_10d_pct"], 0)
@@ -247,6 +294,52 @@ class IceIntegrationTests(unittest.TestCase):
                     patch("ice_engine.time.sleep"), patch.object(engine, "session") as session:
                 session.get.return_value.json.return_value = page
                 self.assertEqual(len(engine.fetch_margin_history(900)), 1000)
+
+    def test_tencent_fallback_pages_to_full_history_and_disk_cache_survives_outage(self):
+        """东财失败时腾讯按 end 日期翻页拼满 count 根 (而非静默砍半); 全部在线源失败时读磁盘留档。"""
+        engine = IceEngine()
+        dates = pd.bdate_range("2010-01-01", periods=4500).strftime("%Y-%m-%d").tolist()
+
+        def tencent_page(url):
+            # param=sym,day,,{end},{page},qfq
+            spec = url.split("param=")[1].split(",")
+            end, page = spec[3], int(spec[4])
+            upto = len(dates) if not end else sum(1 for d in dates if d <= end)
+            chunk = dates[max(0, upto - min(page, 2000)):upto]
+            return {"data": {"sh000001": {"day": [[d, "1", "1", "1", "1", "100"] for d in chunk]}}}
+
+        class Resp:
+            def __init__(self, payload):
+                self._p = payload
+
+            def json(self):
+                return self._p
+
+        def fake_get(url, timeout=0):
+            if "eastmoney" in url:
+                raise ConnectionError("remote closed")
+            if "ifzq.gtimg.cn" in url:
+                return Resp(tencent_page(url))
+            raise AssertionError(url)
+
+        with tempfile.TemporaryDirectory() as folder, patch("ice_engine.CACHE_DIR", folder), \
+                patch("ice_engine.time.sleep"), patch.object(engine, "session") as session:
+            session.get.side_effect = fake_get
+            df = engine.fetch_index_daily("sh000001", 4000)
+            self.assertEqual(len(df), 4000)
+            self.assertEqual(df["date"].iloc[-1], dates[-1])
+            self.assertEqual(df["date"].iloc[0], dates[-4000])
+            self.assertFalse(df["date"].duplicated().any())
+            self.assertEqual(engine._daily_source[("sh000001", 4000)], "tencent_paged")
+            self.assertTrue(Path(folder, "index_daily_sh000001.json").exists())
+
+            # 全部在线源宕机: 读取磁盘留档并标注来源
+            engine2 = IceEngine()
+            with patch.object(engine2, "session") as s2:
+                s2.get.side_effect = ConnectionError("down")
+                df2 = engine2.fetch_index_daily("sh000001", 4000)
+            self.assertEqual(len(df2), 4000)
+            self.assertTrue(engine2._daily_source[("sh000001", 4000)].startswith("disk_cache("))
 
     def test_old_calibration_version_is_not_reused(self):
         with tempfile.TemporaryDirectory() as folder:

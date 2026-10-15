@@ -193,6 +193,26 @@
                         </div>
                     </div>
 
+                    <!-- 横截面因子分 (走前验证的量价因子模型, 仅为相对强弱的统计倾向) -->
+                    <div class="historical-backtest-box factor-model-box" id="factorModelBox">
+                        <div class="ht-title" id="factorTitle">🧮 横截面因子分位（走前验证 · 相对强弱倾向，非方向判断）</div>
+                        <div class="ht-grid">
+                            <div class="ht-col">
+                                <span class="ht-lbl">池内综合分位</span>
+                                <span class="ht-val highlight" id="factorPct">--</span>
+                            </div>
+                            <div class="ht-col">
+                                <span class="ht-lbl">样本外 Rank-IC / t</span>
+                                <span class="ht-val" id="factorIc">--</span>
+                            </div>
+                            <div class="ht-col">
+                                <span class="ht-lbl">Q5 vs Q1 跑赢中位数概率</span>
+                                <span class="ht-val" id="factorBeat">--</span>
+                            </div>
+                        </div>
+                        <div class="ht-note" id="factorDrivers"></div>
+                    </div>
+
                     <!-- 四维量化评分雷达图 -->
                     <div class="radar-chart-container" id="radarChart"></div>
                 </div>

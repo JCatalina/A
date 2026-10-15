@@ -13,6 +13,7 @@ from scanner_engine import ScannerEngine
 from index_engine import IndexEngine
 from us_index_engine import USIndexEngine
 from ice_engine import IceEngine
+from factor_engine import FactorEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -28,8 +29,10 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=index_engine.warm_all, daemon=True, name="index-prewarm").start()
     # v2.9: 美股四大指数 x 日/周/月三周期预热, 首次切换 us tab 即命中缓存
     threading.Thread(target=us_index_engine.warm_all, daemon=True, name="us-index-prewarm").start()
+    # v3.1: 横截面因子面板 (磁盘缓存过期才重建: ~800 只 × 2000 根, 约 1~2 分钟, 后台线程)
+    threading.Thread(target=_warm_factor_model, daemon=True, name="factor-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
-    _scheduler = RefreshScheduler(data_fetcher, scanner_engine, index_engine, ice_engine)
+    _scheduler = RefreshScheduler(data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine)
     _scheduler.start()
     yield
     _scheduler.stop()
@@ -51,10 +54,20 @@ app.add_middleware(
 )
 
 data_fetcher = DataFetcher()
-scanner_engine = ScannerEngine(data_fetcher)
+factor_engine = FactorEngine(data_fetcher)
+scanner_engine = ScannerEngine(data_fetcher, factor_engine)
 index_engine = IndexEngine()
 us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
+
+
+def _warm_factor_model() -> None:
+    if factor_engine.panel_is_fresh():
+        return
+    try:
+        factor_engine.rebuild(progress=lambda m: logger.info(f"factor prewarm: {m}"))
+    except Exception as e:
+        logger.warning(f"factor model prewarm failed: {e}")
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -183,6 +196,16 @@ def get_screener_results(strategy: StrategyName = Query("ALL")):
         "total": len(res),
         "data": res
     }
+
+@app.get("/api/factor/latest")
+def get_factor_model_report(top: int = Query(30, ge=0, le=200, description="附带综合分位最高的前 N 只")):
+    """横截面因子模型的走前评估报告 (factor_engine) + 最新截面综合分位最高的标的"""
+    if not factor_engine.report:
+        return JSONResponse(status_code=404, content={"status": "error",
+                            "message": "因子模型尚未构建 (启动后后台构建约 1~2 分钟, 或执行 python run_factor_eval.py)"})
+    return {"status": "success", "data": {"report": factor_engine.report, "top": factor_engine.top_table(top),
+                                          "asof_date": factor_engine._asof}}
+
 
 EVAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_reports")
 

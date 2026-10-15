@@ -4,8 +4,11 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pandas as pd
 
-MODEL_VERSION = "ice-vol-exceedance-v1"
+# v3.1: 概率模型本体不变 (v3 波动率混合 + 零漂移正态), 但区间改为点时间经验分位 (FHS),
+# 并新增 HAR-RV 挑战者诊断; 版本号升级使旧校准表失效并重算。
+MODEL_VERSION = "ice-vol-exceedance-v2-fhs-bands"
 BIN_EDGES = np.array([0., 20., 40., 60., 80., 101.])
 PRIOR_STRENGTH = 20.0
 MIN_BIN_SAMPLES = 30
@@ -72,6 +75,101 @@ def exceedance_probability(sigma_horizon_pct, threshold_pct, drift_pct=0.0):
     sigma = np.asarray(sigma_horizon_pct, float)
     out = np.where(sigma > 0, normal_sf((threshold_pct - drift_pct) / np.where(sigma > 0, sigma, 1.0)), np.nan)
     return out if out.ndim else float(out)
+
+
+def pit_quantile_bands(z, horizon, probs=(0.16, 0.84, 0.05, 0.95), min_n=250, step=5):
+    """Point-in-time empirical quantiles of standardized forward returns z_i = r_i / sigma_i.
+
+    At day t only rows whose forward window has matured (i + horizon <= t) are used, so the
+    bands never see the future. Returns an array (n, len(probs)); rows without enough matured
+    history are NaN. Quantiles are refreshed every `step` days and carried forward in between.
+
+    This is filtered historical simulation (Barone-Adesi et al. 1999) applied to interval
+    construction: the volatility model supplies the scale, the data supply the shape (fat tails,
+    skew), so nominal coverage holds without assuming normality.
+    """
+    z = np.asarray(z, float)
+    n = len(z)
+    out = np.full((n, len(probs)), np.nan)
+    if n == 0:
+        return out
+    last = None
+    for t in range(n):
+        m = t - horizon + 1          # exclusive upper bound of matured rows
+        if m <= 0:
+            continue
+        if last is None or (t % step) == 0:
+            sample = z[:m]
+            sample = sample[np.isfinite(sample)]
+            last = np.quantile(sample, probs) if len(sample) >= min_n else None
+        if last is not None:
+            out[t] = last
+    return out
+
+
+def expanding_ols_forecast(X, y, horizon, min_n=250, refit_every=5, ridge=1e-8):
+    """Expanding-window OLS prediction yhat_t with target maturity purging.
+
+    Row i's target is only usable at t when i + horizon <= t. Normal equations are built from
+    prefix sums, so the whole walk-forward costs O(n k^2). Used for the HAR-RV challenger.
+    """
+    X = np.asarray(X, float)
+    y = np.asarray(y, float)
+    n, k = X.shape
+    yhat = np.full(n, np.nan)
+    valid = np.isfinite(y) & np.all(np.isfinite(X), axis=1)
+    Xv = np.where(valid[:, None], X, 0.0)
+    yv = np.where(valid, y, 0.0)
+    XtX = np.cumsum(np.einsum("ni,nj->nij", Xv, Xv), axis=0)
+    Xty = np.cumsum(Xv * yv[:, None], axis=0)
+    cnt = np.cumsum(valid)
+    beta = None
+    for t in range(n):
+        m = t - horizon + 1
+        if m <= 0 or cnt[m - 1] < min_n:
+            continue
+        if beta is None or t % refit_every == 0:
+            beta = np.linalg.solve(XtX[m - 1] + ridge * np.eye(k), Xty[m - 1])
+        if np.all(np.isfinite(X[t])):
+            yhat[t] = X[t] @ beta
+    return yhat
+
+
+def har_rv_sigma_horizon_pct(high, low, open_, close, horizon, min_n=250, refit_every=5):
+    """HAR-RV (Corsi 2009) on Garman-Klass daily variance, forecasting the next-`horizon`-day
+    realized variance in log space; returned as a horizon sigma in percent.
+
+    Range-based variance of A-share indices systematically misses overnight gaps (about 35-40%
+    of close-to-close variance), so the raw forecast is biased low; callers should treat it as a
+    challenger whose *ranking* skill is what matters, or scale-correct it point-in-time.
+    """
+    high, low, open_, close = (np.asarray(a, float) for a in (high, low, open_, close))
+    gk = 0.5 * np.log(high / low) ** 2 - (2 * math.log(2) - 1) * np.log(close / open_) ** 2
+    gk = np.maximum(gk, 1e-10)
+    s = pd.Series(gk)
+    cols = [np.ones(len(gk)), np.log(s + 1e-10), np.log(s.rolling(5).mean() + 1e-10),
+            np.log(s.rolling(22).mean() + 1e-10), np.log(s.rolling(66).mean() + 1e-10)]
+    X = np.column_stack(cols)
+    fut = s[::-1].rolling(horizon).sum()[::-1].shift(-1)      # realized variance of t+1..t+h
+    y = np.log(fut.values + 1e-10)
+    yhat = expanding_ols_forecast(X, y, horizon, min_n=min_n, refit_every=refit_every)
+    return np.sqrt(np.exp(yhat)) * 100.0
+
+
+def pit_scale_factor(z2, horizon, prior_n=250, min_n=120):
+    """Point-in-time E[z^2] with `prior_n` pseudo-observations at 1.0 (shrinks toward 'unbiased')."""
+    z2 = np.asarray(z2, float)
+    n = len(z2)
+    out = np.full(n, np.nan)
+    valid = np.isfinite(z2)
+    cs = np.cumsum(np.where(valid, z2, 0.0))
+    cnt = np.cumsum(valid)
+    for t in range(n):
+        m = t - horizon + 1
+        if m <= 0 or cnt[m - 1] < min_n:
+            continue
+        out[t] = (cs[m - 1] + prior_n) / (cnt[m - 1] + prior_n)
+    return out
 
 
 def _block_bootstrap_pvalue(gain, block, iters=4000, seed=11):

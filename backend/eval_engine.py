@@ -175,8 +175,13 @@ def _quality_info(df: pd.DataFrame) -> Dict[str, Any]:
                for key in ("adjustment", "adjust", "price_adjustment", "adjustment_type")
                if key in container]
     accepted = bool(markers) and all(v in ("qfq", "前复权", "forward") for v in markers)
-    return {"attrs": attrs, "accepted": accepted,
-            "reason": "explicit_qfq" if accepted else "excluded_non_qfq_or_unknown_adjustment"}
+    reason = "explicit_qfq" if accepted else "excluded_non_qfq_or_unknown_adjustment"
+    sanity = attrs.get("price_sanity") or {}
+    if accepted and sanity.get("status") not in (None, "ok"):
+        # v3.1: 前复权退化 (价格<=0 / 单日 >60%) 的股票剔除, 否则 10 日收益会出现 +24250% 之类的垃圾样本
+        accepted = False
+        reason = f"excluded_price_sanity:{sanity.get('status')}"
+    return {"attrs": attrs, "accepted": accepted, "reason": reason}
 
 
 def _eligible_quality(code: str, df: pd.DataFrame) -> bool:

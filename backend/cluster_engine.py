@@ -115,7 +115,7 @@ class ClusterEngine:
                 "category": "CHIPS"
             })
         for peak_p in chips_d.get("peaks", []):
-            if abs(peak_p - poc) / poc > 0.03:
+            if poc > 0 and abs(peak_p - poc) / poc > 0.03:
                 raw_candidates.append({
                     "price": peak_p,
                     "weight": 20,
