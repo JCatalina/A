@@ -1823,8 +1823,19 @@ const WORKSPACE_TABS = [
     { tab: "tabIndexView", ws: "indexWorkspace" },
     { tab: "tabUsView", ws: "usWorkspace" },
     { tab: "tabMrdiView", ws: "mrdiWorkspace" },
+    { tab: "tabNewsView", ws: "newsWorkspace" },
     { tab: "tabStockView", ws: "stockWorkspace" }
 ];
+
+// 金融消息面状态
+let currentNewsRegion = "all";
+let currentNewsSource = "";
+let currentNewsQuery = "";
+let currentNewsMinImp = 30;
+let currentNewsSort = "time";
+let currentNewsSector = "";
+let newsLoadedOnce = false;
+let newsPollTimer = null;
 
 /**
  * 顶部主视图切换: 隐藏全部工作区后只显示目标, 保证新增面板不会残留在其他视图下
@@ -1845,6 +1856,7 @@ function bindMrdiEvents() {
     const tabMrdi = document.getElementById("tabMrdiView");
     const tabStock = document.getElementById("tabStockView");
     const tabIndex = document.getElementById("tabIndexView");
+    const tabNews = document.getElementById("tabNewsView");
 
     // 重新绑定前两个 Tab (覆盖 bindMacroEvents 中简单逻辑以支持多面板切换)
     tabStock?.addEventListener("click", () => {
@@ -1866,6 +1878,11 @@ function bindMrdiEvents() {
             if (dom) mrdiTechChartInst = echarts.init(dom);
         }
         loadMrdiAnalysis(currentMrdiSymbol);
+    });
+
+    tabNews?.addEventListener("click", () => {
+        switchWorkspaceView("tabNewsView", "newsWorkspace");
+        loadNewsFeed({ forcePoll: true });
     });
 
     // MRDI 指数胶囊切换
@@ -2767,8 +2784,385 @@ function calcEMA(data, period) {
     return result;
 }
 
-// 初始化时绑定 MRDI 与美股面板事件 (美股数据在首次切入该 Tab 时才加载, 不拖慢首屏)
+/**
+ * 金融消息面: 拉取权威媒体聚合 + 通俗解读
+ */
+async function loadNewsFeed(opts = {}) {
+    const listEl = document.getElementById("newsFeedList");
+    const timeEl = document.getElementById("newsUpdateTime");
+    const countEl = document.getElementById("newsCountText");
+    const aiBadge = document.getElementById("newsAiModeBadge");
+    if (!listEl) return;
+
+    if (!newsLoadedOnce) {
+        listEl.innerHTML = `<div class="news-empty">正在拉取权威财经快讯并生成通俗解读…</div>`;
+    }
+
+    const params = new URLSearchParams({
+        region: currentNewsRegion || "all",
+        limit: "80",
+        min_importance: String(currentNewsMinImp || 0),
+        sort: currentNewsSort || "time",
+    });
+    if (currentNewsSource) params.set("source", currentNewsSource);
+    if (currentNewsQuery) params.set("q", currentNewsQuery);
+    if (currentNewsSector) params.set("sector", currentNewsSector);
+
+    loadNewsDigest();
+    try {
+        const res = await fetch(`/api/news/feed?${params.toString()}`);
+        const json = await res.json();
+        if (!res.ok || json.status === "error") {
+            listEl.innerHTML = `<div class="news-empty">消息面暂时不可用，请稍后刷新。</div>`;
+            return;
+        }
+        newsLoadedOnce = true;
+        if (timeEl) timeEl.textContent = json.updated_at ? `更新于 ${json.updated_at}` : "首次同步中…";
+        if (countEl) {
+            const failed = Object.values(json.sources || {}).filter(s => s && s.ok === false).map(s => s.label);
+            countEl.innerHTML = (currentNewsSector
+                ? `<button type="button" class="news-sector-clear" title="清除板块筛选">板块：${escapeHtml(currentNewsSector)} ✕</button>` : "")
+                + `符合筛选 ${json.total || 0} 条 · 展示 ${json.returned || 0} 条`
+                + (failed.length ? ` · 暂不可用: ${escapeHtml(failed.join("、"))}` : "");
+        }
+        if (aiBadge) {
+            aiBadge.textContent = json.ai_mode === "llm+rule"
+                ? `解读引擎: 规则引擎 + 大模型精读${json.ai_model ? ` (${json.ai_model})` : ""}`
+                : "解读引擎: 宏观传导规则引擎";
+            aiBadge.title = `规则版本 ${json.rules_version || "-"}；重要度≥50 的消息在配置大模型后会追加精读`;
+        }
+        renderNewsFeed(json.data || []);
+        if (opts.forcePoll || !newsPollTimer) startNewsPolling();
+    } catch (err) {
+        console.warn("loadNewsFeed failed", err);
+        listEl.innerHTML = `<div class="news-empty">网络异常，无法加载消息面。</div>`;
+    }
+}
+
+async function loadNewsDigest() {
+    const el = document.getElementById("newsDigest");
+    if (!el) return;
+    try {
+        const res = await fetch(`/api/news/digest?hours=12&region=${encodeURIComponent(currentNewsRegion || "all")}`);
+        const json = await res.json();
+        if (!res.ok || json.status !== "success") return;
+        el.innerHTML = renderNewsDigest(json);
+    } catch (err) {
+        console.warn("loadNewsDigest failed", err);
+    }
+}
+
+function renderNewsDigest(dg) {
+    if (!dg || !dg.count) {
+        return `<div class="news-digest-empty">近 ${dg?.hours || 12} 小时暂无一般以上重要度的消息。</div>`;
+    }
+    const moodCls = { "偏暖": "warm", "偏冷": "cold", "分化": "mixed" }[dg.mood_label] || "calm";
+    const sc = dg.stance_count || {};
+    const heatChips = (list, side) => (list || []).map(h => `
+        <button type="button" class="news-heat-chip ${side}${currentNewsSector === h.name ? " active" : ""}" data-news-sector="${escapeHtml(h.name)}"
+            title="点击只看涉及「${escapeHtml(h.name)}」的消息&#10;${escapeHtml((h.news || []).map(n => n.title).join("\n"))}">
+            ${escapeHtml(h.name)}<b>${side === "bull" ? h.bull : h.bear}</b>
+        </button>`).join("") || `<span class="news-heat-none">暂无集中方向</span>`;
+    const tops = (dg.top_events || []).map(t => `
+        <li data-news-jump="${escapeHtml(t.id)}">
+            <span class="news-imp-dot ${newsImpClass(t.importance)}">${Number(t.importance) || 0}</span>
+            <span class="news-top-text"><strong>${escapeHtml(t.headline_take || t.title || "")}</strong>
+            <small>${escapeHtml(t.source || "")} · ${escapeHtml(newsRelTime(t.published_ts, t.published_at))}</small></span>
+        </li>`).join("");
+    return `
+    <div class="news-digest-mood ${moodCls}">
+        <span class="news-digest-eyebrow">近 ${dg.hours} 小时消息面</span>
+        <strong>${escapeHtml(dg.mood_label || "平静")}</strong>
+        <span class="news-digest-count">偏利好 ${sc.positive || 0} · 偏利空 ${sc.negative || 0} · 中性 ${sc.neutral || 0}</span>
+    </div>
+    <div class="news-digest-heat">
+        <div><span class="news-digest-label bull">利好集中</span><div class="news-heat-list">${heatChips(dg.bullish_heat, "bull")}</div></div>
+        <div><span class="news-digest-label bear">利空集中</span><div class="news-heat-list">${heatChips(dg.bearish_heat, "bear")}</div></div>
+    </div>
+    <div class="news-digest-top">
+        <span class="news-digest-label">重点事件</span>
+        <ol>${tops}</ol>
+    </div>
+    <p class="news-digest-note">${escapeHtml(dg.note || "按重要度加权统计，反映消息面冷暖，不是涨跌预测。")}</p>`;
+}
+
+function startNewsPolling() {
+    if (newsPollTimer) clearInterval(newsPollTimer);
+    newsPollTimer = setInterval(() => {
+        const ws = document.getElementById("newsWorkspace");
+        if (ws && ws.style.display !== "none") loadNewsFeed();
+    }, 180000);
+}
+
+function renderNewsFeed(items) {
+    const listEl = document.getElementById("newsFeedList");
+    if (!listEl) return;
+    if (!items.length) {
+        listEl.innerHTML = `<div class="news-empty">当前筛选下暂无新闻，试试放宽重要度、切换「中国/外国」或清空关键词。</div>`;
+        return;
+    }
+    listEl.innerHTML = items.map(renderNewsCard).join("");
+}
+
+function newsImpClass(score) {
+    const s = Number(score) || 0;
+    return s >= 75 ? "major" : s >= 55 ? "high" : s >= 30 ? "mid" : "low";
+}
+
+function newsRelTime(ts, fallback) {
+    const t = Number(ts);
+    if (!t) return fallback || "";
+    const diff = Math.max(0, Date.now() / 1000 - t);
+    if (diff < 60) return "刚刚";
+    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+    return fallback || `${Math.floor(diff / 86400)} 天前`;
+}
+
+const NEWS_DIR_META = {
+    up: { arrow: "▲", label: "偏多" },
+    down: { arrow: "▼", label: "偏空" },
+    mixed: { arrow: "◆", label: "分化" },
+    neutral: { arrow: "●", label: "中性" },
+};
+
+function renderNewsCard(item) {
+    const ai = item.interpretation || {};
+    const stance = ai.stance || "neutral";
+    const stanceLabel = ai.stance_label || "中性观察";
+    const impKnown = item.importance != null || ai.importance != null;
+    const imp = Number(item.importance ?? ai.importance) || 0;
+    const impLabel = ai.importance_label || (imp >= 75 ? "重大" : imp >= 55 ? "重要" : imp >= 30 ? "一般" : "参考");
+    const regions = (item.regions && item.regions.length ? item.regions : [item.region || "cn"])
+        .map(r => `<span class="news-region-tag">${r === "foreign" ? "外国" : "中国"}</span>`).join("");
+    const shownTitle = item.title_zh || item.title || "";
+    const titleHtml = item.url
+        ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shownTitle)}</a>`
+        : escapeHtml(shownTitle);
+    const also = (item.also_reported_by || []).filter(Boolean);
+    const timeText = newsRelTime(item.published_ts, item.published_at);
+    const top = `
+            <div class="news-card-top">
+                ${impKnown ? `<span class="news-imp-badge ${newsImpClass(imp)}" title="重要度 ${imp}/100">${escapeHtml(impLabel)} ${imp}</span>` : ""}
+                ${ai.category_label ? `<span class="news-cat-tag">${escapeHtml(ai.category_label)}</span>` : ""}
+                ${regions}
+                <span class="news-source-tag">${escapeHtml(item.source || "")}</span>
+                ${also.length ? `<span class="news-also" title="${escapeHtml(also.join("、"))} 也报道了">+${also.length} 家同报</span>` : ""}
+                <span class="news-time" title="${escapeHtml(item.published_at || "")}">${escapeHtml(timeText)}</span>
+            </div>`;
+
+    // 低重要度/与市场无关: 精简展示, 不铺陈模板化长文
+    if ((impKnown && imp < 30) || ai.relevant === false) {
+        return `
+    <article class="news-card compact" data-news-id="${escapeHtml(item.id || "")}">
+        <div class="news-card-main">
+            ${top}
+            <h3 class="news-title">${titleHtml}</h3>
+            ${ai.headline_take ? `<p class="news-compact-take"><span class="news-stance ${escapeHtml(stance)}">${escapeHtml(stanceLabel)}</span>${escapeHtml(ai.headline_take)}</p>` : ""}
+        </div>
+    </article>`;
+    }
+
+    const sectorItems = (list, side) => (list || []).map(s => `
+        <li><strong>${side === "bull" ? "利好" : "利空"} · ${escapeHtml(s.name || "")}</strong>${escapeHtml(s.reason || "")}</li>
+    `).join("") || `<li class="none"><strong>${side === "bull" ? "利好" : "利空"} · 暂无明确板块</strong>消息尚未指向具体${side === "bull" ? "受益" : "受损"}方向</li>`;
+    const chain = (ai.transmission_chain || []).map(step => `<li>${escapeHtml(step)}</li>`).join("")
+        || `<li>新闻出现 → 市场先交易情绪 → 再等待数据验证</li>`;
+    const markets = (ai.markets || []).map(m => {
+        const meta = NEWS_DIR_META[m.direction] || NEWS_DIR_META.neutral;
+        return `<span class="news-mkt ${escapeHtml(m.direction || "neutral")}" title="${escapeHtml(m.text || "")}">
+            <em>${escapeHtml(m.market || "")}</em>${meta.arrow} ${meta.label}<small>${escapeHtml(m.text || "")}</small></span>`;
+    }).join("");
+    const watch = (ai.watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join("");
+    const gloss = (ai.glossary || []).filter(g => g && g.term).map(g =>
+        `<dt>${escapeHtml(g.term)}</dt><dd>${escapeHtml(g.explain || "")}</dd>`).join("");
+    const related = (ai.related_indices || []).map(r =>
+        `<button type="button" class="news-index-link" data-index-symbol="${escapeHtml(r.symbol)}" data-index-market="${escapeHtml(r.market)}">
+            <i class="fa-solid fa-chart-line"></i> 看${escapeHtml(r.name || r.symbol)}研判</button>`).join("");
+    const conf = Math.round((Number(ai.confidence) || 0) * 100);
+    const evidence = (ai.evidence || []).slice(0, 3).map(e => escapeHtml(e)).join(" ｜ ");
+    const showOriginal = item.title_zh && item.title && item.title_zh !== item.title;
+    const summary = item.summary && item.summary !== item.title ? item.summary : "";
+
+    return `
+    <article class="news-card${impKnown ? ` imp-${newsImpClass(imp)}` : ""}" data-news-id="${escapeHtml(item.id || "")}">
+        <div class="news-card-main">
+            ${top}
+            <h3 class="news-title">${titleHtml}</h3>
+            ${showOriginal ? `<p class="news-original">原文：${escapeHtml(item.title)}</p>` : ""}
+            ${summary ? `<p class="news-summary">${escapeHtml(summary)}</p>` : ""}
+            ${ai.why_it_matters ? `<div class="news-why">${escapeHtml(ai.why_it_matters)}</div>` : ""}
+            ${related ? `<div class="news-index-links">${related}</div>` : ""}
+        </div>
+        <div class="news-card-ai">
+            <div class="news-ai-head">
+                <span class="news-ai-label"><i class="fa-solid fa-lightbulb"></i> ${ai.engine === "llm+rule" ? "AI 精读" : "AI 通俗解读"}</span>
+                <span class="news-stance ${escapeHtml(stance)}">${escapeHtml(stanceLabel)}</span>
+            </div>
+            ${ai.headline_take ? `<p class="news-take">${escapeHtml(ai.headline_take)}</p>` : ""}
+            ${markets ? `<div class="news-markets">${markets}</div>` : ""}
+            <div class="news-ai-block">
+                <h4>大白话</h4>
+                <p>${escapeHtml(ai.plain_summary || "暂无解读")}</p>
+            </div>
+            ${ai.market_impact ? `<div class="news-ai-block"><h4>对金融市场的影响</h4><p>${escapeHtml(ai.market_impact)}</p></div>` : ""}
+            <div class="news-sector-row">
+                <div>
+                    <h4 class="news-sector-title bullish">利好板块</h4>
+                    <ul class="news-sector-list bullish">${sectorItems(ai.bullish_sectors, "bull")}</ul>
+                </div>
+                <div>
+                    <h4 class="news-sector-title bearish">利空板块</h4>
+                    <ul class="news-sector-list bearish">${sectorItems(ai.bearish_sectors, "bear")}</ul>
+                </div>
+            </div>
+            <div class="news-ai-block">
+                <h4>传导链 · 为什么会这样</h4>
+                <ol class="news-chain">${chain}</ol>
+            </div>
+            ${watch ? `<div class="news-ai-block"><h4>接下来盯什么</h4><ul class="news-watch">${watch}</ul></div>` : ""}
+            ${gloss ? `<details class="news-gloss"><summary>名词小课堂</summary><dl>${gloss}</dl></details>` : ""}
+            <div class="news-ai-foot">
+                ${evidence ? `<span title="规则命中的依据">识别依据：${evidence}</span>` : ""}
+                ${conf ? `<span>置信度 ${conf}%</span>` : ""}
+                ${ai.caveat ? `<span class="news-caveat">${escapeHtml(ai.caveat)}</span>` : ""}
+            </div>
+        </div>
+    </article>`;
+}
+
+/**
+ * 速览「重点事件」定位到卡片; 若被当前筛选挡住, 先清空来源/关键词/板块筛选再定位
+ */
+async function focusNewsCard(id, retried = false) {
+    const card = id && document.querySelector(`.news-card[data-news-id="${CSS.escape(id)}"]`);
+    if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("flash");
+        setTimeout(() => card.classList.remove("flash"), 1600);
+        return;
+    }
+    if (retried) return;
+    currentNewsSource = "";
+    currentNewsQuery = "";
+    currentNewsSector = "";
+    const input = document.getElementById("newsSearchInput");
+    if (input) input.value = "";
+    document.querySelectorAll(".news-source-chip").forEach(b => b.classList.toggle("active", !b.dataset.newsSource));
+    await loadNewsFeed();
+    focusNewsCard(id, true);
+}
+
+/**
+ * 从新闻跳转到对应指数的多周期研判 (复用 Tab 与胶囊的原有点击逻辑, 保证冰点等联动面板一致)
+ */
+function jumpToIndexAnalysis(symbol, market) {
+    if (!symbol) return;
+    if (market === "us") {
+        document.getElementById("tabUsView")?.click();
+        selectUsIndex(symbol);
+    } else {
+        document.getElementById("tabIndexView")?.click();
+        document.querySelector(`#indexCapsuleTabs .index-capsule-btn[data-symbol="${symbol}"]`)?.click();
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function escapeHtml(str) {
+    return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function bindNewsEvents() {
+    document.querySelectorAll(".news-region-tab").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".news-region-tab").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentNewsRegion = btn.dataset.newsRegion || "all";
+            loadNewsFeed();
+        });
+    });
+
+    document.querySelectorAll(".news-source-chip").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".news-source-chip").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentNewsSource = btn.dataset.newsSource || "";
+            loadNewsFeed();
+        });
+    });
+
+    document.querySelectorAll(".news-imp-chip").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".news-imp-chip").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentNewsMinImp = Number(btn.dataset.newsImp) || 0;
+            loadNewsFeed();
+        });
+    });
+
+    document.querySelectorAll(".news-sort-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".news-sort-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            currentNewsSort = btn.dataset.newsSort || "time";
+            loadNewsFeed();
+        });
+    });
+
+    // 卡片与速览每次轮询都会重建, 统一用容器事件委托
+    document.getElementById("newsWorkspace")?.addEventListener("click", (e) => {
+        const idxBtn = e.target.closest(".news-index-link");
+        if (idxBtn) {
+            jumpToIndexAnalysis(idxBtn.dataset.indexSymbol, idxBtn.dataset.indexMarket);
+            return;
+        }
+        const heat = e.target.closest(".news-heat-chip");
+        if (heat) {
+            const name = heat.dataset.newsSector || "";
+            currentNewsSector = currentNewsSector === name ? "" : name;
+            loadNewsFeed();
+            return;
+        }
+        if (e.target.closest(".news-sector-clear")) {
+            currentNewsSector = "";
+            loadNewsFeed();
+            return;
+        }
+        const jump = e.target.closest("[data-news-jump]");
+        if (jump) focusNewsCard(jump.dataset.newsJump);
+    });
+
+    const searchInput = document.getElementById("newsSearchInput");
+    let searchTimer = null;
+    searchInput?.addEventListener("input", () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+            currentNewsQuery = (searchInput.value || "").trim();
+            loadNewsFeed();
+        }, 320);
+    });
+
+    const refreshBtn = document.getElementById("newsRefreshBtn");
+    refreshBtn?.addEventListener("click", async () => {
+        refreshBtn.classList.add("is-loading");
+        try {
+            await fetch("/api/news/refresh?force=true", { method: "POST" });
+            await new Promise(r => setTimeout(r, 1200));
+            await loadNewsFeed();
+        } finally {
+            refreshBtn.classList.remove("is-loading");
+        }
+    });
+}
+
+// 初始化时绑定 MRDI / 美股 / 消息面面板事件 (美股与消息面首次切入该 Tab 时才加载)
 document.addEventListener("DOMContentLoaded", () => {
     bindMrdiEvents();
     bindUsMacroEvents();
+    bindNewsEvents();
 });

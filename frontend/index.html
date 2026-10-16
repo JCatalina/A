@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=2.9.0">
+    <link rel="stylesheet" href="/static/style.css?v=3.2.0">
 </head>
 <body>
     <div class="app-container">
@@ -32,6 +32,7 @@
                     <button class="nav-tab active" id="tabIndexView" data-target="indexWorkspace">🌐 大盘多周期研判</button>
                     <button class="nav-tab" id="tabUsView" data-target="usWorkspace">🗽 美股大盘研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
+                    <button class="nav-tab" id="tabNewsView" data-target="newsWorkspace">📰 金融消息面</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                 </div>
             </div>
@@ -902,9 +903,78 @@
 
         </main>
 
+        <!-- 主内容工作区: 金融消息面 (中国/外国权威媒体 + AI 通俗解读) -->
+        <main class="news-workspace" id="newsWorkspace" style="display: none;">
+            <section class="news-page-intro">
+                <div>
+                    <span class="news-eyebrow">NEWS · PLAIN-LANGUAGE MARKET IMPACT</span>
+                    <h1 class="news-page-title">金融消息面</h1>
+                    <p class="news-page-desc">聚合财联社、华尔街见闻、东方财富、金十、CNBC/FT 等权威来源，按事件主体分中国/外国，自动去重并按重要度打分；每条附「大白话」解读——一句话结论、A股/美股/商品方向、利好利空板块、传导链与后续观察点。</p>
+                </div>
+                <div class="news-live-status">
+                    <span class="news-live-dot"></span>
+                    <span id="newsUpdateTime">同步中...</span>
+                    <button type="button" class="news-refresh-btn" id="newsRefreshBtn" title="立即刷新">
+                        <i class="fa-solid fa-rotate"></i> 刷新
+                    </button>
+                </div>
+            </section>
+
+            <section class="news-digest" id="newsDigest" aria-label="消息面速览">
+                <div class="news-digest-empty">正在汇总近 12 小时消息面…</div>
+            </section>
+
+            <div class="news-toolbar">
+                <div class="news-region-tabs" role="tablist" aria-label="中国与外国消息">
+                    <button type="button" class="news-region-tab active" data-news-region="all">全部</button>
+                    <button type="button" class="news-region-tab" data-news-region="cn">🇨🇳 中国</button>
+                    <button type="button" class="news-region-tab" data-news-region="foreign">🌍 外国</button>
+                </div>
+                <div class="news-source-filters" id="newsSourceFilters">
+                    <button type="button" class="news-source-chip active" data-news-source="">全部来源</button>
+                    <button type="button" class="news-source-chip" data-news-source="cls">财联社</button>
+                    <button type="button" class="news-source-chip" data-news-source="wscn">华尔街见闻</button>
+                    <button type="button" class="news-source-chip" data-news-source="eastmoney">东方财富</button>
+                    <button type="button" class="news-source-chip" data-news-source="jin10">金十</button>
+                    <button type="button" class="news-source-chip" data-news-source="reuters">路透/BBC</button>
+                    <button type="button" class="news-source-chip" data-news-source="cnbc">CNBC</button>
+                    <button type="button" class="news-source-chip" data-news-source="ft">金融时报</button>
+                </div>
+                <div class="news-filter-row">
+                    <div class="news-imp-filters" role="group" aria-label="重要度筛选">
+                        <button type="button" class="news-imp-chip" data-news-imp="0">全部</button>
+                        <button type="button" class="news-imp-chip active" data-news-imp="30">一般以上</button>
+                        <button type="button" class="news-imp-chip" data-news-imp="55">重要</button>
+                        <button type="button" class="news-imp-chip" data-news-imp="75">重大</button>
+                    </div>
+                    <div class="news-sort-toggle" role="group" aria-label="排序">
+                        <button type="button" class="news-sort-btn active" data-news-sort="time">按时间</button>
+                        <button type="button" class="news-sort-btn" data-news-sort="importance">按重要度</button>
+                    </div>
+                    <div class="news-search-wrap">
+                        <input type="search" id="newsSearchInput" placeholder="搜索关键词，如 降息 / 中东 / CPI / 原油..." autocomplete="off">
+                    </div>
+                </div>
+            </div>
+
+            <div class="news-meta-bar">
+                <span id="newsAiModeBadge" class="news-ai-badge">解读引擎: 规则模板</span>
+                <span id="newsCountText" class="news-count-text">—</span>
+            </div>
+
+            <div class="news-feed-list" id="newsFeedList">
+                <div class="news-empty">正在拉取权威财经快讯并生成通俗解读…</div>
+            </div>
+
+            <footer class="news-footer">
+                <p>金融消息面 · 投教向通俗解读，不构成投资建议</p>
+                <small>解读默认由本地宏观传导规则引擎生成（识别否定、预期差、涨跌方向与事件主体）；配置 NEWS_AI_API_KEY 或 DEEPSEEK_API_KEY 后，重要消息会追加大模型精读。</small>
+            </footer>
+        </main>
+
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=2.9.0"></script>
+    <script src="/static/app.js?v=3.2.0"></script>
 </body>
 </html>

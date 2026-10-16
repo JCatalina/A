@@ -36,18 +36,23 @@ AUTO_SCAN_LIMIT = 240              # 盘后自动全市场扫描股票数
 HOLIDAYS = frozenset()
 
 
+NEWS_WARM_INTERVAL = 180               # 消息面刷新周期 (秒), 与 news_engine 默认一致
+
+
 class RefreshScheduler(threading.Thread):
     """常驻后台调度器: 保活 + 盘后自动任务, 所有失败仅记日志, 不影响正常接口"""
 
-    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine=None):
+    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine=None, news_engine=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
         self.index = index_engine
         self.ice = ice_engine
         self.factor = factor_engine
+        self.news = news_engine
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
+        self._last_news_ts = 0.0
         self._scan_date: Optional[date] = None    # 已完成自动扫描的日期
         self._calib_date: Optional[date] = None   # 已完成盘后校准的日期
         self._stop = threading.Event()
@@ -69,7 +74,10 @@ class RefreshScheduler(threading.Thread):
 
     def _tick(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now()
-        if now.weekday() >= 5:                      # 周末: 整体跳过
+        # 消息面 7x24 刷新 (周末/节假日全球市场仍有新闻)
+        self._warm_news_if_due()
+
+        if now.weekday() >= 5:                      # 周末: 跳过 A 股盘中/盘后任务
             return
         today = now.date()
         if today.isoformat() in HOLIDAYS and now.time() >= POST_CLOSE_TIME:
@@ -91,6 +99,16 @@ class RefreshScheduler(threading.Thread):
         elif time.time() - self._last_offhours_ts >= OFFHOURS_WARM_INTERVAL:
             self._last_offhours_ts = time.time()
             self.warm_offhours()
+
+    def _warm_news_if_due(self) -> None:
+        """独立线程刷新: 七个外部源即使慢也不拖住 A 股保活 tick (引擎内部防重入)"""
+        if self.news is None or time.time() - self._last_news_ts < NEWS_WARM_INTERVAL:
+            return
+        self._last_news_ts = time.time()
+        try:
+            self.news.refresh_async()
+        except Exception as e:
+            logger.warning(f"Scheduler news refresh failed: {e}")
 
     @staticmethod
     def _session(now: datetime) -> Optional[str]:

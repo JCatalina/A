@@ -106,6 +106,79 @@ async function main() {
     const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
     for (const id of ['iceValidation', 'iceDisclaimer', 'factorModelBox', 'factorPct', 'factorIc', 'factorBeat', 'factorDrivers']) assert.ok(html.includes(`id="${id}"`));
     assert.ok(!html.includes('高胜率'));
-    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener and markup contracts');
+
+    // 金融消息面 TAB 契约
+    for (const id of ['tabNewsView', 'newsWorkspace', 'newsFeedList', 'newsRefreshBtn', 'newsSearchInput']) {
+        assert.ok(html.includes(`id="${id}"`), `missing news markup id=${id}`);
+    }
+    assert.ok(html.includes('data-news-region="cn"'));
+    assert.ok(html.includes('data-news-region="foreign"'));
+    assert.ok(typeof context.loadNewsFeed === 'function');
+    assert.ok(typeof context.renderNewsCard === 'function');
+    const card = context.renderNewsCard({
+        id: 'demo1', source: '财联社', region: 'cn', title: '美联储降息', summary: '宽松预期升温',
+        url: 'https://example.com', published_at: '2026-10-15 10:00:00', tags: ['宏观'],
+        interpretation: {
+            stance: 'dovish', stance_label: '偏鸽/宽松',
+            plain_summary: '钱变便宜了', market_impact: '风险偏好上升',
+            bullish_sectors: [{name: '成长股', reason: '估值受益'}],
+            bearish_sectors: [{name: '现金', reason: '机会成本上升'}],
+            transmission_chain: ['降息 → 利率下行', '资金涌入风险资产'],
+            why_it_matters: '记住传导链第一环往往是利率',
+        },
+    });
+    assert.match(card, /AI 通俗解读/);
+    assert.match(card, /传导链/);
+    assert.match(card, /利好 · 成长股/);
+    assert.match(card, /利空 · 现金/);
+    assert.doesNotMatch(card, /undefined|NaN/);
+
+    for (const id of ['newsDigest']) assert.ok(html.includes(`id="${id}"`), `missing news markup id=${id}`);
+    assert.ok(html.includes('data-news-imp="55"') && html.includes('data-news-sort="importance"'));
+    const full = context.renderNewsCard({
+        id: 'demo2', source: '财联社', region: 'foreign', regions: ['foreign', 'cn'], importance: 82,
+        title: 'Fed hikes rates', title_zh: '美联储加息', summary: '', published_ts: Date.now() / 1000 - 120,
+        also_reported_by: ['金十数据'],
+        interpretation: {
+            stance: 'hawkish', stance_label: '偏鹰/紧缩', importance_label: '重大', category_label: '货币政策',
+            headline_take: '美联储加息：成长股承压',
+            markets: [{market: 'A股', direction: 'down', text: '外资流出压力'}, {market: '美股', direction: 'sideways'}],
+            watch: ['点阵图'], glossary: [{term: '鹰派', explain: '倾向收紧'}, {}],
+            related_indices: [{symbol: 'usixic', name: '纳斯达克', market: 'us'}],
+            evidence: ['美联储·加息'], confidence: 0.85,
+        },
+    });
+    assert.match(full, /重大 82/);
+    assert.match(full, /外国[\s\S]*中国/);
+    assert.match(full, /\+1 家同报/);
+    assert.match(full, /原文：Fed hikes rates/);
+    assert.match(full, /美联储加息：成长股承压/);
+    assert.match(full, /A股<\/em>▼ 偏空/);
+    assert.match(full, /美股<\/em>● 中性/);
+    assert.match(full, /data-index-symbol="usixic"/);
+    assert.match(full, /名词小课堂/);
+    assert.match(full, /置信度 85%/);
+    assert.match(full, /分钟前/);
+    assert.doesNotMatch(full, /undefined|NaN/);
+
+    const compact = context.renderNewsCard({id: 'demo3', source: 'BBC', importance: 4, title: 'Toilet paper',
+        interpretation: {relevant: false, stance: 'neutral', headline_take: '与市场关联较弱'}});
+    assert.match(compact, /news-card compact/);
+    assert.doesNotMatch(compact, /传导链/);
+    assert.doesNotMatch(context.renderNewsCard({}), /undefined|NaN/);
+
+    const digest = context.renderNewsDigest({
+        hours: 12, count: 3, mood_label: '偏冷', stance_count: {positive: 1, negative: 2, neutral: 0},
+        bullish_heat: [{name: '石油石化', bull: 2, bear: 0, score: 120, news: [{title: 'x'}]}], bearish_heat: [],
+        top_events: [{id: 'demo2', title: '美联储加息', importance: 82, headline_take: '成长股承压', source: '财联社'}],
+    });
+    assert.match(digest, /偏冷/);
+    assert.match(digest, /data-news-sector="石油石化"/);
+    assert.match(digest, /暂无集中方向/);
+    assert.match(digest, /data-news-jump="demo2"/);
+    assert.doesNotMatch(digest, /undefined|NaN/);
+    assert.match(context.renderNewsDigest({hours: 12, count: 0}), /暂无/);
+
+    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

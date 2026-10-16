@@ -14,6 +14,7 @@ from index_engine import IndexEngine
 from us_index_engine import USIndexEngine
 from ice_engine import IceEngine
 from factor_engine import FactorEngine
+from news_engine import news_engine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -31,8 +32,12 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=us_index_engine.warm_all, daemon=True, name="us-index-prewarm").start()
     # v3.1: 横截面因子面板 (磁盘缓存过期才重建: ~800 只 × 2000 根, 约 1~2 分钟, 后台线程)
     threading.Thread(target=_warm_factor_model, daemon=True, name="factor-prewarm").start()
+    # v3.2: 金融消息面首次预热 (权威媒体聚合 + AI 通俗解读)
+    threading.Thread(target=lambda: news_engine.refresh(force=True), daemon=True, name="news-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
-    _scheduler = RefreshScheduler(data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine)
+    _scheduler = RefreshScheduler(
+        data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine
+    )
     _scheduler.start()
     yield
     _scheduler.stop()
@@ -40,7 +45,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="2.8.0",
+    version="3.2.0",
     lifespan=lifespan
 )
 
@@ -219,6 +224,58 @@ def get_latest_eval():
     import json
     with open(path, "r", encoding="utf-8") as fh:
         return {"status": "success", "data": json.load(fh)}
+
+
+# ---------- 金融消息面 (中国/外国权威媒体 + AI 通俗解读) ----------
+@app.get("/api/news/feed")
+def get_news_feed(
+    region: Literal["all", "cn", "foreign"] = Query("all", description="事件主体地区: all / cn(中国) / foreign(外国)"),
+    source: Optional[str] = Query(None, description="来源: cls / wscn / eastmoney / jin10 / reuters / cnbc / ft"),
+    limit: int = Query(40, ge=1, le=200, description="返回条数"),
+    q: Optional[str] = Query(None, description="标题/摘要关键词过滤"),
+    min_importance: int = Query(0, ge=0, le=100, description="最低重要度 (30=一般 55=重要 75=重大)"),
+    category: Optional[str] = Query(None, description="事件类别: monetary / macro / geo / trade / commodity / property ..."),
+    sort: Literal["time", "importance"] = Query("time", description="排序: time / importance"),
+    sector: Optional[str] = Query(None, description="只看利好或利空涉及该板块的消息, 如 石油石化"),
+):
+    """聚合权威财经新闻, 每条附带通俗解读 (大白话 / 三市场方向 / 利好利空板块 / 传导链 / 后续观察)"""
+    return news_engine.list_news(region=region, source=source, limit=limit, q=q,
+                                 min_importance=min_importance, category=category, sort=sort, sector=sector)
+
+
+@app.get("/api/news/digest")
+def get_news_digest(
+    hours: int = Query(12, ge=1, le=48, description="统计窗口 (小时)"),
+    region: Literal["all", "cn", "foreign"] = Query("all"),
+):
+    """消息面速览: 情绪冷暖、利好/利空板块热度、重点事件 (规则统计, 非涨跌预测)"""
+    return news_engine.digest(hours=hours, region=region)
+
+
+@app.post("/api/news/refresh")
+def refresh_news_feed(background_tasks: BackgroundTasks, force: bool = Query(True)):
+    """手动触发消息面刷新 (后台执行, 立即返回当前缓存状态)"""
+    background_tasks.add_task(news_engine.refresh, force)
+    return {"status": "started", "message": "已启动消息面刷新"}
+
+
+@app.get("/api/news/item/{news_id}")
+def get_news_item(news_id: str):
+    """单条新闻详情 (含解读)"""
+    item = news_engine.get_item(news_id)
+    if not item:
+        return JSONResponse(status_code=404, content={"status": "error", "message": "未找到该新闻"})
+    return {"status": "success", "data": item}
+
+
+@app.post("/api/news/item/{news_id}/reinterpret")
+def reinterpret_news_item(news_id: str, use_llm: bool = Query(True, description="若配置了 API Key 则强制重新调用大模型")):
+    """对单条新闻重新生成解读 (未配置大模型时按最新规则重算)"""
+    item = news_engine.reinterpret(news_id, use_llm=use_llm)
+    if not item:
+        return JSONResponse(status_code=404, content={"status": "error", "message": "未找到该新闻"})
+    return {"status": "success", "data": item}
+
 
 # 挂载前端静态页面
 if os.path.exists(FRONTEND_DIR):
