@@ -1834,6 +1834,7 @@ let currentNewsQuery = "";
 let currentNewsMinImp = 30;
 let currentNewsSort = "time";
 let currentNewsSector = "";
+const newsExpandedIds = new Set();
 let newsLoadedOnce = false;
 let newsPollTimer = null;
 
@@ -2984,20 +2985,30 @@ function renderNewsCard(item) {
     const showOriginal = item.title_zh && item.title && item.title_zh !== item.title;
     const summary = item.summary && item.summary !== item.title ? item.summary : "";
 
+    // 默认折叠: 先浏览消息本身, 解读按需展开 (展开状态跨轮询保留)
+    const expanded = newsExpandedIds.has(item.id);
     return `
-    <article class="news-card${impKnown ? ` imp-${newsImpClass(imp)}` : ""}" data-news-id="${escapeHtml(item.id || "")}">
+    <article class="news-card${impKnown ? ` imp-${newsImpClass(imp)}` : ""}${expanded ? " expanded" : " collapsed"}" data-news-id="${escapeHtml(item.id || "")}">
         <div class="news-card-main">
             ${top}
             <h3 class="news-title">${titleHtml}</h3>
             ${showOriginal ? `<p class="news-original">原文：${escapeHtml(item.title)}</p>` : ""}
             ${summary ? `<p class="news-summary">${escapeHtml(summary)}</p>` : ""}
+            <div class="news-collapsed-bar">
+                <span class="news-stance ${escapeHtml(stance)}">${escapeHtml(stanceLabel)}</span>
+                ${ai.headline_take ? `<span class="news-collapsed-take">${escapeHtml(ai.headline_take)}</span>` : ""}
+                <button type="button" class="news-expand-btn" aria-expanded="false">展开解读 <i class="fa-solid fa-chevron-down"></i></button>
+            </div>
             ${ai.why_it_matters ? `<div class="news-why">${escapeHtml(ai.why_it_matters)}</div>` : ""}
             ${related ? `<div class="news-index-links">${related}</div>` : ""}
         </div>
         <div class="news-card-ai">
             <div class="news-ai-head">
                 <span class="news-ai-label"><i class="fa-solid fa-lightbulb"></i> ${ai.engine === "llm+rule" ? "AI 精读" : "AI 通俗解读"}</span>
-                <span class="news-stance ${escapeHtml(stance)}">${escapeHtml(stanceLabel)}</span>
+                <span class="news-ai-head-right">
+                    <span class="news-stance ${escapeHtml(stance)}">${escapeHtml(stanceLabel)}</span>
+                    <button type="button" class="news-expand-btn" aria-expanded="true">收起 <i class="fa-solid fa-chevron-up"></i></button>
+                </span>
             </div>
             ${ai.headline_take ? `<p class="news-take">${escapeHtml(ai.headline_take)}</p>` : ""}
             ${markets ? `<div class="news-markets">${markets}</div>` : ""}
@@ -3031,12 +3042,21 @@ function renderNewsCard(item) {
     </article>`;
 }
 
+function setNewsCardExpanded(card, expanded) {
+    const id = card.dataset.newsId;
+    if (!id || card.classList.contains("compact")) return;
+    if (expanded) newsExpandedIds.add(id); else newsExpandedIds.delete(id);
+    card.classList.toggle("expanded", expanded);
+    card.classList.toggle("collapsed", !expanded);
+}
+
 /**
  * 速览「重点事件」定位到卡片; 若被当前筛选挡住, 先清空来源/关键词/板块筛选再定位
  */
 async function focusNewsCard(id, retried = false) {
     const card = id && document.querySelector(`.news-card[data-news-id="${CSS.escape(id)}"]`);
     if (card) {
+        setNewsCardExpanded(card, true);
         card.scrollIntoView({ behavior: "smooth", block: "center" });
         card.classList.add("flash");
         setTimeout(() => card.classList.remove("flash"), 1600);
@@ -3116,6 +3136,16 @@ function bindNewsEvents() {
 
     // 卡片与速览每次轮询都会重建, 统一用容器事件委托
     document.getElementById("newsWorkspace")?.addEventListener("click", (e) => {
+        const expandBtn = e.target.closest(".news-expand-btn, .news-collapsed-bar");
+        if (expandBtn) {
+            const card = expandBtn.closest(".news-card");
+            if (card) {
+                const willExpand = !card.classList.contains("expanded");
+                setNewsCardExpanded(card, willExpand);
+                if (!willExpand && card.getBoundingClientRect().top < 0) card.scrollIntoView({ block: "start" });
+            }
+            return;
+        }
         const idxBtn = e.target.closest(".news-index-link");
         if (idxBtn) {
             jumpToIndexAnalysis(idxBtn.dataset.indexSymbol, idxBtn.dataset.indexMarket);

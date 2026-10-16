@@ -148,6 +148,10 @@ async function main() {
             evidence: ['美联储·加息'], confidence: 0.85,
         },
     });
+    assert.match(full, /news-card imp-major collapsed/);
+    assert.match(full, /展开解读/);
+    vm.runInContext('newsExpandedIds.add("demo2")', context);
+    assert.match(context.renderNewsCard({id: 'demo2', importance: 82, interpretation: {}}), /news-card imp-major expanded/);
     assert.match(full, /重大 82/);
     assert.match(full, /外国[\s\S]*中国/);
     assert.match(full, /\+1 家同报/);
