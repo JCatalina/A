@@ -52,7 +52,12 @@
 | `NEWS_AI_MIN_IMPORTANCE` / `NEWS_AI_MAX_PER_REFRESH` | 大模型精读门槛（默认 50）与每轮上限（默认 10） |
 | `NEWS_REFRESH_INTERVAL` / `NEWS_RETENTION_HOURS` | 抓取间隔秒数（默认 180）与保留小时数（默认 48） |
 
-### 6. 🎨 现代化金融看板交互
+### 6. 📋 复盘日报 / 🌅 明日重点（A股自动化报表）
+- **复盘日报**：盘前取上一交易日完整收盘数据，红涨绿跌；覆盖市场概览、情绪（涨停/炸板/连板/晋级率）、北向成交额（标注自 2024-08-19 起停止披露日频净买入）、申万一级、估值分位、自建恐贪指数、两融、平均股价等八大维度（含 ECharts）。
+- **明日重点晨报**：全球定调（美股/港股/A50/商品）→ A股盘面与政策 → 核心板块与龙头（主线/防御/弹性/观察 + MACD 状态）→ 盯盘要点与风险。
+- **存档机制**：涨跌家数与平均股价无历史公开接口，收盘后由调度器自动存档；接口 `GET /api/report/review`、`/api/report/focus`、`/api/report/dates`。
+
+### 7. 🎨 现代化金融看板交互
 - **双主题无缝切换**：支持 🌙 **深空星曜（暗色高对比度）** 与 ☀️ **明亮经典（清爽浅色）** 实时一键切换。
 - **权威股票中文名与实时快照**：盘中自动与当日最新分时行情无缝拼接，100% 当天最新数据。
 
@@ -62,7 +67,7 @@
 
 - **后端**：Python 3.9+ / FastAPI / Uvicorn / Pandas / NumPy / Requests
 - **前端**：现代原生 HTML5 / CSS3 (CSS Variables, Flexbox/Grid) / JavaScript (ES6+) / Apache ECharts 5.5
-- **数据源**：腾讯行情 (QT) + 新浪金融双源聚合（免 Token 开源直连）；美股复用腾讯美股快照与 `usfqkline` 日/周/月K；消息面聚合财联社/华尔街见闻/东方财富等公开 HTTP 与 RSS
+- **数据源**：腾讯行情 (QT) + 新浪金融双源聚合（免 Token 开源直连）；美股复用腾讯美股快照与 `usfqkline` 日/周/月K；消息面聚合财联社/华尔街见闻/东方财富等公开 HTTP 与 RSS；复盘/晨报另接东财涨跌停池、北向成交、两融、中证估值等公开接口
 
 ---
 
@@ -124,6 +129,7 @@ A-Share-Quant-System/
 │   ├── factor_engine.py      # 个股横截面量价因子模型 (走前 ICIR 加权, 逐日 Rank-IC 评估)
 │   ├── news_engine.py        # 金融消息面: 多源并行抓取、去重、缓存、可选大模型精读、速览统计
 │   ├── news_interpret.py     # 金融消息面: 事件识别 (否定/预期差/方向/主体) + 通俗解读模板
+│   ├── market_report.py      # A股复盘日报 + 次日重点晨报 (八大维度 / 自动存档)
 │   ├── eval_engine.py / run_eval.py          # 个股流水线点时间评估
 │   └── run_factor_eval.py    # 因子面板构建 + 走前评估 CLI
 └── frontend/                 # 现代化 Web 前端看板

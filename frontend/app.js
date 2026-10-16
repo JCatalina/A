@@ -1824,6 +1824,8 @@ const WORKSPACE_TABS = [
     { tab: "tabUsView", ws: "usWorkspace" },
     { tab: "tabMrdiView", ws: "mrdiWorkspace" },
     { tab: "tabNewsView", ws: "newsWorkspace" },
+    { tab: "tabReviewView", ws: "reviewWorkspace" },
+    { tab: "tabFocusView", ws: "focusWorkspace" },
     { tab: "tabStockView", ws: "stockWorkspace" }
 ];
 
@@ -1884,6 +1886,16 @@ function bindMrdiEvents() {
     tabNews?.addEventListener("click", () => {
         switchWorkspaceView("tabNewsView", "newsWorkspace");
         loadNewsFeed({ forcePoll: true });
+    });
+
+    document.getElementById("tabReviewView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabReviewView", "reviewWorkspace");
+        loadReviewReport();
+        setTimeout(() => resizeReportCharts(), 120);
+    });
+    document.getElementById("tabFocusView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabFocusView", "focusWorkspace");
+        loadFocusReport();
     });
 
     // MRDI 指数胶囊切换
@@ -3190,9 +3202,582 @@ function bindNewsEvents() {
     });
 }
 
-// 初始化时绑定 MRDI / 美股 / 消息面面板事件 (美股与消息面首次切入该 Tab 时才加载)
+// 初始化时绑定 MRDI / 美股 / 消息面 / 复盘晨报面板事件 (切入对应 Tab 时才加载)
 document.addEventListener("DOMContentLoaded", () => {
     bindMrdiEvents();
     bindUsMacroEvents();
     bindNewsEvents();
+    bindReportEvents();
 });
+
+/* =====================================================================
+ * A股复盘日报 + 明日重点 (v3.4) — 红涨绿跌仅作用于 report-red-green 工作区
+ * ===================================================================== */
+let reviewReportData = null;
+let focusReportData = null;
+let reviewLoadedOnce = false;
+let focusLoadedOnce = false;
+const reportCharts = {};
+
+function rptPct(v, digits = 2) {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    const n = Number(v);
+    const s = (n > 0 ? "+" : "") + n.toFixed(digits) + "%";
+    return `<span class="rpt-pct ${n > 0 ? "up" : n < 0 ? "down" : "flat"}">${s}</span>`;
+}
+function rptNum(v, digits = 2, suffix = "") {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    return Number(v).toFixed(digits) + suffix;
+}
+function rptTone(v) {
+    if (v == null || Number.isNaN(Number(v))) return "flat";
+    const n = Number(v);
+    return n > 0 ? "up" : n < 0 ? "down" : "flat";
+}
+function rptCard(label, valueHtml, sub = "") {
+    return `<div class="report-card"><div class="report-card-label">${escapeHtml(label)}</div>
+      <div class="report-card-value">${valueHtml}</div>
+      ${sub ? `<div class="report-card-sub">${sub}</div>` : ""}</div>`;
+}
+function ensureReportChart(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    if (!reportCharts[id]) reportCharts[id] = echarts.init(el);
+    return reportCharts[id];
+}
+function resizeReportCharts() {
+    Object.values(reportCharts).forEach(c => { try { c.resize(); } catch (_) {} });
+}
+function chartTheme() {
+    return {
+        textStyle: { color: "#334155", fontFamily: "Plus Jakarta Sans, Noto Sans SC, sans-serif" },
+        grid: { left: 48, right: 24, top: 36, bottom: 36 },
+        tooltip: { trigger: "axis" },
+    };
+}
+
+async function loadReviewReport(force = false) {
+    if (reviewLoadedOnce && !force && reviewReportData) {
+        renderReviewReport(reviewReportData);
+        return;
+    }
+    const t = document.getElementById("reviewUpdateTime");
+    if (t) t.textContent = "拉取复盘日报…";
+    try {
+        const res = await fetch("/api/report/review");
+        const js = await res.json();
+        if (js.status !== "success") throw new Error(js.message || "加载失败");
+        reviewReportData = js.data;
+        reviewLoadedOnce = true;
+        renderReviewReport(reviewReportData);
+        if (t) t.textContent = `生成于 ${reviewReportData.generated_at || "—"} · 耗时 ${reviewReportData.elapsed_sec || "—"}s`;
+    } catch (e) {
+        if (t) t.textContent = "加载失败: " + (e.message || e);
+        document.getElementById("reviewHeadline").innerHTML = `<li class="report-error">${escapeHtml(e.message || String(e))}</li>`;
+    }
+}
+
+async function loadFocusReport(force = false) {
+    if (focusLoadedOnce && !force && focusReportData) {
+        renderFocusReport(focusReportData);
+        return;
+    }
+    const t = document.getElementById("focusUpdateTime");
+    if (t) t.textContent = "拉取晨报…";
+    try {
+        const res = await fetch("/api/report/focus");
+        const js = await res.json();
+        if (js.status !== "success") throw new Error(js.message || "加载失败");
+        focusReportData = js.data;
+        focusLoadedOnce = true;
+        renderFocusReport(focusReportData);
+        if (t) t.textContent = `生成于 ${focusReportData.generated_at || "—"} · 耗时 ${focusReportData.elapsed_sec || "—"}s`;
+    } catch (e) {
+        if (t) t.textContent = "加载失败: " + (e.message || e);
+        document.getElementById("focusSections").innerHTML = `<div class="focus-empty report-error">${escapeHtml(e.message || String(e))}</div>`;
+    }
+}
+
+function renderReviewReport(d) {
+    if (!d) return;
+    const title = document.getElementById("reviewTitle");
+    if (title) title.textContent = `A股多维数据统计日报 · ${d.date}（${d.weekday}）`;
+    const meta = document.getElementById("reviewMeta");
+    if (meta) meta.textContent = `自动化生成（盘前取上一交易日完整收盘数据）｜红涨绿跌｜数据时点 ${d.data_asof || (d.date + " 收盘")}`;
+
+    const st = d.state || {};
+    const bar = document.getElementById("reviewStateBar");
+    if (bar) {
+        bar.className = `report-state-bar tone-${st.tone || "flat"}`;
+        bar.innerHTML = `<span class="report-state-label">市场状态</span><strong>${escapeHtml(st.label || "—")}</strong>`;
+    }
+
+    const hl = document.getElementById("reviewHeadline");
+    if (hl) {
+        hl.innerHTML = (d.headline || []).map(line => `<li>${escapeHtml(line)}</li>`).join("")
+            || `<li class="report-empty">暂无摘要</li>`;
+    }
+
+    renderReviewOverview(d);
+    renderReviewSentiment(d);
+    renderReviewNorth(d);
+    renderReviewSw(d);
+    renderReviewValuation(d);
+    renderReviewFear(d);
+    renderReviewMargin(d);
+    renderReviewAvgPrice(d);
+    setTimeout(() => resizeReportCharts(), 80);
+}
+
+function renderReviewOverview(d) {
+    const idx = d.indices || [];
+    const map = Object.fromEntries(idx.map(x => [x.symbol, x]));
+    const tv = d.turnover || {};
+    const b = d.breadth || {};
+    const lim = d.limits || {};
+    const cards = document.getElementById("reviewOverviewCards");
+    if (cards) {
+        const sh = map.sh000001 || {}, cyb = map.sz399006 || {};
+        cards.innerHTML = [
+            rptCard("上证指数", `${rptNum(sh.close, 2)} ${rptPct(sh.pct)}`, `近5日 ${rptPct(sh.pct5)}`),
+            rptCard("创业板指", `${rptNum(cyb.close, 2)} ${rptPct(cyb.pct)}`, `近5日 ${rptPct(cyb.pct5)}`),
+            rptCard("两市成交额", `${tv.amount_yi != null ? (tv.amount_yi / 10000).toFixed(2) + "万亿" : "—"}`,
+                `${escapeHtml(tv.label || "")} ${rptPct(tv.change_pct)} · 前日 ${tv.prev_yi != null ? (tv.prev_yi / 10000).toFixed(2) + "万亿" : "—"}`),
+            rptCard("涨跌家数", b.available ? `<span class="rpt-pct up">${b.up}涨</span> / <span class="rpt-pct down">${b.down}跌</span>` : "未存档",
+                b.available ? `上涨占比 ${rptNum(b.up_ratio, 1)}%` : escapeHtml(b.reason || "收盘后自动存档")),
+            rptCard("涨停 / 跌停", `<span class="rpt-pct up">${lim.limit_up ?? "—"}</span> / <span class="rpt-pct down">${lim.limit_down ?? "—"}</span>`,
+                `炸板 ${lim.broken ?? "—"} · 封板率 ${rptNum(lim.seal_rate, 1)}%`),
+            rptCard("连板高度", `${lim.max_board ?? "—"}板`,
+                `连板${lim.continuous ?? "—"}只 · 晋级率 ${rptNum(lim.promotion_rate, 2)}%`),
+        ].join("");
+    }
+
+    const series = (tv.series || []).map(x => [x.date, x.amount_yi]);
+    const ch = ensureReportChart("reviewTurnoverChart");
+    if (ch) {
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "两市成交额（亿）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: series.map(x => x[0].slice(5)) },
+            yAxis: { type: "value", scale: true },
+            series: [{ type: "bar", data: series.map(x => x[1]), itemStyle: { color: "#64748b" }, barMaxWidth: 14 }],
+        }, true);
+    }
+
+    const keyIdx = ["sh000001", "sz399001", "sz399006", "sh000688", "sh000300", "sh000852", "sh000016", "bj899050"];
+    const rows = keyIdx.map(s => map[s]).filter(Boolean);
+    const tbl = document.getElementById("reviewIndexTable");
+    if (tbl) {
+        tbl.innerHTML = `<table class="report-table"><thead><tr>
+          <th>指数</th><th>收盘</th><th>涨跌</th><th>振幅</th><th>成交额</th><th>5日</th><th>20日</th><th>相对20均</th>
+        </tr></thead><tbody>${rows.map(r => `<tr>
+          <td>${escapeHtml(r.name)}</td><td>${rptNum(r.close, 2)}</td><td>${rptPct(r.pct)}</td>
+          <td>${rptNum(r.amplitude, 2)}%</td><td>${rptNum(r.amount_yi, 1)}亿</td>
+          <td>${rptPct(r.pct5)}</td><td>${rptPct(r.pct20)}</td><td>${rptPct(r.ma20_dev)}</td>
+        </tr>`).join("")}</tbody></table>`;
+    }
+
+    const ich = ensureReportChart("reviewIndexChart");
+    if (ich && rows.length) {
+        const th = chartTheme();
+        ich.setOption({
+            ...th,
+            title: { text: "主要指数当日涨跌幅", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
+            yAxis: { type: "category", data: rows.map(r => r.name).reverse() },
+            series: [{
+                type: "bar", data: rows.map(r => r.pct).reverse(),
+                itemStyle: { color: (p) => (p.value >= 0 ? "#e11d48" : "#059669") },
+                label: { show: true, position: "right", formatter: (p) => (p.value > 0 ? "+" : "") + p.value.toFixed(2) + "%" },
+            }],
+            grid: { left: 88, right: 56, top: 36, bottom: 24 },
+        }, true);
+    }
+
+    // style pairs
+    const style = d.style || [];
+    if (style.length && cards) {
+        cards.insertAdjacentHTML("beforeend", style.map(s =>
+            rptCard(s.pair, `<span class="rpt-pct ${rptTone(s.diff)}">${escapeHtml(s.winner)}</span>`,
+                `日差 ${rptPct(s.diff)} · 5日差 ${rptPct(s.diff5)}`)
+        ).join(""));
+    }
+}
+
+function renderReviewSentiment(d) {
+    const lim = d.limits || {};
+    const hist = d.limit_history || [];
+    const cards = document.getElementById("reviewSentimentCards");
+    if (cards) {
+        cards.innerHTML = [
+            rptCard("涨停", `<span class="rpt-pct up">${lim.limit_up ?? "—"}</span>`, `早盘封板 ${lim.early_seal ?? "—"} · 竞价封板 ${lim.auction_seal ?? "—"}`),
+            rptCard("跌停", `<span class="rpt-pct down">${lim.limit_down ?? "—"}</span>`, `封板资金 ${rptNum(lim.seal_fund_yi, 1)}亿`),
+            rptCard("封板率", `${rptNum(lim.seal_rate, 1)}%`, `炸板 ${lim.broken ?? "—"}`),
+            rptCard("晋级率", `${rptNum(lim.promotion_rate, 2)}%`, `昨涨停今均 ${rptPct(lim.prev_zt_avg_pct)}`),
+            rptCard("连板高度", `${lim.max_board ?? "—"}板`, `连板 ${lim.continuous ?? "—"} · 首板 ${lim.first_board ?? "—"}`),
+            rptCard("昨涨停赚钱效应", rptPct(lim.prev_zt_avg_pct), `上涨占比 ${rptNum(lim.prev_zt_up_ratio, 1)}%`),
+        ].join("");
+    }
+    const ch = ensureReportChart("reviewLimitChart");
+    if (ch) {
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "涨停 / 跌停 / 连板高度", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            legend: { data: ["涨停", "跌停", "连板高度"], top: 0, right: 0 },
+            xAxis: { type: "category", data: hist.map(x => (x.date || "").slice(5)) },
+            yAxis: [{ type: "value", name: "家数" }, { type: "value", name: "高度", min: 0, max: 10 }],
+            series: [
+                { name: "涨停", type: "bar", data: hist.map(x => x.limit_up), itemStyle: { color: "#e11d48" }, barMaxWidth: 10 },
+                { name: "跌停", type: "bar", data: hist.map(x => x.limit_down), itemStyle: { color: "#059669" }, barMaxWidth: 10 },
+                { name: "连板高度", type: "line", yAxisIndex: 1, data: hist.map(x => x.max_board), itemStyle: { color: "#f59e0b" } },
+            ],
+        }, true);
+    }
+    const ladder = document.getElementById("reviewLadder");
+    if (ladder) {
+        const ladders = lim.ladder || [];
+        const inds = lim.industries || [];
+        ladder.innerHTML = `
+          <div class="report-split">
+            <div><h3>连板梯队</h3>${ladders.length ? ladders.map(g => `
+              <div class="ladder-group"><div class="ladder-h">${g.board}板 · ${g.stocks.length}只</div>
+              <div class="ladder-stocks">${(g.stocks || []).map(s =>
+                `<span class="ladder-chip">${escapeHtml(s.name)} ${rptPct(s.pct)}</span>`).join("")}</div></div>`).join("")
+            : "<p class='report-empty'>暂无连板</p>"}</div>
+            <div><h3>涨停行业分布</h3>
+              <ul class="report-mini-list">${inds.map(i => `<li><span>${escapeHtml(i.name)}</span><strong>${i.count}</strong></li>`).join("")
+                || "<li>暂无</li>"}</ul>
+              <h3 style="margin-top:16px">跌停样本</h3>
+              <ul class="report-mini-list">${(lim.limit_down_list || []).slice(0, 8).map(s =>
+                `<li><span>${escapeHtml(s.name)}</span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
+            </div>
+          </div>`;
+    }
+}
+
+function renderReviewNorth(d) {
+    const n = d.north || {};
+    const today = n.today || {};
+    const note = document.getElementById("reviewNorthNote");
+    if (note) note.textContent = n.note || "";
+    const cards = document.getElementById("reviewNorthCards");
+    if (cards) {
+        cards.innerHTML = [
+            rptCard("北向成交额", `${rptNum(today.north, 2)}亿`, `沪 ${rptNum(today.sh, 2)} + 深 ${rptNum(today.sz, 2)}`),
+            rptCard("占两市成交", `${rptNum(n.share_of_turnover, 2)}%`, `相对20日均 ${rptPct(n.vs_ma20_pct)}`),
+            rptCard("南向成交额", `${rptNum(today.south, 2)}亿`, today.south_net != null ? `净买入 ${rptNum(today.south_net, 2)}亿` : "南向仍披露净买入"),
+            rptCard("北向ETF", n.etf_yi != null ? `${rptNum(n.etf_yi, 2)}亿` : "暂无可靠源", escapeHtml(n.etf_note || "")),
+            rptCard("沪股通领涨", escapeHtml(today.sh_lead || "—"), rptPct(today.sh_lead_pct)),
+            rptCard("深股通领涨", escapeHtml(today.sz_lead || "—"), rptPct(today.sz_lead_pct)),
+        ].join("");
+    }
+    const series = n.series || [];
+    const ch = ensureReportChart("reviewNorthChart");
+    if (ch) {
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "北向 / 南向成交额（亿）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            legend: { data: ["北向", "南向"], right: 0, top: 0 },
+            xAxis: { type: "category", data: series.map(x => (x.date || "").slice(5)) },
+            yAxis: { type: "value", scale: true },
+            series: [
+                { name: "北向", type: "line", data: series.map(x => x.north), itemStyle: { color: "#e11d48" }, areaStyle: { color: "rgba(225,29,72,.08)" } },
+                { name: "南向", type: "line", data: series.map(x => x.south), itemStyle: { color: "#2563eb" } },
+            ],
+        }, true);
+    }
+}
+
+function renderReviewSw(d) {
+    const sw = d.sw || {};
+    const rows = sw.rows || [];
+    const cards = document.getElementById("reviewSwCards");
+    if (cards) {
+        const top = (sw.top || []).slice(0, 3).map(r => `${r.name}${Number(r.pct) > 0 ? "+" : ""}${r.pct}%`).join("、");
+        const bot = (sw.bottom || []).slice(0, 3).map(r => `${r.name}${r.pct}%`).join("、");
+        cards.innerHTML = [
+            rptCard("申万一级涨跌", `<span class="rpt-pct up">${sw.up_count ?? 0}涨</span> / <span class="rpt-pct down">${sw.down_count ?? 0}跌</span>`, ""),
+            rptCard("领涨", escapeHtml(top || "—"), ""),
+            rptCard("领跌", escapeHtml(bot || "—"), ""),
+            rptCard("近5日最强", escapeHtml((sw.top5d || []).slice(0, 3).map(r => `${r.name}${r.pct5 > 0 ? "+" : ""}${r.pct5}%`).join("、") || "—"), ""),
+        ].join("");
+    }
+    const ch = ensureReportChart("reviewSwChart");
+    if (ch && rows.length) {
+        const ordered = [...rows].reverse();
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "申万一级行业涨跌幅", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            grid: { left: 88, right: 48, top: 36, bottom: 24 },
+            xAxis: { type: "value", axisLabel: { formatter: "{value}%" } },
+            yAxis: { type: "category", data: ordered.map(r => r.name), axisLabel: { fontSize: 11 } },
+            series: [{
+                type: "bar", data: ordered.map(r => r.pct),
+                itemStyle: { color: (p) => (p.value >= 0 ? "#e11d48" : "#059669") },
+                label: { show: true, position: "right", fontSize: 10,
+                    formatter: (p) => (p.value > 0 ? "+" : "") + Number(p.value).toFixed(2) },
+            }],
+        }, true);
+    }
+    const tbl = document.getElementById("reviewSwTable");
+    if (tbl) {
+        tbl.innerHTML = `<table class="report-table"><thead><tr>
+          <th>行业</th><th>当日</th><th>5日</th><th>20日</th><th>成交额</th><th>量比</th><th>连涨跌</th>
+        </tr></thead><tbody>${rows.map(r => `<tr>
+          <td>${escapeHtml(r.name)}</td><td>${rptPct(r.pct)}</td><td>${rptPct(r.pct5)}</td><td>${rptPct(r.pct20)}</td>
+          <td>${rptNum(r.amount_yi, 1)}亿</td><td>${rptNum(r.amount_ratio, 2)}</td><td>${r.streak ?? "—"}</td>
+        </tr>`).join("")}</tbody></table>`;
+    }
+}
+
+function renderReviewValuation(d) {
+    const vals = (d.valuation || []).filter(v => v.available);
+    const cards = document.getElementById("reviewValCards");
+    if (cards) {
+        cards.innerHTML = vals.slice(0, 6).map(v =>
+            rptCard(v.name, `PE ${rptNum(v.pe, 2)}`, `10年分位 ${rptNum(v.pct10y, 1)}% · ${escapeHtml(v.zone)}`)
+        ).join("") || rptCard("估值", "暂无", "中证指数官网暂不可用");
+    }
+    const ch = ensureReportChart("reviewValChart");
+    if (ch && vals.length) {
+        const main = vals.find(v => v.code === "000001") || vals[0];
+        const series = main.series || [];
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: `${main.name} PE 历史`, left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: series.map(x => x[0].slice(2)) },
+            yAxis: { type: "value", scale: true, name: "PE" },
+            series: [{ type: "line", data: series.map(x => x[1]), showSymbol: false, itemStyle: { color: "#7c3aed" },
+                markLine: main.median != null ? { data: [{ yAxis: main.median, name: "中位数" }], label: { formatter: "中位 {c}" } } : undefined }],
+        }, true);
+    }
+    const tbl = document.getElementById("reviewValTable");
+    if (tbl) {
+        tbl.innerHTML = `<table class="report-table"><thead><tr>
+          <th>指数</th><th>PE</th><th>10年分位</th><th>5年</th><th>3年</th><th>区间</th><th>样本年</th>
+        </tr></thead><tbody>${vals.map(v => `<tr>
+          <td>${escapeHtml(v.name)}</td><td>${rptNum(v.pe, 2)}</td><td>${rptNum(v.pct10y, 1)}%</td>
+          <td>${rptNum(v.pct5y, 1)}%</td><td>${rptNum(v.pct3y, 1)}%</td>
+          <td>${escapeHtml(v.zone)}</td><td>${rptNum(v.years, 1)}</td>
+        </tr>`).join("")}</tbody></table>`;
+    }
+}
+
+function renderReviewFear(d) {
+    const fg = d.fear_greed || {};
+    const cards = document.getElementById("reviewFgCards");
+    if (cards) {
+        cards.innerHTML = [
+            rptCard("恐慌贪婪指数", fg.available ? `<span class="fg-score">${rptNum(fg.score, 1)}</span>` : "数据不足",
+                escapeHtml(fg.label || "")),
+            rptCard("较昨日", fg.prev != null ? `${rptNum(fg.prev, 1)} → ${rptNum(fg.score, 1)}` : "—",
+                escapeHtml(fg.prev_label || "")),
+            rptCard("计算方法", "分位等权", escapeHtml((fg.method || "").slice(0, 80))),
+        ].join("");
+    }
+    const ch = ensureReportChart("reviewFgChart");
+    if (ch) {
+        const series = fg.series || [];
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "恐慌贪婪指数走势", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: series.map(x => (x.date || "").slice(5)) },
+            yAxis: { type: "value", min: 0, max: 100 },
+            visualMap: { show: false, pieces: [
+                { lte: 20, color: "#059669" }, { gt: 20, lte: 40, color: "#34d399" },
+                { gt: 40, lte: 60, color: "#94a3b8" }, { gt: 60, lte: 80, color: "#fb7185" }, { gt: 80, color: "#e11d48" },
+            ], dimension: 1 },
+            series: [{ type: "line", data: series.map(x => x.score), areaStyle: { opacity: 0.15 },
+                markArea: { silent: true, data: [[{ yAxis: 0, itemStyle: { color: "rgba(5,150,105,.06)" } }, { yAxis: 20 }],
+                    [{ yAxis: 80, itemStyle: { color: "rgba(225,29,72,.06)" } }, { yAxis: 100 }]] } }],
+        }, true);
+    }
+    const tbl = document.getElementById("reviewFgTable");
+    if (tbl) {
+        const comps = fg.components || [];
+        tbl.innerHTML = `<table class="report-table"><thead><tr>
+          <th>分项</th><th>得分</th><th>原始值</th><th>说明</th>
+        </tr></thead><tbody>${comps.map(c => `<tr>
+          <td>${escapeHtml(c.name)}</td><td>${rptNum(c.score, 1)}</td><td>${rptNum(c.raw, 4)}</td>
+          <td class="muted">${escapeHtml(c.formula)} · ${escapeHtml(c.direction)}</td>
+        </tr>`).join("") || "<tr><td colspan=4>分项不足</td></tr>"}</tbody></table>`;
+    }
+}
+
+function renderReviewMargin(d) {
+    const m = d.margin || {};
+    const latest = m.latest || {};
+    const note = document.getElementById("reviewMarginNote");
+    if (note) note.textContent = m.note || "";
+    const st = m.streak || 0;
+    const stTxt = Math.abs(st) >= 2 ? `连续${Math.abs(st)}日${st > 0 ? "升" : "降"}` : (st > 0 ? "较前日升" : st < 0 ? "较前日降" : "持平");
+    const cards = document.getElementById("reviewMarginCards");
+    if (cards) {
+        cards.innerHTML = [
+            rptCard("两融余额", `${rptNum(latest.total_yi, 1)}亿`, `截止 ${escapeHtml((m.asof || "").slice(5))} · ${stTxt}`),
+            rptCard("日变动", `<span class="rpt-pct ${rptTone(m.change_yi)}">${m.change_yi != null ? (m.change_yi > 0 ? "+" : "") + m.change_yi + "亿" : "—"}</span>`,
+                `5日 ${rptNum(m.change5_yi, 1)}亿 · 20日 ${rptNum(m.change20_yi, 1)}亿`),
+            rptCard("融资余额", `${rptNum(latest.rz_yi, 1)}亿`, `融券 ${rptNum(latest.rq_yi, 1)}亿`),
+            rptCard("融资买入", `${rptNum(latest.rz_buy_yi, 1)}亿`, `占成交 ${rptNum(m.buy_share_pct, 2)}% · 净买 ${rptNum(latest.rz_net_yi, 1)}亿`),
+        ].join("");
+    }
+    const series = m.series || [];
+    const ch = ensureReportChart("reviewMarginChart");
+    if (ch) {
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "两融余额（亿）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: series.map(x => (x.date || "").slice(5)) },
+            yAxis: { type: "value", scale: true },
+            series: [{ type: "line", data: series.map(x => x.total_yi), itemStyle: { color: "#0f766e" }, areaStyle: { color: "rgba(15,118,110,.08)" } }],
+        }, true);
+    }
+}
+
+function renderReviewAvgPrice(d) {
+    const ap = d.avg_price || {};
+    const b = d.breadth || {};
+    const cards = document.getElementById("reviewAvgCards");
+    if (cards) {
+        cards.innerHTML = ap.available ? [
+            rptCard("全A平均股价", `${rptNum(ap.value, 2)}元`, `中位数 ${rptNum(ap.median, 2)}元`),
+            rptCard("较前日", ap.prev != null ? rptPct(((ap.value - ap.prev) / ap.prev) * 100) : "—", `前日 ${rptNum(ap.prev, 2)}元`),
+            rptCard("上涨占比", `${rptNum(b.up_ratio, 1)}%`, `中位涨幅 ${rptPct(b.median_pct)}`),
+            rptCard("样本", `${b.trading ?? "—"} 只交易`, `停牌 ${b.suspended ?? "—"}`),
+        ].join("") : [
+            rptCard("全A平均股价", "该日未存档", escapeHtml(b.reason || "系统每个交易日收盘后自动存档")),
+        ].join("");
+    }
+    const series = ap.series || [];
+    const ch = ensureReportChart("reviewAvgChart");
+    if (ch) {
+        const th = chartTheme();
+        ch.setOption({
+            ...th,
+            title: { text: "全A平均股价存档", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: series.map(x => (x.date || "").slice(5)) },
+            yAxis: { type: "value", scale: true },
+            series: [{ type: "line", data: series.map(x => x.avg_price), itemStyle: { color: "#c2410c" } }],
+        }, true);
+    }
+    const dist = b.distribution || [];
+    const dch = ensureReportChart("reviewDistChart");
+    if (dch) {
+        const th = chartTheme();
+        dch.setOption({
+            ...th,
+            title: { text: "涨跌分布（需当日存档）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            xAxis: { type: "category", data: dist.map(x => x.range) },
+            yAxis: { type: "value" },
+            series: [{ type: "bar", data: dist.map(x => x.count),
+                itemStyle: { color: (p) => {
+                    const lab = dist[p.dataIndex]?.range || "";
+                    if (lab === "平") return "#94a3b8";
+                    return lab.startsWith("-") || lab.startsWith("<") ? "#059669" : "#e11d48";
+                } } }],
+        }, true);
+    }
+}
+
+function renderFocusReport(d) {
+    if (!d) return;
+    const title = document.getElementById("focusTitle");
+    if (title) {
+        const md = (d.focus_date || "").slice(5);
+        title.textContent = `A股${d.focus_word || "明日"}(${md} ${d.focus_weekday})重点关注`;
+    }
+    const meta = document.getElementById("focusMeta");
+    if (meta) {
+        meta.textContent = `数据截至${d.base_date}收盘 · 自动化晨报（今日${d.today_weekday}，按${d.focus_word}前瞻）`;
+    }
+
+    const g = d.global || {};
+    const a = d.a_share || {};
+    const sectors = d.sectors || [];
+    const root = document.getElementById("focusSections");
+    if (!root) return;
+
+    const roleClass = { "主线": "role-main", "防御": "role-def", "弹性": "role-elastic", "观察": "role-watch" };
+
+    root.innerHTML = `
+      <section class="focus-block">
+        <h2>一、全球定调 <span class="focus-tone tone-${g.tone?.label === "偏暖" ? "up" : g.tone?.label === "偏冷" ? "down" : "flat"}">${escapeHtml(g.tone?.label || "—")}</span></h2>
+        <ul class="focus-lines">${(g.tone?.lines || []).map(l => `<li>${escapeHtml(l)}</li>`).join("") || "<li>暂无外围报价</li>"}</ul>
+        ${(g.news || []).length ? `<div class="focus-news">${(g.news || []).map(n =>
+            `<div class="focus-news-item"><span class="stance-${escapeHtml(n.stance || "neutral")}">${escapeHtml(n.stance_label || n.stance || "")}</span>
+             <strong>${escapeHtml(n.take || n.title)}</strong>
+             <small>${escapeHtml(n.source || "")} · ${escapeHtml(n.time || "")}</small></div>`).join("")}</div>` : ""}
+      </section>
+
+      <section class="focus-block">
+        <h2>二、A股盘面（${escapeHtml(d.base_date || "")}）</h2>
+        <div class="report-state-bar tone-${a.state?.tone || "flat"}" style="margin-bottom:12px">
+          <span class="report-state-label">盘面</span><strong>${escapeHtml(a.state?.label || "—")}</strong>
+        </div>
+        <ul class="focus-lines">${(a.summary || []).map(l => `<li>${escapeHtml(l)}</li>`).join("")}</ul>
+        ${(a.policy || []).length ? `<h3 class="focus-sub">政策暖风</h3><ul class="focus-lines">${(a.policy || []).map(p =>
+            `<li>${escapeHtml(p.take || p.title)}</li>`).join("")}</ul>` : ""}
+      </section>
+
+      <section class="focus-block">
+        <h2>三、核心板块与龙头</h2>
+        <div class="focus-sectors">${sectors.map((s, i) => `
+          <article class="focus-sector ${roleClass[s.role] || ""}">
+            <header><span class="focus-idx">${i + 1}</span>
+              <strong>${escapeHtml(s.name)}</strong>
+              <span class="focus-role">${escapeHtml(s.role)}</span>
+              <span class="focus-pcts">${rptPct(s.pct)} · 5日 ${rptPct(s.pct5)}</span>
+            </header>
+            <p class="focus-why">${escapeHtml(s.why || "")}</p>
+            <div class="focus-leaders">${(s.leaders || []).map(l => `
+              <div class="focus-leader">
+                <span class="leader-name">${escapeHtml(l.name || l.code)}</span>
+                ${rptPct(l.pct)}
+                <span class="leader-macd">${escapeHtml(l.macd || "")}</span>
+                <small>5日 ${rptPct(l.pct5)}</small>
+              </div>`).join("") || "<div class='report-empty'>龙头暂缺</div>"}</div>
+          </article>`).join("")}</div>
+        ${(d.hot_themes || []).length ? `<h3 class="focus-sub">涨停题材脉冲</h3>
+          <div class="focus-themes">${(d.hot_themes || []).map(t =>
+            `<span class="theme-chip">${escapeHtml(t.name)} <b>${t.count}</b></span>`).join("")}</div>` : ""}
+      </section>
+
+      <section class="focus-block">
+        <h2>四、明日盯盘要点</h2>
+        <ul class="focus-watch">${(d.watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul>
+        <h3 class="focus-sub">风险提示</h3>
+        <ul class="focus-risk">${(d.risk || []).map(w => `<li>${escapeHtml(w)}</li>`).join("")}</ul>
+      </section>`;
+}
+
+function bindReportEvents() {
+    document.getElementById("reviewRefreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try { await loadReviewReport(true); } finally { btn.classList.remove("is-loading"); }
+    });
+    document.getElementById("focusRefreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try { await loadFocusReport(true); } finally { btn.classList.remove("is-loading"); }
+    });
+    document.querySelectorAll(".report-dim-tab").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.querySelectorAll(".report-dim-tab").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            const dim = btn.dataset.dim;
+            document.querySelectorAll("[data-dim-panel]").forEach(p => {
+                p.classList.toggle("active", p.dataset.dimPanel === dim);
+            });
+            setTimeout(() => resizeReportCharts(), 60);
+        });
+    });
+    window.addEventListener("resize", () => resizeReportCharts());
+}

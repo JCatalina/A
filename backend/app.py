@@ -15,6 +15,7 @@ from us_index_engine import USIndexEngine
 from ice_engine import IceEngine
 from factor_engine import FactorEngine
 from news_engine import news_engine
+from market_report import MarketReportEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -34,9 +35,11 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_warm_factor_model, daemon=True, name="factor-prewarm").start()
     # v3.2: 金融消息面首次预热 (权威媒体聚合 + AI 通俗解读)
     threading.Thread(target=lambda: news_engine.refresh(force=True), daemon=True, name="news-prewarm").start()
+    # v3.4: 复盘日报 / 晨报预热
+    threading.Thread(target=_warm_market_report, daemon=True, name="report-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(
-        data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine
+        data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report
     )
     _scheduler.start()
     yield
@@ -45,7 +48,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="3.2.0",
+    version="3.4.0",
     lifespan=lifespan
 )
 
@@ -64,6 +67,7 @@ scanner_engine = ScannerEngine(data_fetcher, factor_engine)
 index_engine = IndexEngine()
 us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
+market_report = MarketReportEngine(index_engine=index_engine, news_engine=news_engine)
 
 
 def _warm_factor_model() -> None:
@@ -73,6 +77,15 @@ def _warm_factor_model() -> None:
         factor_engine.rebuild(progress=lambda m: logger.info(f"factor prewarm: {m}"))
     except Exception as e:
         logger.warning(f"factor model prewarm failed: {e}")
+
+
+def _warm_market_report() -> None:
+    try:
+        market_report.build_review()
+        market_report.build_focus()
+        logger.info("market report prewarm finished")
+    except Exception as e:
+        logger.warning(f"market report prewarm failed: {e}")
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -275,6 +288,52 @@ def reinterpret_news_item(news_id: str, use_llm: bool = Query(True, description=
     if not item:
         return JSONResponse(status_code=404, content={"status": "error", "message": "未找到该新闻"})
     return {"status": "success", "data": item}
+
+
+# ---------- A股复盘日报 / 次日重点关注 (v3.4) ----------
+@app.get("/api/report/review")
+def get_market_review(date: Optional[str] = Query(None, description="交易日 YYYY-MM-DD, 缺省取最近完整收盘日")):
+    """A股多维数据统计日报: 市场概览/情绪/北向/申万/估值/恐贪/两融/平均股价"""
+    try:
+        data = market_report.build_review(date)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("review report failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.get("/api/report/focus")
+def get_market_focus():
+    """次日(或今日盘前)重点关注晨报: 全球定调 / A股盘面 / 核心板块龙头 / 盯盘要点"""
+    try:
+        data = market_report.build_focus()
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("focus report failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.get("/api/report/dates")
+def get_report_dates():
+    """已落盘的复盘/晨报/涨跌家数存档日期列表"""
+    try:
+        cal = market_report.resolve_dates()
+        return {"status": "success", "data": {"calendar": {k: cal[k] for k in ("base", "prev", "focus", "focus_word", "today")},
+                                             "archived": market_report.archived_dates()}}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.post("/api/report/archive-snapshot")
+def archive_market_snapshot(force: bool = Query(False)):
+    """手动触发全A涨跌家数/平均股价存档 (收盘后调度器也会自动执行)"""
+    try:
+        snap = market_report.archive_snapshot(force=force)
+        if not snap:
+            return {"status": "skipped", "message": "未到收盘或抓取失败"}
+        return {"status": "success", "data": snap}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # 挂载前端静态页面

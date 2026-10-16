@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.3.1">
+    <link rel="stylesheet" href="/static/style.css?v=3.4.0">
 </head>
 <body>
     <div class="app-container">
@@ -33,6 +33,8 @@
                     <button class="nav-tab" id="tabUsView" data-target="usWorkspace">🗽 美股大盘研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
                     <button class="nav-tab" id="tabNewsView" data-target="newsWorkspace">📰 金融消息面</button>
+                    <button class="nav-tab" id="tabReviewView" data-target="reviewWorkspace">📋 复盘日报</button>
+                    <button class="nav-tab" id="tabFocusView" data-target="focusWorkspace">🌅 明日重点</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
                 </div>
             </div>
@@ -972,9 +974,111 @@
             </footer>
         </main>
 
+        <!-- 主内容工作区: A股复盘日报 -->
+        <main class="report-workspace report-red-green" id="reviewWorkspace" style="display: none;">
+            <section class="report-page-intro">
+                <div>
+                    <span class="report-eyebrow">A-SHARE · MULTI-DIM DAILY REVIEW</span>
+                    <h1 class="report-page-title" id="reviewTitle">A股多维数据统计日报</h1>
+                    <p class="report-page-desc" id="reviewMeta">自动化生成（盘前取上一交易日完整收盘数据）｜红涨绿跌</p>
+                </div>
+                <div class="report-live-status">
+                    <span class="report-live-dot"></span>
+                    <span id="reviewUpdateTime">同步中...</span>
+                    <button type="button" class="report-refresh-btn" id="reviewRefreshBtn" title="立即刷新">
+                        <i class="fa-solid fa-rotate"></i> 刷新
+                    </button>
+                </div>
+            </section>
+            <div class="report-state-bar" id="reviewStateBar"></div>
+            <ul class="report-headline" id="reviewHeadline"></ul>
+            <nav class="report-dim-tabs" id="reviewDimTabs" aria-label="八大维度">
+                <button type="button" class="report-dim-tab active" data-dim="overview">市场概览</button>
+                <button type="button" class="report-dim-tab" data-dim="sentiment">情绪</button>
+                <button type="button" class="report-dim-tab" data-dim="north">北向</button>
+                <button type="button" class="report-dim-tab" data-dim="sw">申万行业</button>
+                <button type="button" class="report-dim-tab" data-dim="valuation">估值分位</button>
+                <button type="button" class="report-dim-tab" data-dim="fear">恐贪指数</button>
+                <button type="button" class="report-dim-tab" data-dim="margin">两融</button>
+                <button type="button" class="report-dim-tab" data-dim="avgprice">平均股价</button>
+            </nav>
+            <div class="report-panels" id="reviewPanels">
+                <section class="report-panel active" data-dim-panel="overview">
+                    <div class="report-cards" id="reviewOverviewCards"></div>
+                    <div class="report-chart" id="reviewTurnoverChart"></div>
+                    <div class="report-chart" id="reviewIndexChart"></div>
+                    <div class="report-table-wrap" id="reviewIndexTable"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="sentiment">
+                    <div class="report-cards" id="reviewSentimentCards"></div>
+                    <div class="report-chart" id="reviewLimitChart"></div>
+                    <div class="report-ladder" id="reviewLadder"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="north">
+                    <p class="report-note" id="reviewNorthNote"></p>
+                    <div class="report-cards" id="reviewNorthCards"></div>
+                    <div class="report-chart" id="reviewNorthChart"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="sw">
+                    <div class="report-cards" id="reviewSwCards"></div>
+                    <div class="report-chart tall" id="reviewSwChart"></div>
+                    <div class="report-table-wrap" id="reviewSwTable"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="valuation">
+                    <div class="report-cards" id="reviewValCards"></div>
+                    <div class="report-chart" id="reviewValChart"></div>
+                    <div class="report-table-wrap" id="reviewValTable"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="fear">
+                    <div class="report-cards" id="reviewFgCards"></div>
+                    <div class="report-chart" id="reviewFgChart"></div>
+                    <div class="report-table-wrap" id="reviewFgTable"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="margin">
+                    <p class="report-note" id="reviewMarginNote"></p>
+                    <div class="report-cards" id="reviewMarginCards"></div>
+                    <div class="report-chart" id="reviewMarginChart"></div>
+                </section>
+                <section class="report-panel" data-dim-panel="avgprice">
+                    <div class="report-cards" id="reviewAvgCards"></div>
+                    <div class="report-chart" id="reviewAvgChart"></div>
+                    <div class="report-chart" id="reviewDistChart"></div>
+                </section>
+            </div>
+            <footer class="report-footer">
+                <p>A股复盘日报 · 自动化统计，不构成投资建议</p>
+                <small>涨跌家数/平均股价依赖收盘存档；北向净买入自 2024-08-19 起停止披露日频数据，报表仅展示成交额。</small>
+            </footer>
+        </main>
+
+        <!-- 主内容工作区: 明日重点关注 -->
+        <main class="report-workspace report-red-green" id="focusWorkspace" style="display: none;">
+            <section class="report-page-intro">
+                <div>
+                    <span class="report-eyebrow">A-SHARE · MORNING FOCUS BRIEF</span>
+                    <h1 class="report-page-title" id="focusTitle">A股重点关注</h1>
+                    <p class="report-page-desc" id="focusMeta">自动化晨报</p>
+                </div>
+                <div class="report-live-status">
+                    <span class="report-live-dot"></span>
+                    <span id="focusUpdateTime">同步中...</span>
+                    <button type="button" class="report-refresh-btn" id="focusRefreshBtn" title="立即刷新">
+                        <i class="fa-solid fa-rotate"></i> 刷新
+                    </button>
+                </div>
+            </section>
+            <div class="focus-sections" id="focusSections">
+                <div class="focus-empty">正在生成晨报…</div>
+            </div>
+            <footer class="report-footer">
+                <p>明日重点关注 · 盘前自动化晨报，不构成投资建议</p>
+                <small>板块与龙头由申万一级强弱、涨停题材与市值龙头自动挑选；MACD 状态基于日线计算。</small>
+            </footer>
+        </main>
+
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=3.3.1"></script>
+    <script src="/static/app.js?v=3.4.0"></script>
 </body>
 </html>

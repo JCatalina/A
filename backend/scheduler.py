@@ -42,7 +42,8 @@ NEWS_WARM_INTERVAL = 180               # 消息面刷新周期 (秒), 与 news_e
 class RefreshScheduler(threading.Thread):
     """常驻后台调度器: 保活 + 盘后自动任务, 所有失败仅记日志, 不影响正常接口"""
 
-    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine=None, news_engine=None):
+    def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine,
+                 factor_engine=None, news_engine=None, market_report=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
@@ -50,11 +51,13 @@ class RefreshScheduler(threading.Thread):
         self.ice = ice_engine
         self.factor = factor_engine
         self.news = news_engine
+        self.report = market_report
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
         self._last_news_ts = 0.0
         self._scan_date: Optional[date] = None    # 已完成自动扫描的日期
         self._calib_date: Optional[date] = None   # 已完成盘后校准的日期
+        self._report_date: Optional[date] = None  # 已完成日报存档的日期
         self._stop = threading.Event()
 
     # ------------------------------------------------------------------
@@ -84,11 +87,13 @@ class RefreshScheduler(threading.Thread):
             return                                  # 节假日不跑盘后任务 (盘中保活继续)
 
         if now.time() >= POST_CLOSE_TIME:
-            # 盘后一次性任务: 自动全市场扫描 + 冰点校准重算 (各自在独立线程执行)
+            # 盘后一次性任务: 自动全市场扫描 + 冰点校准重算 + 复盘存档 (各自在独立线程执行)
             if self._scan_date != today:
                 self._launch_auto_scan(today)
             if self._calib_date != today:
                 self._launch_postclose_calib(today)
+            if self._report_date != today:
+                self._launch_postclose_report(today)
             return
 
         session = self._session(now)
@@ -99,6 +104,12 @@ class RefreshScheduler(threading.Thread):
         elif time.time() - self._last_offhours_ts >= OFFHOURS_WARM_INTERVAL:
             self._last_offhours_ts = time.time()
             self.warm_offhours()
+            # 盘前低频: 刷新晨报缓存 (前瞻当天或下一交易日)
+            if self.report is not None and now.time() < dtime(9, 30):
+                try:
+                    self.report.build_focus()
+                except Exception as e:
+                    logger.warning(f"Scheduler focus rebuild failed: {e}")
 
     def _warm_news_if_due(self) -> None:
         """独立线程刷新: 七个外部源即使慢也不拖住 A 股保活 tick (引擎内部防重入)"""
@@ -214,3 +225,39 @@ class RefreshScheduler(threading.Thread):
                     self._calib_date = None
 
         threading.Thread(target=_run, name="postclose-calib", daemon=True).start()
+
+    def _launch_postclose_report(self, report_day: date) -> None:
+        """15:05 后当日首次: 存档全A涨跌家数/平均股价, 并预热复盘日报与次日晨报"""
+        if self.report is None:
+            self._report_date = report_day
+            return
+        self._report_date = report_day
+
+        def _run():
+            try:
+                logger.info(f"Post-close market report start (date={report_day})")
+                # 涨跌停池约 15:30 才稳定, 稍等再抓; 涨跌家数可先存档
+                try:
+                    snap = self.report.archive_snapshot(force=True)
+                    logger.info("Snapshot archived: %s", (snap or {}).get("date"))
+                except Exception as e:
+                    logger.warning(f"Snapshot archive failed: {e}")
+                # 涨跌停池约 15:30 才稳定; 若已过则立即出终版
+                ready = datetime.combine(report_day, dtime(15, 30))
+                wait = (ready - datetime.now()).total_seconds()
+                if wait > 0:
+                    time.sleep(min(wait, 30 * 60))
+                try:
+                    self.report.build_review()
+                    self.report.build_focus()
+                    logger.info("Post-close market report finished")
+                except Exception as e:
+                    logger.warning(f"Market report build failed: {e}")
+                    if self._report_date == report_day:
+                        self._report_date = None
+            except Exception as e:
+                logger.warning(f"Post-close market report failed: {e}")
+                if self._report_date == report_day:
+                    self._report_date = None
+
+        threading.Thread(target=_run, name="postclose-report", daemon=True).start()

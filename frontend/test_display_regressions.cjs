@@ -111,6 +111,21 @@ async function main() {
     for (const id of ['tabNewsView', 'newsWorkspace', 'newsFeedList', 'newsRefreshBtn', 'newsSearchInput']) {
         assert.ok(html.includes(`id="${id}"`), `missing news markup id=${id}`);
     }
+    // 复盘日报 / 明日重点 TAB 契约
+    for (const id of ['tabReviewView', 'reviewWorkspace', 'reviewHeadline', 'reviewDimTabs', 'reviewPanels',
+                      'tabFocusView', 'focusWorkspace', 'focusSections', 'reviewRefreshBtn', 'focusRefreshBtn']) {
+        assert.ok(html.includes(`id="${id}"`), `missing report markup id=${id}`);
+    }
+    assert.ok(html.includes('report-red-green'));
+    assert.ok(html.includes('data-dim="fear"') && html.includes('data-dim="north"'));
+    assert.ok(typeof context.loadReviewReport === 'function');
+    assert.ok(typeof context.loadFocusReport === 'function');
+    assert.ok(typeof context.renderReviewReport === 'function');
+    assert.ok(typeof context.renderFocusReport === 'function');
+    assert.ok(typeof context.rptPct === 'function');
+    assert.match(context.rptPct(1.5), /rpt-pct up/);
+    assert.match(context.rptPct(-1.5), /rpt-pct down/);
+    assert.doesNotMatch(context.rptPct(null), /NaN|undefined/);
     assert.ok(html.includes('data-news-region="cn"'));
     assert.ok(html.includes('data-news-region="foreign"'));
     assert.ok(typeof context.loadNewsFeed === 'function');
