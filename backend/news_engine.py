@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -502,13 +503,22 @@ class NewsEngine:
             logger.warning("news cache load failed: %s", e)
 
     def _save_disk(self) -> None:
+        # 锁内只做快照序列化 (保证一致性), 文件写入放到锁外, 减少对 /api/news/* 读请求的争用
+        payload_str = None
+        with self._lock:
+            try:
+                payload_str = json.dumps(
+                    {"last_refresh_ts": self._last_refresh_ts, "updated_at": _now_iso(),
+                     "rules_version": RULES_VERSION, "source_status": self._source_status,
+                     "items": self._items}, ensure_ascii=False)
+            except Exception as e:
+                logger.warning("news cache serialize failed: %s", e)
+                return
         try:
             os.makedirs(os.path.dirname(self._cache_path), exist_ok=True)
-            payload = {"last_refresh_ts": self._last_refresh_ts, "updated_at": _now_iso(), "rules_version": RULES_VERSION,
-                       "source_status": self._source_status, "items": self._items}
             tmp = self._cache_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
+                fh.write(payload_str)
             os.replace(tmp, self._cache_path)
         except Exception as e:
             logger.warning("news cache save failed: %s", e)
@@ -574,15 +584,19 @@ class NewsEngine:
     def ingest(self, rows: List[Dict[str, Any]], status: Optional[Dict[str, Any]] = None) -> None:
         """合并新抓取的行与历史: 沿用已有 LLM 结果, 去重, 截断保留期, 按最新规则重算解读"""
         cutoff = time.time() - NEWS_RETENTION_HOURS * 3600
+        # 深拷贝历史条目: 后续合并在锁外进行, 不触碰正在被请求线程序列化的活动 dict
+        # (原实现持引用在锁外 setdefault/加键, 与 json 序列化交错可触发
+        #  "dictionary changed size during iteration" → /api/news/* 500)
         with self._lock:
-            by_id = {it["id"]: it for it in self._items}
+            by_id = {it["id"]: copy.deepcopy(it) for it in self._items}
         for r in rows:
             old = by_id.get(r["id"])
             if old:
                 for k in ("llm", "llm_model", "llm_failed_at", "title_zh"):
                     if k in old:
                         r[k] = old[k]
-                r["also_reported_by"] = old.get("also_reported_by") or []
+                # 拷贝列表: merge_duplicates 会向 also_reported_by 追加, 不得改写活动条目共享的列表
+                r["also_reported_by"] = list(old.get("also_reported_by") or [])
             by_id[r["id"]] = r
         pool = [it for it in by_id.values() if (it.get("published_ts") or 0) >= cutoff]
         merged = merge_duplicates(pool)
@@ -593,6 +607,15 @@ class NewsEngine:
                 logger.warning("interpret failed %s: %s", it.get("id"), e)
         merged.sort(key=lambda x: x.get("published_ts") or 0, reverse=True)
         with self._lock:
+            # 二次核对: LLM 线程可能在快照之后刚完成 enrich, 从当前活动条目补齐
+            # 否则已付费的 LLM 结果会随旧 dict 被丢弃并再次计费
+            live_by_id = {it["id"]: it for it in self._items}
+            for it in merged:
+                src = live_by_id.get(it["id"])
+                if src is not None and not it.get("llm"):
+                    for k in ("llm", "llm_model", "title_zh"):
+                        if src.get(k) is not None:
+                            it[k] = src[k]
             self._items = merged[:NEWS_MAX_ITEMS]
             if status is not None:
                 self._source_status = status
@@ -624,14 +647,18 @@ class NewsEngine:
 
     def _enrich_one(self, it: Dict[str, Any], cfg: Dict[str, str]) -> bool:
         rule = interpret(it)
-        llm = call_llm(it, rule, cfg)
+        llm = call_llm(it, rule, cfg)          # 网络调用在锁外
         with self._lock:
+            # 按 id 回写当前活动条目: ingest 换表后旧引用已成孤儿,
+            # 直接写旧 dict 会丢失 LLM 结果并导致同一新闻再次计费
+            live = next((x for x in self._items if x.get("id") == it.get("id")), None)
+            target = live if live is not None else it
             if llm:
-                it["llm"], it["llm_model"] = llm, cfg["model"]
-                it.pop("llm_failed_at", None)
+                target["llm"], target["llm_model"] = llm, cfg["model"]
+                target.pop("llm_failed_at", None)
             else:
-                it["llm_failed_at"] = time.time()
-            self._apply_interpretation(it)
+                target["llm_failed_at"] = time.time()
+            self._apply_interpretation(target)
         return bool(llm)
 
     # ---------- 查询 ----------
@@ -641,7 +668,8 @@ class NewsEngine:
         elif self.is_stale():
             self.refresh_async()              # 有缓存: 先返回旧数据, 后台刷新
         with self._lock:
-            return list(self._items)
+            # 深拷贝: 请求线程随后的过滤/序列化与后台 ingest/LLM 的改写完全隔离
+            return copy.deepcopy(self._items)
 
     def list_news(self, region: str = "all", source: Optional[str] = None, limit: int = 40,
                   q: Optional[str] = None, min_importance: int = 0, category: Optional[str] = None,
@@ -743,7 +771,8 @@ class NewsEngine:
 
     def get_item(self, news_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
-            return next((it for it in self._items if it.get("id") == news_id), None)
+            it = next((x for x in self._items if x.get("id") == news_id), None)
+        return copy.deepcopy(it) if it is not None else None
 
     def reinterpret(self, news_id: str, use_llm: bool = True) -> Optional[Dict[str, Any]]:
         """单条重算; use_llm 且已配置时强制重新调用大模型 (忽略缓存与失败冷却)"""
@@ -752,12 +781,12 @@ class NewsEngine:
             return None
         cfg = llm_config() if use_llm else None
         if cfg:
-            self._enrich_one(it, cfg)
+            self._enrich_one(it, cfg)         # _enrich_one 内部按 id 回写活动条目, 传副本同样安全
         else:
             with self._lock:
-                self._apply_interpretation(it)
-        with self._lock:
-            self._save_disk()
+                live = next((x for x in self._items if x.get("id") == news_id), it)
+                self._apply_interpretation(live)
+        self._save_disk()
         return it
 
 

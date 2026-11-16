@@ -32,6 +32,7 @@ class ScannerEngine:
         self.scan_progress = 0
         self.has_scan_results = False          # 是否已产生过真实扫描结果（防止演示数据反向覆盖）
         self._demo_lock = threading.Lock()     # 演示数据填充互斥锁（避免并发请求重复分析/惊群）
+        self._scan_lock = threading.Lock()     # 扫描状态位互斥 (检查-置位原子化, 防并发重复全池扫描)
 
     def analyze_single_stock(self, code: str, stock_info: Optional[Dict[str, Any]] = None, period: str = "daily") -> Optional[Dict[str, Any]]:
         """
@@ -152,7 +153,7 @@ class ScannerEngine:
                 "kline_chart_data": kline_chart_data
             }
         except Exception as e:
-            logger.error(f"Error analyzing stock {code}: {e}")
+            logger.error(f"Error analyzing stock {code}: {e}", exc_info=True)
             return None
 
     @staticmethod
@@ -229,10 +230,11 @@ class ScannerEngine:
         结果统一以全量命中列表写入 last_results["ALL"]，读取路径按策略实时过滤，
         保证"全部/单策略"各视图与最新一次扫描严格一致（不再按 strategy 分键存储产生新旧错位）。
         """
-        if self.is_scanning:
-            return self.last_results.get("ALL", [])
-
-        self.is_scanning = True
+        with self._scan_lock:
+            if self.is_scanning:
+                logger.info("scan_market: 已有扫描进行中, 返回最近一次结果")
+                return self.last_results.get("ALL", [])
+            self.is_scanning = True
         self.scan_progress = 0
         results: List[Dict[str, Any]] = []
         try:
@@ -290,8 +292,9 @@ class ScannerEngine:
                 self.last_results = {"ALL": results}
                 self.has_scan_results = True
             # 无论正常结束还是异常中断，务必复位扫描状态，避免前端无限轮询、后续扫描被锁死
-            self.scan_progress = 100
-            self.is_scanning = False
+            with self._scan_lock:
+                self.scan_progress = 100
+                self.is_scanning = False
 
     def ensure_demo_results(self) -> List[Dict[str, Any]]:
         """

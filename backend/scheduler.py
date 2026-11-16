@@ -31,6 +31,8 @@ TICK_INTERVAL = 30                 # 调度器心跳 (秒)
 INTRADAY_WARM_INTERVAL = 60        # 盘中保活周期 (秒)
 OFFHOURS_WARM_INTERVAL = 600       # 非交易时段保活周期 (秒)
 AUTO_SCAN_LIMIT = 240              # 盘后自动全市场扫描股票数
+# 盘后校准/因子重建失败后的重试退避 (秒): 避免数据源故障时每 30s tick 风暴式重试重型任务
+POSTCLOSE_CALIB_RETRY_BACKOFF = 600
 
 # 法定节假日 (可选扩展): 命中则全天跳过扫描/校准, 盘中保活仍继续
 HOLIDAYS = frozenset()
@@ -58,6 +60,7 @@ class RefreshScheduler(threading.Thread):
         self._scan_date: Optional[date] = None    # 已完成自动扫描的日期
         self._calib_date: Optional[date] = None   # 已完成盘后校准的日期
         self._report_date: Optional[date] = None  # 已完成日报存档的日期
+        self._calib_fail_ts = 0.0                 # 最近一次盘后校准失败时刻 (重试退避基准)
         self._stop = threading.Event()
 
     # ------------------------------------------------------------------
@@ -90,11 +93,12 @@ class RefreshScheduler(threading.Thread):
             # 盘后一次性任务: 自动全市场扫描 + 冰点校准重算 + 复盘存档 (各自在独立线程执行)
             if self._scan_date != today:
                 self._launch_auto_scan(today)
-            if self._calib_date != today:
+            if self._calib_date != today and time.time() - self._calib_fail_ts >= POSTCLOSE_CALIB_RETRY_BACKOFF:
                 self._launch_postclose_calib(today)
             if self._report_date != today:
                 self._launch_postclose_report(today)
-            return
+            # 不再 return: 盘后继续落入下方低频保活分支 —— 原实现 15:05~24:00 之间
+            # warm_offhours 永远不可达, 所有 TTL 缓存空转, 晚间访问全是冷加载
 
         session = self._session(now)
         if session:
@@ -200,29 +204,38 @@ class RefreshScheduler(threading.Thread):
         threading.Thread(target=_run, name="auto-scan", daemon=True).start()
 
     def _launch_postclose_calib(self, calib_day: date) -> None:
-        """15:05 后当日首次: 独立线程重算四大指数冰点校准表并落盘 (与 run_eval.py 同文件)"""
+        """15:05 后当日首次: 独立线程重算四大指数冰点校准表并落盘 (与 run_eval.py 同文件)。
+        任一步失败则回滚日期并记录退避时间, 当天后续 tick 按退避间隔重试——
+        原实现内层 except 吞掉异常后外层回滚永远不触发, "当天只试一次" 即静默过期到次日。"""
         self._calib_date = calib_day
 
         def _run():
+            failed = False
+
+            def _note_failure(what: str, exc: Exception) -> None:
+                nonlocal failed
+                failed = True
+                logger.warning("%s failed: %s", what, exc)
+
             try:
                 logger.info(f"Post-close ice calibration start (date={calib_day})")
                 for sym in INDEX_SYMBOLS:
                     try:
                         self.ice.calibrate(sym)
                     except Exception as e:
-                        logger.warning(f"Ice calibration failed {sym}: {e}")
-                logger.info("Post-close ice calibration finished")
+                        _note_failure(f"Ice calibration {sym}", e)
                 # v3.1: 横截面因子面板重建 + 走前评估 (含当日收盘, 先于次日打分)
                 if self.factor is not None:
                     try:
                         rep = self.factor.rebuild()
                         logger.info("Post-close factor rebuild finished: status=%s", rep.get("status"))
                     except Exception as e:
-                        logger.warning(f"Post-close factor rebuild failed: {e}")
+                        _note_failure("Post-close factor rebuild", e)
             except Exception as e:
-                logger.warning(f"Post-close ice calibration failed: {e}")
-                if self._calib_date == calib_day:
-                    self._calib_date = None
+                _note_failure("Post-close calibration orchestration", e)
+            if failed and self._calib_date == calib_day:
+                self._calib_date = None
+                self._calib_fail_ts = time.time()
 
         threading.Thread(target=_run, name="postclose-calib", daemon=True).start()
 

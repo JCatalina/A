@@ -173,9 +173,26 @@ class MarketReportEngine:
         })
         self._mem: Dict[str, Tuple[float, Any]] = {}
         self._mem_lock = threading.Lock()
-        self._build_lock = threading.Lock()
+        # RLock: _build_focus 内嵌 build_review(单飞锁), 可重入避免自死锁
+        self._build_lock = threading.RLock()
+        # 常驻进程的 _mem 内存保护: 容量上限 + 过期清扫 (键按日期/股票累积, 只写不删会无界增长)
+        self._mem_max_entries = 400
+        self._mem_sweep_ttl = 24 * 3600
 
     # ---------- 缓存与 HTTP ----------
+    def _store(self, key: str, val: Any, now_ts: float) -> None:
+        """写入缓存并做容量保护 (调用方须已持有 _mem_lock)"""
+        self._mem[key] = (now_ts, val)
+        if len(self._mem) <= self._mem_max_entries:
+            return
+        stale = [k for k, (ts, _v) in self._mem.items() if now_ts - ts > self._mem_sweep_ttl]
+        if stale:
+            for k in stale:
+                self._mem.pop(k)
+        if len(self._mem) > self._mem_max_entries:
+            oldest = min(self._mem, key=lambda k: self._mem[k][0])
+            self._mem.pop(oldest)
+
     def _cached(self, key: str, ttl: float, fn: Callable[[], Any]) -> Any:
         with self._mem_lock:
             hit = self._mem.get(key)
@@ -184,8 +201,21 @@ class MarketReportEngine:
         val = fn()
         if val is not None:
             with self._mem_lock:
-                self._mem[key] = (time.time(), val)
+                self._store(key, val, time.time())
         return val
+
+    def _cached_singleflight(self, key: str, ttl: float, fn: Callable[[], Any]) -> Any:
+        """重量级构建(复盘/晨报)专用: 并发冷请求只触发一次构建, 其余等待复用结果"""
+        with self._build_lock:
+            with self._mem_lock:
+                hit = self._mem.get(key)
+                if hit and time.time() - hit[0] < ttl:
+                    return hit[1]
+            val = fn()
+            if val is not None:
+                with self._mem_lock:
+                    self._store(key, val, time.time())
+            return val
 
     def _get_json(self, url: str, timeout: float = 10, attempts: int = 2, **kw) -> Optional[Dict[str, Any]]:
         for i in range(attempts):
@@ -388,6 +418,7 @@ class MarketReportEngine:
                 by_board.append({"board": bname, "count": len(sub), "up": sum(1 for p in sub if p > 0),
                                  "down": sum(1 for p in sub if p < 0), "median_pct": _r(statistics.median(sub))})
         up, down = sum(1 for p in pcts if p > 0), sum(1 for p in pcts if p < 0)
+        tvals = [_f(r.get("f8")) for r in live if _f(r.get("f8")) is not None]
         return {
             "date": d, "available": True, "total": len(rows), "trading": len(live),
             "suspended": len(rows) - len(live), "up": up, "down": down, "flat": len(live) - up - down,
@@ -398,7 +429,7 @@ class MarketReportEngine:
             "avg_price": _r(statistics.mean(prices)) if prices else None,
             "median_price": _r(statistics.median(prices)) if prices else None,
             "amount_yi": _r(sum((_f(r.get("f6")) or 0) for r in live) / 1e8, 1),
-            "median_turnover": _r(statistics.median([_f(r["f8"]) for r in live if _f(r.get("f8")) is not None]) or 0),
+            "median_turnover": _r(statistics.median(tvals)) if tvals else None,
             "distribution": dist, "by_board": by_board,
         }
 
@@ -767,7 +798,7 @@ class MarketReportEngine:
         if archived and d != cal["base"]:
             return archived
         key = f"review:{d}"
-        return self._cached(key, 600, lambda: self._build_review(d, cal))
+        return self._cached_singleflight(key, 600, lambda: self._build_review(d, cal))
 
     def _build_review(self, d: str, cal: Dict[str, Any]) -> Dict[str, Any]:
         t0 = time.time()
@@ -981,7 +1012,7 @@ class MarketReportEngine:
     # ---------- 报表: 次日重点关注 ----------
     def build_focus(self, now: Optional[datetime] = None) -> Dict[str, Any]:
         cal = self.resolve_dates(now)
-        return self._cached(f"focus:{cal['base']}:{cal['focus']}", 600, lambda: self._build_focus(cal))
+        return self._cached_singleflight(f"focus:{cal['base']}:{cal['focus']}", 600, lambda: self._build_focus(cal))
 
     def _build_focus(self, cal: Dict[str, Any]) -> Dict[str, Any]:
         t0 = time.time()
@@ -1094,15 +1125,19 @@ class MarketReportEngine:
         sh = im.get("sh000001")
         out = []
         if sh:
+            # 缺失字段不渲染为异常: 上游数据不完整时用 0/-- 占位而非让整份报表 500
+            sh_pct = (sh.get("pct") or 0)
+            sh_pct5 = (sh.get("pct5") or 0)
+            sh_close = sh.get("close")
             intraday = ""
-            if sh.get("low") and sh.get("close"):
-                lvl = int(sh["close"] // 100 * 100)
-                if sh["low"] < lvl <= sh["close"]:
+            if sh.get("low") and sh_close:
+                lvl = int(sh_close // 100 * 100)
+                if sh["low"] < lvl <= sh_close:
                     intraday = f"，盘中跌破{lvl}点后收复（最低{sh['low']:.2f}）"
-                elif sh["low"] <= lvl * 1.003 and sh["close"] > lvl:
+                elif sh["low"] <= lvl * 1.003 and sh_close > lvl:
                     intraday = f"，盘中考验{lvl}点附近（最低{sh['low']:.2f}）"
-            out.append(f"沪指 {'+' if sh['pct'] > 0 else ''}{sh['pct']}% 报{sh['close']:.0f}{intraday}；"
-                       f"近5日 {'+' if (sh['pct5'] or 0) > 0 else ''}{sh['pct5']}%，距20日均线 {sh['ma20_dev']}%")
+            out.append(f"沪指 {'+' if sh_pct > 0 else ''}{sh_pct}% 报{(f'{sh_close:.0f}' if sh_close is not None else '--')}{intraday}；"
+                       f"近5日 {'+' if sh_pct5 > 0 else ''}{sh_pct5}%，距20日均线 {sh.get('ma20_dev') or 0}%")
         out.append(f"盘面定性：{review['state']['label']}")
         tv = review["turnover"]
         if tv.get("amount_yi"):
@@ -1112,10 +1147,17 @@ class MarketReportEngine:
                        + (f"；多周期研判「{levels['op_license']}」" if levels.get("op_license") else ""))
         return out
 
+    @staticmethod
+    def _pct(v: Any) -> str:
+        """数值缺失时渲染为 '—' 而非格式异常 (上游字段不完整不应让整份晨报失败)"""
+        return f"{v:+.2f}%" if isinstance(v, (int, float)) else "—"
+
     def _pick_sectors(self, sw: List[Dict[str, Any]], review: Dict[str, Any]) -> List[Dict[str, Any]]:
         """主线: 5日强且当日不弱; 防御: 中证红利; 弹性: 高贝塔赛道里当日最强; 观察: 涨停集中 / 超跌反弹"""
         if not sw:
             return []
+        # 在浅拷贝上打分: 避免把内部 _score 键写进缓存 review 的行 dict (对读请求的序列化可见)
+        sw = [dict(r) for r in sw]
         n = len(sw)
         r1 = {r["name"]: i for i, r in enumerate(sorted(sw, key=lambda r: -(r["pct"] or -99)))}
         r5 = {r["name"]: i for i, r in enumerate(sorted(sw, key=lambda r: -(r["pct5"] or -99)))}
@@ -1134,24 +1176,24 @@ class MarketReportEngine:
             if len([p for p in picked if p["role"] == "主线"]) >= 3:
                 break
             if (r["pct5"] or 0) > 0 and (r["pct"] or 0) > -1:
-                add(r, "主线", f"近5日 {r['pct5']:+.2f}%（申万一级第{r['rank5']}），当日 {r['pct']:+.2f}%，量比 {r['amount_ratio']}")
+                add(r, "主线", f"近5日 {self._pct(r.get('pct5'))}（申万一级第{r['rank5']}），当日 {self._pct(r.get('pct'))}，量比 {r.get('amount_ratio')}")
         im = {i["symbol"]: i for i in review["indices"]}
         div = im.get("sh000922")
         picked.append({"name": "红利高股息", "role": "防御", "board_code": None, "pct": div.get("pct") if div else None,
                        "pct5": div.get("pct5") if div else None, "pct20": div.get("pct20") if div else None,
-                       "why": (f"中证红利当日 {div['pct']:+.2f}%、近5日 {div['pct5']:+.2f}%，弱市避险与长线资金配置方向" if div
+                       "why": (f"中证红利当日 {self._pct(div.get('pct'))}、近5日 {self._pct(div.get('pct5'))}%，弱市避险与长线资金配置方向" if div
                                else "弱市避险与长线资金配置方向"),
                        "fixed_leaders": DIVIDEND_LEADERS})
         growth = [r for r in sw if r["name"] in SW1_GROWTH and r["name"] not in used]
         for r in sorted(growth, key=lambda r: -(r["pct"] or -99))[:2]:
-            why = (f"当日 {r['pct']:+.2f}%（逆势）" if (r["pct"] or 0) > 0 and (review["indices"][0]["pct"] or 0) < 0
-                   else f"当日 {r['pct']:+.2f}%") + f"，近20日 {r['pct20']:+.2f}%，高贝塔方向，看是否止跌企稳"
+            why = (f"当日 {self._pct(r.get('pct'))}（逆势）" if (r["pct"] or 0) > 0 and (review["indices"][0]["pct"] or 0) < 0
+                   else f"当日 {self._pct(r.get('pct'))}") + f"，近20日 {self._pct(r.get('pct20'))}，高贝塔方向，看是否止跌企稳"
             add(r, "弹性", why)
         rest = [r for r in sw if r["name"] not in used]
         if rest:
             rebound = min(rest, key=lambda r: (r["pct20"] or 0))
             if (rebound["pct20"] or 0) < -5:
-                add(rebound, "观察", f"近20日 {rebound['pct20']:+.2f}% 超跌，当日 {rebound['pct']:+.2f}%，观察是否出现超跌反弹")
+                add(rebound, "观察", f"近20日 {self._pct(rebound.get('pct20'))} 超跌，当日 {self._pct(rebound.get('pct'))}，观察是否出现超跌反弹")
         for r in sw:
             r.pop("_score", None)
         return picked

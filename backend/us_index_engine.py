@@ -235,6 +235,9 @@ class USIndexEngine(IndexEngine):
 
         last_d = str(df["date"].iloc[-1]).split(" ")[0]
         if last_d != rt["date"]:
+            # 零量防御 (与 A 股 get_kline 追加口径一致): 快照成交量为 0 时不注入空量K线
+            if rt.get("volume", 0.0) <= 0:
+                return df
             new_row = {
                 "date": rt["date"],
                 "open": rt.get("open", rt["close"]),

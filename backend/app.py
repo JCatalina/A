@@ -172,7 +172,7 @@ StrategyName = Literal["ALL", "SUPPORT_PULLBACK", "BREAKOUT_PRESSURE", "MAIN_WAV
 def trigger_screener(
     background_tasks: BackgroundTasks,
     strategy: StrategyName = Query("ALL", description="策略类别: ALL, SUPPORT_PULLBACK, BREAKOUT_PRESSURE, MAIN_WAVE_TREND, OVERSOLD_DIVERGENCE"),
-    limit: int = Query(120, description="扫描股票数量")
+    limit: int = Query(120, ge=1, le=500, description="扫描股票数量 (1~500)")
 ):
     """启动后台全市场/活跃池批量扫描选股"""
     if scanner_engine.is_scanning:

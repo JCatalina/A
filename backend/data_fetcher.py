@@ -165,7 +165,9 @@ class DataFetcher:
         return stocks
 
     def _fetch_core_list_with_quotes(self) -> List[Dict[str, Any]]:
-        """回退：内置字典构建列表，并用腾讯简化接口批量更新价格/量能/成交额"""
+        """回退：内置字典构建列表，并用腾讯简化接口批量更新价格/量能/成交额。
+        price/amount 等为占位值; 批量行情也不可得时保留 is_demo 标记 (与指数回退口径一致,
+        不把伪造行情当真实数据混入展示/前置过滤)。"""
         stocks = []
         for code, (name, ind) in STOCK_META_MAP.items():
             stocks.append({
@@ -176,6 +178,7 @@ class DataFetcher:
                 "volume": 50000.0,
                 "amount": 50000000.0,
                 "turnover": 1.5,
+                "is_demo": True,   # 占位行情标记, 真实报价写入后解除
                 "industry": ind
             })
         try:
@@ -198,6 +201,7 @@ class DataFetcher:
             for s in stocks:
                 if s["code"] in price_map:
                     s.update(price_map[s["code"]])
+                    s["is_demo"] = False   # 已替换为真实行情, 解除演示标记
         except Exception as e:
             logger.warning(f"Batch fetch quote error: {e}")
         return stocks

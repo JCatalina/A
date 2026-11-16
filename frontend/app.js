@@ -19,6 +19,9 @@ let currentMacroData = null;
 // 大盘研判按指数缓存响应快照；冰点面板不复用旧成功结果。
 const macroCache = {};
 let iceRequestId = 0;
+// 个股/MRDI 加载的请求令牌: 丢弃过期响应, 防止快退快进时慢响应覆盖新数据 (竞态防护)
+let stockRequestId = 0;
+let mrdiRequestId = 0;
 
 // 美股大盘研判视图状态 (日K/周K/月K 三周期，无分时级别)
 let currentUsSymbol = "usdji";
@@ -328,9 +331,9 @@ function bindEvents() {
                 const json = await res.json();
                 if (json.data && json.data.length > 0) {
                     searchDropdown.innerHTML = json.data.slice(0, 8).map(s => `
-                        <div class="search-item" data-code="${s.code}">
-                            <span><strong>${s.code}</strong> ${s.name}</span>
-                            <span style="color: ${s.change_pct >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${s.price.toFixed(2)} (${s.change_pct > 0 ? '+' : ''}${s.change_pct}%)</span>
+                        <div class="search-item" data-code="${escapeHtml(s.code)}">
+                            <span><strong>${escapeHtml(s.code)}</strong> ${escapeHtml(s.name)}</span>
+                            <span style="color: ${s.change_pct >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${Number(s.price).toFixed(2)} (${s.change_pct > 0 ? '+' : ''}${Number(s.change_pct)}%)</span>
                         </div>
                     `).join("");
                     searchDropdown.style.display = "block";
@@ -432,9 +435,9 @@ async function loadMarketIndices() {
                 const isUp = idx.change_pct >= 0;
                 return `
                     <div class="ticker-item">
-                        <span class="ticker-name">${idx.name}</span>
-                        <span class="ticker-price" style="color: ${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${idx.price.toFixed(2)}</span>
-                        <span class="ticker-chg ${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${idx.change_pct.toFixed(2)}%</span>
+                        <span class="ticker-name">${escapeHtml(idx.name)}</span>
+                        <span class="ticker-price" style="color: ${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${Number(idx.price).toFixed(2)}</span>
+                        <span class="ticker-chg ${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${Number(idx.change_pct).toFixed(2)}%</span>
                     </div>
                 `;
             }).join("");
@@ -450,12 +453,14 @@ async function loadMarketIndices() {
  * 载入单只股票深度分析
  */
 async function loadStockAnalysis(code, period = currentPeriod, autoScroll = true) {
+    const requestId = ++stockRequestId;
     try {
         currentStockCode = code;
         currentPeriod = period;
         
         const res = await fetch(`/api/stock/analysis?code=${encodeURIComponent(code)}&period=${encodeURIComponent(period)}`);
         const json = await res.json();
+        if (requestId !== stockRequestId) return;   // 过期响应: 用户已切换到其它标的
         if (json.status !== "success" || !json.data) {
             alert("未能获取股票数据，请检查代码是否正确（如 600519 或 300033）");
             return;
@@ -967,6 +972,13 @@ function renderPredictionAndPlan(data) {
         document.getElementById("planSl").innerHTML = `${plan.stop_loss} (<span class="red">${plan.stop_loss_risk}</span>)`;
         document.getElementById("planRr").innerText = `${plan.rr_ratio} : 1 (${plan.rr_quality})`;
         document.getElementById("planPeriod").innerText = plan.holding_period || "3~10个交易日";
+    } else {
+        // 无交易计划时清空: 否则切到无计划的标的会残留上一只股票的计划显示
+        document.getElementById("planEntry").innerText = "--";
+        document.getElementById("planTp1").innerText = "--";
+        document.getElementById("planSl").innerText = "--";
+        document.getElementById("planRr").innerText = "--";
+        document.getElementById("planPeriod").innerText = "--";
     }
 }
 
@@ -1117,19 +1129,22 @@ async function loadScreenerResults(strategy, opts = {}) {
                 const demoBadge = item.is_demo ? '<span class="sc-demo-tag" title="演示数据: 服务启动后的核心标的池预分析，非全市场扫描结果">演示</span>' : '';
 
                 const displayName = STOCK_NAMES[item.code] || item.name || `标的 ${item.code}`;
+                const chgHtml = item.change_pct != null
+                    ? `<span class="sc-chg-num ${item.change_pct >= 0 ? 'up' : 'down'}">(${item.change_pct >= 0 ? '+' : ''}${item.change_pct}%)</span>`
+                    : '<span class="sc-chg-num">--</span>';
 
                 return `
-                    <div class="screener-item-card" data-code="${item.code}">
+                    <div class="screener-item-card" data-code="${escapeHtml(item.code)}">
                         <div class="sc-info-left">
                             <div class="sc-stock-name">
-                                <span class="stock-cn-name">${displayName}</span>
-                                <span class="sc-code">${item.code}</span>
+                                <span class="stock-cn-name">${escapeHtml(displayName)}</span>
+                                <span class="sc-code">${escapeHtml(item.code)}</span>
                                 <span class="sc-strategy-tag">${tag}</span>
                                 ${demoBadge}
                             </div>
                             <div class="sc-price-line">
                                 现价: <strong class="sc-price-num">${item.price ? item.price.toFixed(2) : '--'}</strong>
-                                <span class="sc-chg-num ${item.change_pct >= 0 ? 'up' : 'down'}">(${item.change_pct >= 0 ? '+' : ''}${item.change_pct}%)</span>
+                                ${chgHtml}
                             </div>
                         </div>
                         <div class="sc-info-right">
@@ -1167,33 +1182,9 @@ async function loadScreenerResults(strategy, opts = {}) {
  * 绑定大盘研判视图事件与顶部视图切换
  */
 function bindMacroEvents() {
-    // 顶部主视图切换 Tab (⚡个股看板 vs 🌐大盘研判)
-    const tabStock = document.getElementById("tabStockView");
-    const tabIndex = document.getElementById("tabIndexView");
-    const stockWs = document.getElementById("stockWorkspace");
-    const indexWs = document.getElementById("indexWorkspace");
-
-    tabStock?.addEventListener("click", () => {
-        tabStock.classList.add("active");
-        tabIndex.classList.remove("active");
-        stockWs.style.display = "grid";
-        indexWs.style.display = "none";
-        klineChartInst?.resize();
-        chipsChartInst?.resize();
-        radarChartInst?.resize();
-        probGaugeInst?.resize();
-    });
-
-    tabIndex?.addEventListener("click", () => {
-        tabIndex.classList.add("active");
-        tabStock.classList.remove("active");
-        stockWs.style.display = "none";
-        indexWs.style.display = "flex";
-        loadMacroIndexAnalysis(currentMacroSymbol);
-        setTimeout(() => {
-            macroKlineChartInst?.resize();
-        }, 150);
-    });
+    // 顶部主视图切换 Tab 统一由 bindMrdiEvents 里的 switchWorkspaceView 处理
+    // (覆盖全部 7 个工作区: 个股/大盘/美股/MRDI/消息/复盘/晨报);
+    // 若此处再重复绑定, "大盘研判"每次点击会触发两次 /api/index/analysis 重计算。
 
     // 大盘指数胶囊切换
     bindMacroCapsules(CN_MACRO_PANEL, "#indexCapsuleTabs", (symbol) => {
@@ -1322,13 +1313,13 @@ async function loadUsMarketIndices() {
             const isUp = Number(idx.change_pct) >= 0;
             const active = idx.code === currentUsSymbol ? " active" : "";
             return `
-                <div class="us-ticker-item ${isUp ? "up" : "down"}${active}" data-symbol="${idx.code}">
-                    <span class="ut-name">${idx.name}</span>
+                <div class="us-ticker-item ${isUp ? "up" : "down"}${active}" data-symbol="${escapeHtml(idx.code)}">
+                    <span class="ut-name">${escapeHtml(idx.name)}</span>
                     <span class="ut-price">${Number(idx.price).toFixed(2)}</span>
                     <span class="ut-chg">${isUp ? "+" : ""}${Number(idx.change_pct).toFixed(2)}%</span>
                 </div>`;
         }).join("");
-        el.innerHTML = `${items}<div class="us-ticker-time">行情源报价 ${list[0].quote_time || "--"}</div>`;
+        el.innerHTML = `${items}<div class="us-ticker-time">行情源报价 ${escapeHtml(list[0].quote_time || "--")}</div>`;
     } catch (e) {
         console.error("Error loading US indices", e);
         el.innerHTML = '<div class="ticker-loading">美股指数行情获取失败</div>';
@@ -1401,9 +1392,10 @@ function renderMacroHeader(data, panel = CN_MACRO_PANEL) {
     const updateMetaEl = document.getElementById(ids.updateMeta);
     if (updateMetaEl) {
         const quoteTime = data.quote_time && data.quote_time !== "--"
-            ? ` · 行情源报价: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.quote_time}</strong>`
+            ? ` · 行情源报价: <strong style="color:#0f172a; font-family:var(--font-mono);">${escapeHtml(data.quote_time)}</strong>`
             : "";
-        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#0f172a; font-family:var(--font-mono);">${data.update_time || new Date().toLocaleString()}</strong>${quoteTime}`;
+        const updateTime = escapeHtml(String(data.update_time || new Date().toLocaleString()));
+        updateMetaEl.innerHTML = `<span style="color:var(--neon-green)">🟢 实时行情已直连</span> · 最新数据时间: <strong style="color:#0f172a; font-family:var(--font-mono);">${updateTime}</strong>${quoteTime}`;
     }
 }
 
@@ -1923,9 +1915,11 @@ function bindMrdiEvents() {
             if (currentMrdiData?.all_kline_data?.[currentMrdiScale]?.length > 0) {
                 renderMrdiTechChart(currentMrdiData.all_kline_data[currentMrdiScale], currentMrdiData.clustered_levels);
             } else {
+                const requestId = ++mrdiRequestId;
                 try {
                     const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(currentMrdiSymbol)}&scale=${encodeURIComponent(currentMrdiScale)}`);
                     const json = await res.json();
+                    if (requestId !== mrdiRequestId) return;   // 过期响应: 期间已有更新的加载请求
                     if (json.data) {
                         currentMrdiData = json.data;
                         const kData = json.data.all_kline_data?.[currentMrdiScale] || json.data.kline_data;
@@ -1961,20 +1955,20 @@ function bindMrdiEvents() {
  * 载入 MRDI 分析数据
  */
 async function loadMrdiAnalysis(symbol) {
+    const requestId = ++mrdiRequestId;
     try {
         const res = await fetch(`/api/index/analysis?symbol=${encodeURIComponent(symbol)}&scale=240`);
         const json = await res.json();
+        if (requestId !== mrdiRequestId) return;   // 过期响应: 用户已切换到其它指数/周期
         if (json.status !== "success" || !json.data) {
             console.warn("MRDI: 未能获取指数数据");
             return;
         }
         currentMrdiData = json.data;
 
-        // 更新时间
-        const now = new Date();
-        const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+        // 优先使用服务端研判时间戳; 缺失才退客户端本地时间
         const updateEl = document.getElementById("mrdiUpdateTime");
-        if (updateEl) updateEl.textContent = timeStr;
+        if (updateEl) updateEl.textContent = json.data.update_time || new Date().toLocaleString("zh-CN");
 
         // 计算 MRDI: 必须用完整日K(约250根)，kline_data 仅是图表截断的90根，
         // 在其上算 MACD/KDJ 预热不足且"近250日分位"名不副实
@@ -1985,19 +1979,26 @@ async function loadMrdiAnalysis(symbol) {
         const dirResult = calculateMultiTimeframeDirection(json.data);
         const cockpit = generateDecisionCockpit(mrdiResult, dirResult);
 
-        // 渲染所有区块
-        renderMrdiCockpit(cockpit, mrdiResult, dirResult);
-        renderMrdiSignalCard(mrdiResult);
-        renderMrdiScoreGrid(mrdiResult);
-        renderMrdiOperationCard(dirResult, cockpit);
-        renderMrdiDirectionCard(dirResult);
-        renderMrdiLevels(json.data.clustered_levels, kData);
-        renderMrdiConfirmCard(mrdiResult, dirResult);
-        renderMrdiMaturityGrid(mrdiResult, dirResult);
-        renderMrdiLadder(mrdiResult, dirResult);
-        renderMrdiEnvCard(mrdiResult, kData);
-        const chartKData = json.data.all_kline_data?.["240"] || kData;
-        renderMrdiTechChart(chartKData, json.data.clustered_levels);
+        // 逐块渲染: 单个区块异常不影响其余区块 (防御性隔离, 避免整面板被一次渲染错误打断)
+        const renders = [
+            ["cockpit", () => renderMrdiCockpit(cockpit, mrdiResult, dirResult)],
+            ["signal", () => renderMrdiSignalCard(mrdiResult)],
+            ["scoreGrid", () => renderMrdiScoreGrid(mrdiResult)],
+            ["operation", () => renderMrdiOperationCard(dirResult, cockpit)],
+            ["direction", () => renderMrdiDirectionCard(dirResult)],
+            ["levels", () => renderMrdiLevels(json.data.clustered_levels, kData)],
+            ["confirm", () => renderMrdiConfirmCard(mrdiResult, dirResult)],
+            ["maturity", () => renderMrdiMaturityGrid(mrdiResult, dirResult)],
+            ["ladder", () => renderMrdiLadder(mrdiResult, dirResult)],
+            ["env", () => renderMrdiEnvCard(mrdiResult, kData)],
+            ["techChart", () => {
+                const chartKData = json.data.all_kline_data?.["240"] || kData;
+                renderMrdiTechChart(chartKData, json.data.clustered_levels);
+            }],
+        ];
+        for (const [name, fn] of renders) {
+            try { fn(); } catch (err) { console.warn("MRDI render failed:", name, err); }
+        }
 
         // 数据状态
         const stateEl = document.getElementById("mrdiDataState");
@@ -2370,8 +2371,13 @@ function renderMrdiCockpit(cockpit, mrdi, dir) {
     setT("mrdiChangeLabel", mrdi.chg5d != null ? `近5日涨跌 ${mrdi.chg5d > 0 ? '+' : ''}${mrdi.chg5d.toFixed(2)}%，连续${mrdi.consecutiveDown > 0 ? '下跌' + mrdi.consecutiveDown + '日' : '上涨' + mrdi.consecutiveUp + '日'}` : "数据积累中");
 
     // 关键关口
-    setT("mrdiKeyLevel", `MA20 乖离 ${mrdi.deviation > 0 ? '+' : ''}${mrdi.deviation.toFixed(2)}%`);
-    setT("mrdiKeyLevelDetail", mrdi.deviation < -3 ? "价格显著低于MA20，接近潜在支撑区" : mrdi.deviation > 3 ? "价格显著高于MA20，接近潜在压力区" : "价格位于MA20附近，中性区域");
+    setT("mrdiKeyLevel", mrdi.deviation != null && Number.isFinite(mrdi.deviation)
+        ? `MA20 乖离 ${mrdi.deviation > 0 ? '+' : ''}${mrdi.deviation.toFixed(2)}%`
+        : "MA20 乖离 数据积累中");
+    setT("mrdiKeyLevelDetail", mrdi.deviation == null
+        ? "数据不足，暂无法计算乖离"
+        : (mrdi.deviation < -3 ? "价格显著低于MA20，接近潜在支撑区"
+            : mrdi.deviation > 3 ? "价格显著高于MA20，接近潜在压力区" : "价格位于MA20附近，中性区域"));
 }
 
 function renderMrdiSignalCard(mrdi) {
@@ -2477,9 +2483,10 @@ function renderMrdiDirectionCard(dir) {
 
 function renderMrdiLevels(levels, kData) {
     if (!levels) return;
-    const price = kData?.length > 0 ? kData[kData.length - 1].close : 0;
+    const price = kData?.length > 0 ? Number(kData[kData.length - 1].close) : 0;
+    const priceOk = Number.isFinite(price) && price > 0;
     const setT = (id, text) => { const e = document.getElementById(id); if (e) e.textContent = text; };
-    setT("mrdiLevelsPrice", price.toFixed(2));
+    setT("mrdiLevelsPrice", priceOk ? price.toFixed(2) : "--");
     setT("mrdiLevelsPriceTime", `最近收盘`);
     setT("mrdiLevelsStatus", levels.supports || levels.resistances ? "已计算" : "数据不足");
 
@@ -2489,7 +2496,7 @@ function renderMrdiLevels(levels, kData) {
         resList.innerHTML = levels.resistances.slice(0, 3).map(r => `
             <div class="mrdi-level-item">
                 <span class="level-price">${r.center_price.toFixed(2)}</span>
-                <span class="level-meta">距离 ${((r.center_price - price) / price * 100).toFixed(1)}%</span>
+                <span class="level-meta">距离 ${priceOk ? ((r.center_price - price) / price * 100).toFixed(1) : '--'}%</span>
                 <span class="level-strength ${r.stars >= 4 ? 'core' : 'strong'}">${r.stars >= 4 ? '核心区' : '强区'} ⭐${r.stars}</span>
             </div>
         `).join("");
@@ -2501,7 +2508,7 @@ function renderMrdiLevels(levels, kData) {
         supList.innerHTML = levels.supports.slice(0, 3).map(s => `
             <div class="mrdi-level-item">
                 <span class="level-price">${s.center_price.toFixed(2)}</span>
-                <span class="level-meta">距离 ${((s.center_price - price) / price * 100).toFixed(1)}%</span>
+                <span class="level-meta">距离 ${priceOk ? ((s.center_price - price) / price * 100).toFixed(1) : '--'}%</span>
                 <span class="level-strength ${s.stars >= 4 ? 'core' : 'strong'}">${s.stars >= 4 ? '核心区' : '强区'} ⭐${s.stars}</span>
             </div>
         `).join("");
@@ -2949,8 +2956,10 @@ function renderNewsCard(item) {
     const regions = (item.regions && item.regions.length ? item.regions : [item.region || "cn"])
         .map(r => `<span class="news-region-tag">${r === "foreign" ? "外国" : "中国"}</span>`).join("");
     const shownTitle = item.title_zh || item.title || "";
-    const titleHtml = item.url
-        ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shownTitle)}</a>`
+    // 仅放行 http/https: 上游聚合的 url 不通过协议白名单则不渲染为链接 (二阶注入防护)
+    const safeUrl = item.url && /^https?:\/\//i.test(String(item.url)) ? String(item.url) : null;
+    const titleHtml = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(shownTitle)}</a>`
         : escapeHtml(shownTitle);
     const also = (item.also_reported_by || []).filter(Boolean);
     const timeText = newsRelTime(item.published_ts, item.published_at);
