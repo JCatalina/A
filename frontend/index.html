@@ -1,18 +1,29 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>A股规则筛选技术指标与多维支撑压力位量化分析系统</title>
-    <!-- Google Fonts 现代金融字体 -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
-    <!-- ECharts -->
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.6.6">
+    <!-- Google Fonts 现代金融字体（非阻塞异步加载，避免海外 CDN 卡顿导致白屏） -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+        rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+        <link
+            href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap"
+            rel="stylesheet">
+    </noscript>
+    <!-- ECharts（本地静态资源，零外部网络阻塞） -->
+    <script src="/static/vendor/echarts.min.js?v=5.5.0"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+        media="print" onload="this.media='all'">
+    <noscript>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    </noscript>
+    <link rel="stylesheet" href="/static/style.css?v=3.8.4">
 </head>
+
 <body>
     <div class="app-container">
         <!-- 顶部导航与大盘指数条 -->
@@ -37,6 +48,7 @@
                     <button class="nav-tab" id="tabReviewView" data-target="reviewWorkspace">📋 复盘日报</button>
                     <button class="nav-tab" id="tabFocusView" data-target="focusWorkspace">🌅 明日重点</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
+                    <button class="nav-tab" id="tabGuideView" data-target="guideWorkspace">📚 专业解说</button>
                 </div>
             </div>
 
@@ -48,7 +60,8 @@
             <div class="header-right">
                 <!-- 股票搜索框 -->
                 <div class="search-box-wrapper" id="headerSearchWrapper">
-                    <input type="text" id="stockSearchInput" placeholder="输入代码 / 拼音 (如 600519, 宁德时代)..." autocomplete="off">
+                    <input type="text" id="stockSearchInput" placeholder="输入代码 / 拼音 (如 600519, 宁德时代)..."
+                        autocomplete="off">
                     <button class="search-btn" id="searchBtn">🔍 检索分析</button>
                     <div class="search-dropdown" id="searchDropdown"></div>
                 </div>
@@ -73,7 +86,7 @@
 
         <!-- 主内容工作区 1: 个股看板 (左右双分栏) -->
         <main class="main-workspace" id="stockWorkspace" style="display: none;">
-            
+
             <!-- 左侧核心分析看板 (占 70% 宽) -->
             <section class="left-chart-panel">
                 <!-- 个股主状态卡片 -->
@@ -114,10 +127,14 @@
                         <button class="tab-btn" data-period="weekly">周K线 (中线大势)</button>
                     </div>
                     <div class="indicator-layers-group">
-                        <label class="layer-checkbox"><input type="checkbox" id="layerSupport" checked> <span>🟢 强支撑带(S1-S3)</span></label>
-                        <label class="layer-checkbox"><input type="checkbox" id="layerResistance" checked> <span>🔴 强压力带(R1-R3)</span></label>
-                        <label class="layer-checkbox"><input type="checkbox" id="layerBoll" checked> <span>布林通道</span></label>
-                        <label class="layer-checkbox"><input type="checkbox" id="layerChips" checked> <span>右侧筹码直方图</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerSupport" checked> <span>🟢
+                                强支撑带(S1-S3)</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerResistance" checked> <span>🔴
+                                强压力带(R1-R3)</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerBoll" checked>
+                            <span>布林通道</span></label>
+                        <label class="layer-checkbox"><input type="checkbox" id="layerChips" checked>
+                            <span>右侧筹码直方图</span></label>
                     </div>
                     <div class="subchart-toggle-group">
                         <span class="sub-label">副图:</span>
@@ -149,7 +166,7 @@
 
             <!-- 右侧决策与智能选股面板 (占 30% 宽) -->
             <aside class="right-decision-panel">
-                
+
                 <!-- 1. AI与量化走势概率预测罗盘 -->
                 <div class="glass-card prediction-compass-card">
                     <div class="card-header">
@@ -164,7 +181,8 @@
                             <div class="prob-score-center">
                                 <span class="prob-number" id="bullishProbNum">--</span>
                                 <span class="prob-unit">分</span>
-                                <span class="prob-subtext" title="0–100分技术规则评分，尚未校准为概率；旧字段仅作评分兼容，不代表未来收益">多头评分（未校准）</span>
+                                <span class="prob-subtext"
+                                    title="0–100分技术规则评分，尚未校准为概率；旧字段仅作评分兼容，不代表未来收益">多头评分（未校准）</span>
                             </div>
                         </div>
 
@@ -180,7 +198,8 @@
 
                     <!-- 历史回测胜率对比栏 -->
                     <div class="historical-backtest-box">
-                        <div class="ht-title" title="单股样本内价格路径描述，未完整建模交易执行；旧报告不适用于新版评分，不代表未来胜率">📊 历史相似形态命中率（样本内 · 非可交易回测）：</div>
+                        <div class="ht-title" title="单股样本内价格路径描述，未完整建模交易执行；旧报告不适用于新版评分，不代表未来胜率">📊 历史相似形态命中率（样本内 ·
+                            非可交易回测）：</div>
                         <div class="ht-grid">
                             <div class="ht-col">
                                 <span class="ht-lbl">5日历史命中率</span>
@@ -234,15 +253,18 @@
                         </div>
                         <div class="plan-row">
                             <span class="plan-label">🚀 目标止盈位 (R1):</span>
-                            <span class="plan-val font-mono cyan" id="planTp1">-- (<span id="planTp1Gain">--%</span>)</span>
+                            <span class="plan-val font-mono cyan" id="planTp1">-- (<span
+                                    id="planTp1Gain">--%</span>)</span>
                         </div>
                         <div class="plan-row">
                             <span class="plan-label">🛡️ 极限防守止损 (S1):</span>
-                            <span class="plan-val font-mono red" id="planSl">-- (<span id="planSlRisk">--%</span>)</span>
+                            <span class="plan-val font-mono red" id="planSl">-- (<span
+                                    id="planSlRisk">--%</span>)</span>
                         </div>
                         <div class="plan-row divider">
                             <span class="plan-label">⚖️ 期望盈亏比 (R:R):</span>
-                            <span class="plan-val highlight-gold" id="planRr">-- : 1 (<span id="planRrQuality">--</span>)</span>
+                            <span class="plan-val highlight-gold" id="planRr">-- : 1 (<span
+                                    id="planRrQuality">--</span>)</span>
                         </div>
                         <div class="plan-row">
                             <span class="plan-label">⏱️ 建议持仓周期:</span>
@@ -257,6 +279,9 @@
                         <span class="header-badge gold">SCREENER</span>
                         <h2>规则筛选选股雷达池</h2>
                     </div>
+
+                    <!-- 全局环境联动提示条 (v3.8.0: 同步大周期 + 小周期共振 + 情绪闸门) -->
+                    <div class="screener-env-bar" id="screenerEnvBar" style="display: none;"></div>
 
                     <!-- 策略切换标签 -->
                     <div class="screener-tabs">
@@ -278,151 +303,242 @@
 
         <!-- 主内容工作区 2: 大盘多周期指数研判 (Macro Index Workspace) -->
         <main class="index-macro-workspace" id="indexWorkspace">
-            
-            <!-- 顶部指数选择胶囊栏 -->
-            <div class="macro-index-nav">
-                <div class="index-capsule-tabs" id="indexCapsuleTabs">
-                    <button class="index-capsule-btn active" data-symbol="sh000001">📊 上证指数</button>
-                    <button class="index-capsule-btn" data-symbol="sz399006">🚀 创业板指</button>
-                    <button class="index-capsule-btn" data-symbol="sh000688">⚙️ 科创50</button>
-                    <button class="index-capsule-btn" data-symbol="sz399001">📈 深证成指</button>
+            <!-- 二级子视图切换栏 (v3.8.0) -->
+            <div class="macro-subview-bar" id="macroSubviewBar">
+                <div class="macro-subview-tabs">
+                    <button type="button" class="macro-subview-btn active" id="subTabSingleMacro"
+                        data-macro-subview="single">📊 单指数多周期</button>
+                    <button type="button" class="macro-subview-btn" id="subTabResonance" data-macro-subview="resonance">
+                        ⚡ 六指数小周期共振
+                        <span class="subview-phase-pill phase-none" id="subTabResonanceBadge">同步中</span>
+                    </button>
                 </div>
-                <div class="index-status-summary-tag" id="macroIndexStatusTag">
-                    <span class="idx-name" id="macroIndexName">上证指数</span>
-                    <span class="idx-price" id="macroIndexPrice">--</span>
-                    <span class="idx-chg" id="macroIndexChg">--%</span>
-                    <span class="idx-sub" id="macroIndexDesc">A股核心风向标/大盘主板</span>
+                <span class="macro-subview-tip">上证/深成/创指/科创50/中证1000/国证2000 × 15m/30m/60m 熊市超短反抽共振雷达</span>
+            </div>
+
+            <div id="macroSingleView" class="macro-single-view">
+                <!-- 顶部指数选择胶囊栏 -->
+                <div class="macro-index-nav">
+                    <div class="index-capsule-tabs" id="indexCapsuleTabs">
+                        <button class="index-capsule-btn active" data-symbol="sh000001">📊 上证指数</button>
+                        <button class="index-capsule-btn" data-symbol="sz399006">🚀 创业板指</button>
+                        <button class="index-capsule-btn" data-symbol="sh000688">⚙️ 科创50</button>
+                        <button class="index-capsule-btn" data-symbol="sz399001">📈 深证成指</button>
+                    </div>
+                    <div class="index-status-summary-tag" id="macroIndexStatusTag">
+                        <span class="idx-name" id="macroIndexName">上证指数</span>
+                        <span class="idx-price" id="macroIndexPrice">--</span>
+                        <span class="idx-chg" id="macroIndexChg">--%</span>
+                        <span class="idx-sub" id="macroIndexDesc">A股核心风向标/大盘主板</span>
+                    </div>
+                </div>
+
+                <!-- 大盘10日波动穿越概率 (v3 波动率条件化模型) -->
+                <div class="glass-card ice-prob-card" id="iceProbCard">
+                    <div class="card-header">
+                        <span class="header-badge cyan">ICE</span>
+                        <h2>大盘10日反弹概率</h2>
+                        <span class="header-tip"><span id="iceIndexName">上证指数</span> · 波动率条件化 · 非预测承诺 · 更新 <span
+                                id="iceUpdateTime">--</span></span>
+                    </div>
+                    <div class="ice-body">
+                        <div class="ice-gauge-block">
+                            <div class="ice-prob-big" id="iceProbNum">--</div>
+                            <div class="ice-prob-unit">%</div>
+                            <div class="ice-prob-lab">10交易日涨幅 ≥ +2.5% 的概率</div>
+                            <div class="ice-ci" id="iceSymmetry"></div>
+                            <div class="ice-ci" id="iceCI"></div>
+                            <div class="ice-lift" id="iceLift"></div>
+                        </div>
+                        <div class="ice-detail-block">
+                            <div class="ice-score-row">
+                                <span class="ice-lbl">冰点分</span>
+                                <div class="ice-score-track">
+                                    <div class="ice-score-fill" id="iceScoreFill" style="width:0%"></div>
+                                </div>
+                                <span class="ice-score-val" id="iceScoreVal">--</span>
+                            </div>
+                            <div class="ice-ci" id="iceBand"></div>
+                            <div class="ice-factors" id="iceFactors"></div>
+                            <div class="ice-sentiment" id="iceSentiment"></div>
+                            <div class="ice-ci" id="iceValidation" role="status"></div>
+                            <div class="ice-ci" id="iceDisclaimer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 核心结论大卡片 (与用户截图对齐) -->
+                <div class="macro-conclusion-card">
+                    <div class="card-header-row">
+                        <div class="header-left-title">
+                            <span class="dot-indicator"></span>
+                            <h2>◎ 核心研判结论</h2>
+                        </div>
+                        <div class="header-right-meta" id="macroUpdateMeta">当前数据实时多周期同步</div>
+                    </div>
+
+                    <!-- 正式操作许可大文字框 -->
+                    <div class="op-license-box">
+                        <div class="op-license-sub">正式操作许可</div>
+                        <div class="op-license-main" id="opLicenseMain">大方向不明，先观望</div>
+                        <div class="op-license-desc" id="opLicenseDesc">完整周线当前方向不明确；短周期信号不能代替大方向，当前建议先观望。</div>
+                        <div class="op-license-pos" id="opLicensePos">
+                            <span>建议总体仓位:</span>
+                            <strong class="highlight-gold" id="opPosText">30% ~ 50%</strong>
+                        </div>
+                        <div class="resonance-inline-link" id="macroResonanceLink" style="display: none;"></div>
+                    </div>
+
+                    <!-- 结论四维度解析条目 (卡片矩阵) -->
+                    <div class="conclusion-points-grid">
+                        <div class="point-card">
+                            <div class="point-header">
+                                <span class="point-badge">大级别方向 · 已完成周期</span>
+                                <h3 id="macroPoint1Title">中期方向暂不明确</h3>
+                            </div>
+                            <p class="point-text" id="macroPoint1Content">
+                                最近完整周线处于中枢震荡阶段，周线均线未见大级别极端发散。大周期位置辅助判断为周线中性，不单独触发激进买卖。</p>
+                        </div>
+
+                        <div class="point-card">
+                            <div class="point-header">
+                                <span class="point-badge">当前时点 · 日线与30/60分钟</span>
+                                <h3 id="macroPoint2Title">30分钟和60分钟仍偏强，关注日线确认</h3>
+                            </div>
+                            <p class="point-text" id="macroPoint2Content">短周期分时偏强但尚未完全升级为日线大级别反弹确认，当前不把分时脉冲解释为大级别反转。</p>
+                        </div>
+
+                        <div class="point-card">
+                            <div class="point-header">
+                                <span class="point-badge">相较上一收盘</span>
+                                <h3 id="macroPoint3Title">方向分较上一交易日微幅改善</h3>
+                            </div>
+                            <p class="point-text" id="macroPoint3Content">短线价格斜率与动能略有企稳迹象，形成中线未突破前不改变正式操作许可。</p>
+                        </div>
+
+                        <div class="point-card highlight-card">
+                            <div class="point-header">
+                                <span class="point-badge green">下一步等待与防守底线</span>
+                                <h3 id="macroPoint4Title">等待大级别放量突破或回踩企稳</h3>
+                            </div>
+                            <p class="point-text" id="macroPoint4Content">完整周线重新转为偏上之前，即使分钟线反弹也只按弱势修复对待；严格防守下方关键支撑带。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 大盘多维支撑位与压力位矩阵 -->
+                <div class="macro-levels-banner">
+                    <div class="macro-levels-col support">
+                        <div class="macro-level-title">🟢 大盘核心支撑价格带 (下探低吸/防守线)</div>
+                        <div class="macro-level-items" id="macroSupportItems">
+                            <!-- 动态填充支撑 -->
+                        </div>
+                    </div>
+                    <div class="macro-levels-col resistance">
+                        <div class="macro-level-title">🔴 大盘核心压力价格带 (冲高止盈/遇阻区)</div>
+                        <div class="macro-level-items" id="macroResistanceItems">
+                            <!-- 动态填充压力 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 多周期研判对比四联卡片 (30分钟 / 60分钟 / 日线 / 周线) -->
+                <div class="periods-quad-container">
+                    <div class="section-title-bar">
+                        <span class="title-icon">📊</span>
+                        <h2>指数多周期结构剖析与理解矩阵</h2>
+                        <span class="title-sub">（30分钟捕捉超短节奏，60分钟确认盘中延续，日线决定波段，周线定战略仓位）</span>
+                    </div>
+                    <div class="periods-quad-grid" id="periodsQuadGrid">
+                        <!-- 动态生成 30分钟、60分钟、日线、周线 卡片 -->
+                    </div>
+                </div>
+
+                <!-- 大盘K线图表视窗 -->
+                <div class="macro-chart-box">
+                    <div class="macro-chart-toolbar">
+                        <span class="m-chart-title">大盘指数多周期走势图</span>
+                        <div class="m-period-btns">
+                            <button class="m-btn active" data-scale="240">日K线</button>
+                            <button class="m-btn" data-scale="1200">周K线</button>
+                            <button class="m-btn" data-scale="60">60分钟</button>
+                            <button class="m-btn" data-scale="30">30分钟</button>
+                        </div>
+                    </div>
+                    <div class="macro-kline-container" id="macroKlineChart"
+                        style="width: 100%; height: 480px; min-height: 480px;"></div>
                 </div>
             </div>
 
-            <!-- 大盘10日波动穿越概率 (v3 波动率条件化模型) -->
-            <div class="glass-card ice-prob-card" id="iceProbCard">
-                <div class="card-header">
-                    <span class="header-badge cyan">ICE</span>
-                    <h2>大盘10日反弹概率</h2>
-                    <span class="header-tip"><span id="iceIndexName">上证指数</span> · 波动率条件化 · 非预测承诺 · 更新 <span id="iceUpdateTime">--</span></span>
-                </div>
-                <div class="ice-body">
-                    <div class="ice-gauge-block">
-                        <div class="ice-prob-big" id="iceProbNum">--</div>
-                        <div class="ice-prob-unit">%</div>
-                        <div class="ice-prob-lab">10交易日涨幅 ≥ +2.5% 的概率</div>
-                        <div class="ice-ci" id="iceSymmetry"></div>
-                        <div class="ice-ci" id="iceCI"></div>
-                        <div class="ice-lift" id="iceLift"></div>
+            <!-- 二级子视图 2: 六指数小周期共振低点博弈雷达 (v3.8.0) -->
+            <div id="macroResonanceView" class="resonance-view" style="display: none;">
+                <div class="resonance-head-bar">
+                    <div>
+                        <h2 class="resonance-title">⚡ 六指数小周期共振低点博弈雷达</h2>
+                        <p class="resonance-sub">两阶段递进（左侧冰点预警 → 右侧拐头确认）· 中小盘硬约束 · 权重护盘假底过滤 · 跌停扩散情绪否决</p>
                     </div>
-                    <div class="ice-detail-block">
-                        <div class="ice-score-row">
-                            <span class="ice-lbl">冰点分</span>
-                            <div class="ice-score-track"><div class="ice-score-fill" id="iceScoreFill" style="width:0%"></div></div>
-                            <span class="ice-score-val" id="iceScoreVal">--</span>
+                    <div class="resonance-head-right">
+                        <span class="resonance-time" id="resonanceUpdateTime">同步中…</span>
+                        <button type="button" class="report-refresh-btn" id="resonanceRefreshBtn">↻ 刷新共振</button>
+                    </div>
+                </div>
+                <div class="resonance-alert-bar" id="resonanceAlertBar" style="display: none;"></div>
+                <div class="resonance-hero-grid" id="resonanceHero">
+                    <div class="screener-loading">正在扫描六指数 15m/30m/60m 小周期共振结构…</div>
+                </div>
+                <section class="resonance-panel-card">
+                    <div class="resonance-panel-head">
+                        <h3>📐 六指数 × 三级小周期热力矩阵（15m / 30m / 60m）</h3>
+                        <span class="resonance-panel-sub">拐头确认 = 超跌/底背离后右侧拐头且守 MA5；超跌预警 = 左侧区域不接飞刀</span>
+                    </div>
+                    <div class="report-table-wrap" id="resonanceMatrix"></div>
+                </section>
+
+                <!-- 🎯 反抽主攻题材与核心标的池 (v3.8.2) -->
+                <section class="resonance-panel-card" id="reboundPicksSection">
+                    <div class="resonance-panel-head">
+                        <div>
+                            <h3>🎯 反抽主攻题材与核心标的池（买什么 · 对照指数共振点捕捉先手资金）</h3>
+                            <span class="resonance-panel-sub">申万二级真实主攻行业 × 1 分钟分时拉升启动时间点，过滤 ST/僵尸股与同族重复概念</span>
                         </div>
-                        <div class="ice-ci" id="iceBand"></div>
-                        <div class="ice-factors" id="iceFactors"></div>
-                        <div class="ice-sentiment" id="iceSentiment"></div>
-                        <div class="ice-ci" id="iceValidation" role="status"></div>
-                        <div class="ice-ci" id="iceDisclaimer"></div>
                     </div>
-                </div>
-            </div>
-
-            <!-- 核心结论大卡片 (与用户截图对齐) -->
-            <div class="macro-conclusion-card">
-                <div class="card-header-row">
-                    <div class="header-left-title">
-                        <span class="dot-indicator"></span>
-                        <h2>◎ 核心研判结论</h2>
+                    <div class="rebound-style-banner" id="reboundStyleBanner" style="display: none;"></div>
+                    <div class="rebound-themes-grid" id="reboundThemesGrid">
+                        <div class="screener-loading">正在聚合申万二级主攻方向与成分股…</div>
                     </div>
-                    <div class="header-right-meta" id="macroUpdateMeta">当前数据实时多周期同步</div>
-                </div>
-
-                <!-- 正式操作许可大文字框 -->
-                <div class="op-license-box">
-                    <div class="op-license-sub">正式操作许可</div>
-                    <div class="op-license-main" id="opLicenseMain">大方向不明，先观望</div>
-                    <div class="op-license-desc" id="opLicenseDesc">完整周线当前方向不明确；短周期信号不能代替大方向，当前建议先观望。</div>
-                    <div class="op-license-pos" id="opLicensePos">
-                        <span>建议总体仓位:</span>
-                        <strong class="highlight-gold" id="opPosText">30% ~ 50%</strong>
-                    </div>
-                </div>
-
-                <!-- 结论四维度解析条目 (卡片矩阵) -->
-                <div class="conclusion-points-grid">
-                    <div class="point-card">
-                        <div class="point-header">
-                            <span class="point-badge">大级别方向 · 已完成周期</span>
-                            <h3 id="macroPoint1Title">中期方向暂不明确</h3>
+                    <div class="rebound-picks-table-box">
+                        <div class="rebound-picks-head">
+                            <h4 class="rebound-sub-title" id="reboundTopPicksTitle">📌 跨主攻题材核心观察标的池（按角色独立精选 ≥20 只 · 点击标的看交易计划）</h4>
+                            <div class="rebound-role-tabs" id="reboundRoleTabs">
+                                <button type="button" class="rebound-role-btn active" data-pick-role="all">全部精选</button>
+                                <button type="button" class="rebound-role-btn" data-pick-role="first_mover">🚀 先手共振首攻</button>
+                                <button type="button" class="rebound-role-btn" data-pick-role="trend_pullback">🏛️ 强趋势低吸</button>
+                                <button type="button" class="rebound-role-btn" data-pick-role="capacity_leader">🔥 容量趋势中军</button>
+                                <button type="button" class="rebound-role-btn" data-pick-role="oversold_bounce">⚡ 超跌弹性反弹</button>
+                            </div>
                         </div>
-                        <p class="point-text" id="macroPoint1Content">最近完整周线处于中枢震荡阶段，周线均线未见大级别极端发散。大周期位置辅助判断为周线中性，不单独触发激进买卖。</p>
+                        <div class="rebound-scroll-hint">← 左右滑动查看完整指标 · 上下滚动浏览全部标的 →</div>
+                        <div class="report-table-wrap rebound-picks-scroll" id="reboundTopPicks"></div>
                     </div>
+                </section>
 
-                    <div class="point-card">
-                        <div class="point-header">
-                            <span class="point-badge">当前时点 · 日线与30/60分钟</span>
-                            <h3 id="macroPoint2Title">30分钟和60分钟仍偏强，关注日线确认</h3>
-                        </div>
-                        <p class="point-text" id="macroPoint2Content">短周期分时偏强但尚未完全升级为日线大级别反弹确认，当前不把分时脉冲解释为大级别反转。</p>
+                <!-- 📊 10 年历史反抽选股点时间回测验证 (v3.8.1) -->
+                <section class="resonance-panel-card">
+                    <div class="resonance-panel-head">
+                        <h3>📊 10 年活跃股点时间（Point-in-Time）反抽选股历史回测对照</h3>
+                        <span class="resonance-panel-sub">基于活跃股历史面板实证检验（扣 0.25% 双边成本 · 剔除涨停买不进与停牌），对比哪类打法更有超额</span>
                     </div>
+                    <div class="rebound-bt-grid" id="reboundPicksBacktest"></div>
+                </section>
 
-                    <div class="point-card">
-                        <div class="point-header">
-                            <span class="point-badge">相较上一收盘</span>
-                            <h3 id="macroPoint3Title">方向分较上一交易日微幅改善</h3>
-                        </div>
-                        <p class="point-text" id="macroPoint3Content">短线价格斜率与动能略有企稳迹象，形成中线未突破前不改变正式操作许可。</p>
+                <section class="resonance-panel-card">
+                    <div class="resonance-panel-head">
+                        <h3>🧪 点时间（Point-in-Time）历史回测统计（无前视泄漏）</h3>
+                        <span class="resonance-panel-sub">六指数等权篮子 · 信号后冷却 2 个交易日 · 样本 &lt; 5 诚实标「样本不足」</span>
                     </div>
-
-                    <div class="point-card highlight-card">
-                        <div class="point-header">
-                            <span class="point-badge green">下一步等待与防守底线</span>
-                            <h3 id="macroPoint4Title">等待大级别放量突破或回踩企稳</h3>
-                        </div>
-                        <p class="point-text" id="macroPoint4Content">完整周线重新转为偏上之前，即使分钟线反弹也只按弱势修复对待；严格防守下方关键支撑带。</p>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 大盘多维支撑位与压力位矩阵 -->
-            <div class="macro-levels-banner">
-                <div class="macro-levels-col support">
-                    <div class="macro-level-title">🟢 大盘核心支撑价格带 (下探低吸/防守线)</div>
-                    <div class="macro-level-items" id="macroSupportItems">
-                        <!-- 动态填充支撑 -->
-                    </div>
-                </div>
-                <div class="macro-levels-col resistance">
-                    <div class="macro-level-title">🔴 大盘核心压力价格带 (冲高止盈/遇阻区)</div>
-                    <div class="macro-level-items" id="macroResistanceItems">
-                        <!-- 动态填充压力 -->
-                    </div>
-                </div>
-            </div>
-
-            <!-- 多周期研判对比四联卡片 (30分钟 / 60分钟 / 日线 / 周线) -->
-            <div class="periods-quad-container">
-                <div class="section-title-bar">
-                    <span class="title-icon">📊</span>
-                    <h2>指数多周期结构剖析与理解矩阵</h2>
-                    <span class="title-sub">（30分钟捕捉超短节奏，60分钟确认盘中延续，日线决定波段，周线定战略仓位）</span>
-                </div>
-                <div class="periods-quad-grid" id="periodsQuadGrid">
-                    <!-- 动态生成 30分钟、60分钟、日线、周线 卡片 -->
-                </div>
-            </div>
-
-            <!-- 大盘K线图表视窗 -->
-            <div class="macro-chart-box">
-                <div class="macro-chart-toolbar">
-                    <span class="m-chart-title">大盘指数多周期走势图</span>
-                    <div class="m-period-btns">
-                        <button class="m-btn active" data-scale="240">日K线</button>
-                        <button class="m-btn" data-scale="1200">周K线</button>
-                        <button class="m-btn" data-scale="60">60分钟</button>
-                        <button class="m-btn" data-scale="30">30分钟</button>
-                    </div>
-                </div>
-                <div class="macro-kline-container" id="macroKlineChart" style="width: 100%; height: 480px; min-height: 480px;"></div>
+                    <div class="resonance-backtest-grid" id="resonanceBacktest"></div>
+                </section>
+                <p class="resonance-disclaimer" id="resonanceDisclaimer"></p>
             </div>
 
         </main>
@@ -554,7 +670,8 @@
                         <button class="m-btn" data-scale="month">月K线</button>
                     </div>
                 </div>
-                <div class="macro-kline-container" id="usMacroKlineChart" style="width: 100%; height: 480px; min-height: 480px;"></div>
+                <div class="macro-kline-container" id="usMacroKlineChart"
+                    style="width: 100%; height: 480px; min-height: 480px;"></div>
             </div>
 
         </main>
@@ -679,7 +796,8 @@
                         <div class="mrdi-score-head">
                             <span class="mrdi-score-name">
                                 <i class="fa-solid fa-arrow-trend-up"></i>
-                                <span>反弹需求</span> <abbr title="反弹需求：技术超跌、三指数共同超跌、5日跌幅极端和缩量超跌共同构成的向上修复条件；结合历史分位解读。">RD</abbr>
+                                <span>反弹需求</span> <abbr
+                                    title="反弹需求：技术超跌、三指数共同超跌、5日跌幅极端和缩量超跌共同构成的向上修复条件；结合历史分位解读。">RD</abbr>
                             </span>
                             <span class="mrdi-score-chip" id="mrdiRdChip">--</span>
                         </div>
@@ -692,7 +810,8 @@
                         <div class="mrdi-score-head">
                             <span class="mrdi-score-name">
                                 <i class="fa-solid fa-arrow-trend-down"></i>
-                                <span>回调压力</span> <abbr title="回调压力：技术超买、三指数共同超买、5日涨幅极端和缩量超买共同构成的回撤风险条件；结合历史分位解读。">CD</abbr>
+                                <span>回调压力</span> <abbr
+                                    title="回调压力：技术超买、三指数共同超买、5日涨幅极端和缩量超买共同构成的回撤风险条件；结合历史分位解读。">CD</abbr>
                             </span>
                             <span class="mrdi-score-chip" id="mrdiCdChip">--</span>
                         </div>
@@ -720,7 +839,8 @@
             <!-- ═══ 多周期操作许可 ═══ -->
             <article class="mrdi-operation-card tone-neutral" id="mrdiOperationCard">
                 <div class="mrdi-operation-main">
-                    <span class="mrdi-operation-eyebrow"><i class="fa-solid fa-person-walking-arrow-right"></i> 操作倾向</span>
+                    <span class="mrdi-operation-eyebrow"><i class="fa-solid fa-person-walking-arrow-right"></i>
+                        操作倾向</span>
                     <div class="mrdi-operation-title-row">
                         <strong id="mrdiOpLabel">等待操作层结果</strong>
                         <span class="mrdi-operation-risk waiting" id="mrdiOpRisk">等待数据</span>
@@ -869,7 +989,8 @@
             <!-- ═══ 冰点与修复环境 ═══ -->
             <article class="mrdi-env-card neutral" id="mrdiEnvCard">
                 <div class="mrdi-env-head">
-                    <div class="mrdi-env-title"><i class="fa-solid fa-snowflake"></i> 冰点与修复背景 <abbr title="独立观察项：指数急跌/回撤占综合冰点75%权重。">独立</abbr></div>
+                    <div class="mrdi-env-title"><i class="fa-solid fa-snowflake"></i> 冰点与修复背景 <abbr
+                            title="独立观察项：指数急跌/回撤占综合冰点75%权重。">独立</abbr></div>
                     <small id="mrdiEnvStatus">数据积累中</small>
                 </div>
                 <div class="mrdi-env-body">
@@ -895,7 +1016,8 @@
                         <button class="mrdi-tech-btn" data-mrdi-scale="30">30分钟</button>
                     </div>
                 </div>
-                <div class="mrdi-tech-chart-wrap" id="mrdiTechChart" style="width:100%;height:520px;min-height:520px;"></div>
+                <div class="mrdi-tech-chart-wrap" id="mrdiTechChart" style="width:100%;height:520px;min-height:520px;">
+                </div>
             </section>
 
             <!-- Footer -->
@@ -912,7 +1034,8 @@
                 <div>
                     <span class="news-eyebrow">NEWS · PLAIN-LANGUAGE MARKET IMPACT</span>
                     <h1 class="news-page-title">金融消息面</h1>
-                    <p class="news-page-desc">聚合财联社、华尔街见闻、东方财富、金十、CNBC/FT 等权威来源，按事件主体分中国/外国，自动去重并按重要度打分；每条附「大白话」解读——一句话结论、A股/美股/商品方向、利好利空板块、传导链与后续观察点。</p>
+                    <p class="news-page-desc">聚合财联社、华尔街见闻、东方财富、金十、CNBC/FT
+                        等权威来源，按事件主体分中国/外国，自动去重并按重要度打分；每条附「大白话」解读——一句话结论、A股/美股/商品方向、利好利空板块、传导链与后续观察点。</p>
                 </div>
                 <div class="news-live-status">
                     <span class="news-live-dot"></span>
@@ -955,7 +1078,8 @@
                         <button type="button" class="news-sort-btn" data-news-sort="importance">按重要度</button>
                     </div>
                     <div class="news-search-wrap">
-                        <input type="search" id="newsSearchInput" placeholder="搜索关键词，如 降息 / 中东 / CPI / 原油..." autocomplete="off">
+                        <input type="search" id="newsSearchInput" placeholder="搜索关键词，如 降息 / 中东 / CPI / 原油..."
+                            autocomplete="off">
                     </div>
                 </div>
             </div>
@@ -971,12 +1095,14 @@
 
             <footer class="news-footer">
                 <p>金融消息面 · 投教向通俗解读，不构成投资建议</p>
-                <small>解读默认由本地宏观传导规则引擎生成（识别否定、预期差、涨跌方向与事件主体）；配置 NEWS_AI_API_KEY 或 DEEPSEEK_API_KEY 后，重要消息会追加大模型精读。</small>
+                <small>解读默认由本地宏观传导规则引擎生成（识别否定、预期差、涨跌方向与事件主体）；配置 NEWS_AI_API_KEY 或 DEEPSEEK_API_KEY
+                    后，重要消息会追加大模型精读。</small>
             </footer>
         </main>
 
         <!-- 主内容工作区: A股盘中数据分析与情绪监控 (v3.5) -->
-        <main class="report-workspace report-red-green intraday-workspace" id="intradayWorkspace" style="display: none;">
+        <main class="report-workspace report-red-green intraday-workspace" id="intradayWorkspace"
+            style="display: none;">
             <section class="report-page-intro">
                 <div>
                     <span class="report-eyebrow">A-SHARE · INTRADAY SENTIMENT &amp; RISK GATE</span>
@@ -1187,9 +1313,68 @@
             </footer>
         </main>
 
+        <!-- 主内容工作区: 专业解说 & 小白上手指南 (v3.7) -->
+        <main class="report-workspace guide-workspace" id="guideWorkspace" style="display: none;">
+            <section class="report-page-intro">
+                <div>
+                    <span class="report-eyebrow">A-QUANT MASTER · BEGINNER TO PRO HANDBOOK</span>
+                    <h1 class="report-page-title">专业指标解说与快速上手指南</h1>
+                    <p class="report-page-desc">用大白话讲透系统全部 31 项核心指标：它从哪来、有什么用、专业交易员怎么看、哪些坑千万别踩——让金融小白也能快速看懂并上手整套系统。</p>
+                </div>
+                <div class="report-live-status">
+                    <span class="guide-count-badge" id="guideCountText">共 31 项指标</span>
+                </div>
+            </section>
+
+            <!-- 每日 4 步实战看盘流程 -->
+            <section class="guide-section">
+                <div class="guide-sec-head">
+                    <h2>🧭 普通人每日 3 分钟看盘 4 步流程（SOP）</h2>
+                    <span class="guide-sec-sub">点击每一步右侧入口，可直接跳到对应实战看板</span>
+                </div>
+                <div class="guide-sop-grid" id="guideSopGrid"></div>
+            </section>
+
+            <!-- 指标分类筛选与关键词检索 -->
+            <section class="guide-section">
+                <div class="guide-sec-head">
+                    <h2>📖 全系统指标百科（大白话 · 来源 · 用处 · 专业用法 · 避坑）</h2>
+                    <div class="guide-sec-head-right">
+                        <span class="guide-sec-sub">默认收起，点击任意指标卡片展开完整解说</span>
+                        <button type="button" class="report-refresh-btn guide-toggle-all-btn"
+                            id="guideToggleAllBtn">展开全部</button>
+                    </div>
+                </div>
+                <div class="guide-toolbar">
+                    <div class="guide-cat-tabs" id="guideCategoryTabs"></div>
+                    <div class="guide-search-wrap">
+                        <input type="search" id="guideSearchInput" placeholder="搜指标/关键词，如 封板率 / 溢价 / MACD / R:R / 北向..."
+                            autocomplete="off">
+                    </div>
+                </div>
+                <div class="guide-cards-grid" id="guideCardsGrid"></div>
+            </section>
+
+            <!-- 小白 6 条防踩坑铁律 -->
+            <section class="guide-section">
+                <div class="guide-sec-head">
+                    <h2>🚧 新手防踩坑 6 条铁律</h2>
+                    <span class="guide-sec-sub">先学会少亏钱、管住手，再谈稳定赚钱</span>
+                </div>
+                <div class="guide-pitfalls-grid" id="guidePitfallsGrid"></div>
+            </section>
+
+            <footer class="report-footer">
+                <p>A-QUANT MASTER · 系统指标与量化口径说明书（投教向，不构成任何投资建议）</p>
+                <small>所有评分与风控规则均为客观盘面状态描述，任何技术指标均存在失效场景，请始终严格执行止损纪律。</small>
+            </footer>
+        </main>
+
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=3.6.7"></script>
+    <script src="/static/guide_data.js?v=3.8.4"></script>
+    <script src="/static/app.js?v=3.8.4"></script>
 </body>
+
 </html>

@@ -8,6 +8,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from intraday_engine import (
+    _parse_qq_boards,
+    qq_multiday_to_trends,
     compute_turnover_comparison,
     parse_zdfenbu,
     summarize_limit_pools,
@@ -150,6 +152,26 @@ class TestLimitPoolsAndThemes(unittest.TestCase):
         # 光伏与光伏概念近义去重只保留一个
         self.assertEqual(sum(1 for n in atk_names if "光伏" in n), 1)
 
+    def test_qq_boards_unit_and_family_dedup(self):
+        qq_raw = [
+            {"code": "pt01801081", "name": "半导体", "stock_type": "BK-HY-2", "zdf": "15.23", "zljlr": "2329900", "turnover": "10000000", "lzg": {"code": "sh688", "name": "龙一", "zdf": "20.0"}},
+            {"code": "pt02021291", "name": "华为概念", "stock_type": "BK-GN", "zdf": "9.53", "zljlr": "4573200", "turnover": "20000000"},
+            {"code": "pt02031390", "name": "国家大基金持股", "stock_type": "BK-GN-FG", "zdf": "14.88", "zljlr": "999999", "turnover": "500000"},
+        ]
+        hy = _parse_qq_boards([qq_raw[0]], "行业")
+        self.assertAlmostEqual(hy[0]["net_yi"], 232.99)
+        self.assertAlmostEqual(hy[0]["net_ratio_pct"], 23.3)
+        gn = _parse_qq_boards(qq_raw[1:], "概念")
+        self.assertEqual([g["name"] for g in gn], ["华为概念"])  # BK-GN-FG 风格指数被剔除
+        c_in = [
+            {"kind": "概念", "name": "华为海思", "pct": 11.0, "net_yi": 120.0, "leader_pct": 20.0},
+            {"kind": "概念", "name": "华为概念", "pct": 9.5, "net_yi": 160.0, "leader_pct": 10.0},
+        ]
+        res = identify_main_attack(c_in, [], hy, [], [{"name": "半导体", "count": 10}])
+        atk = [x["name"] for x in res["main_attack"]]
+        self.assertEqual(atk[0], "半导体")
+        self.assertLessEqual(sum(1 for n in atk if "华为" in n), 1)
+
 
 class TestSentimentAndRiskGates(unittest.TestCase):
     @staticmethod
@@ -219,6 +241,41 @@ class TestSentimentAndRiskGates(unittest.TestCase):
         self.assertGreater(sc["score"], 0.0)
         self.assertLessEqual(sc["score"], 100.0)
         self.assertEqual(sc["used_dims"], 1)
+
+    def test_qq_multiday_to_trends_and_turnover_comparison(self):
+        # 构造昨日+今日两日腾讯 day/query 累计成交额(元), 测试差分还原与同刻对比
+        sh_days = [
+            {"date": "20261126", "data": [
+                "0930 3490.00 1000 50000000000.0",
+                "1030 3480.00 3000 150000000000.0",
+                "1500 3476.88 9000 500000000000.0",
+            ]},
+            {"date": "20261127", "data": [
+                "0930 3482.00 1200 60000000000.0",
+                "1030 3510.00 3600 180000000000.0",
+            ]},
+        ]
+        sz_days = [
+            {"date": "20261126", "data": [
+                "0930 10100.00 1000 50000000000.0",
+                "1030 10120.00 3000 150000000000.0",
+                "1500 10084.04 9000 500000000000.0",
+            ]},
+            {"date": "20261127", "data": [
+                "0930 10121.00 1200 60000000000.0",
+                "1030 10300.00 3600 180000000000.0",
+            ]},
+        ]
+        sh_tr = qq_multiday_to_trends(sh_days)
+        sz_tr = qq_multiday_to_trends(sz_days)
+        self.assertEqual(len(sh_tr), 5)
+        res = compute_turnover_comparison(sh_tr, sz_tr, "2026-11-27", "2026-11-26")
+        self.assertTrue(res["available"])
+        self.assertEqual(res["latest_time"], "10:30")
+        self.assertEqual(res["today_cum_yi"], 3600.0)
+        self.assertEqual(res["prev_same_time_yi"], 3000.0)
+        self.assertEqual(res["same_time_diff_yi"], 600.0)
+        self.assertGreater(len(res["series"]), 0)
 
 
 if __name__ == "__main__":

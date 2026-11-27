@@ -7,15 +7,17 @@ const elements = new Map();
 const element = id => {
     if (!elements.has(id)) elements.set(id, {
         textContent: '', innerText: '', innerHTML: '', className: '', title: '', style: {},
-        querySelectorAll: () => [], classList: { add() {}, remove() {} }
+        querySelectorAll: () => [], classList: { add() {}, remove() {}, toggle() {} }
     });
     return elements.get(id);
 };
 const context = vm.createContext({
     console, setTimeout, clearTimeout,
-    document: { addEventListener() {}, getElementById: element, querySelector: element },
+    document: { addEventListener() {}, getElementById: element, querySelector: element, querySelectorAll: () => [] },
     fetch: async () => { throw new Error('Network disabled in regression tests'); }
 });
+const guideSrc = fs.readFileSync(path.join(__dirname, 'guide_data.js'), 'utf8');
+vm.runInContext(guideSrc, context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8'), context);
 
 async function main() {
@@ -274,6 +276,156 @@ async function main() {
     assert.match(element('journalList').innerHTML, /内因原因检索/);
     assert.doesNotMatch(element('journalList').innerHTML, /undefined|NaN/);
 
-    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal and markup contracts');
+    // 专业解说 TAB 与指标科普知识库契约 (v3.7.0 / v3.7.2)
+    for (const id of ['tabGuideView', 'guideWorkspace', 'guideSopGrid', 'guideCategoryTabs',
+                      'guideSearchInput', 'guideCardsGrid', 'guidePitfallsGrid', 'guideCountText', 'guideToggleAllBtn']) {
+        assert.ok(html.includes(`id="${id}"`), `missing guide markup id=${id}`);
+    }
+    assert.ok(!guideSrc.includes('高胜率') && !guideSrc.includes('多头期望'));
+    const gd = vm.runInContext('GUIDE_DATA', context);
+    assert.ok(gd && Array.isArray(gd.indicators) && gd.indicators.length >= 25);
+    for (const ind of gd.indicators) {
+        assert.ok(ind.name && ind.plain && ind.source && ind.purpose && ind.proUsage && ind.pitfall,
+            `incomplete guide indicator ${ind.id}`);
+    }
+    assert.ok(typeof context.renderGuideWorkspace === 'function');
+    context.renderGuideWorkspace();
+    const cardsHtml = element('guideCardsGrid').innerHTML;
+    assert.doesNotMatch(cardsHtml, /guide-card is-expanded/);
+    assert.match(cardsHtml, /aria-expanded="false"/);
+    assert.match(cardsHtml, /class="guide-card-body"/);
+    assert.match(cardsHtml, /小白大白话/);
+    assert.match(cardsHtml, /数据与公式来源/);
+    assert.match(cardsHtml, /专业实战用法/);
+    assert.match(cardsHtml, /避坑与口径红线/);
+    assert.doesNotMatch(cardsHtml, /undefined|NaN/);
+    assert.doesNotMatch(element('guideSopGrid').innerHTML, /undefined|NaN/);
+    assert.ok(gd.indicators.length >= 31);
+
+    // 六指数小周期共振雷达与反抽主攻选股契约 (v3.8.0 / v3.8.1)
+    for (const id of ['macroSubviewBar', 'subTabSingleMacro', 'subTabResonance', 'subTabResonanceBadge',
+                      'macroSingleView', 'macroResonanceView', 'resonanceHero', 'resonanceMatrix',
+                      'resonanceBacktest', 'resonanceAlertBar', 'macroResonanceLink', 'screenerEnvBar',
+                      'reboundPicksSection', 'reboundStyleBanner', 'reboundThemesGrid',
+                      'reboundTopPicks', 'reboundPicksBacktest']) {
+        assert.ok(html.includes(`id="${id}"`), `missing resonance/picks markup id=${id}`);
+    }
+    assert.ok(typeof context.renderResonancePanel === 'function');
+    context.renderResonancePanel({
+        generated_at: '2026-11-27 15:00:00',
+        elapsed_sec: 1.2,
+        disclaimer: '仅作规则状态描述。',
+        summary: {
+            phase: 'confirm', phase_label: '右侧共振确认（可轻仓博弈）',
+            phase_desc: '中小盘与成长同步拐头', warn_count: 5, confirm_count: 4,
+            small_cap_in: true, warn_symbols: ['上证指数', '中证1000'], confirm_symbols: ['创业板指', '中证1000'],
+            fake_bottom: { flag: true, spread_pct: 1.4, message: '上证护盘而中小盘仍偏弱' },
+            reasons: [], rule: '左侧≥4指数超跌；右侧≥3指数拐头且含中小盘',
+        },
+        cycle: { mode: 'bear', label: '大周期偏空（逆势）', detail: '周线-0.5 · 日线-0.2', op_license: '空头承压，防守观望' },
+        sentiment_gate: { status: 'pass', label: '跌停未扩散', reason: '跌停 4 家 (昨 6 家)' },
+        plan: { active: true, mode: 'bear', title: '逆势超短反抽', headline: '逆势超短反抽：15% ~ 30%（试错仓）', position: '15% ~ 30%', hold: '2~3个交易日', exit: '破低点止损' },
+        env_link: {
+            key: 'counter_rebound', title: '逆势超短反抽期', tone: 'up', position: '15% ~ 30%',
+            headline: '优先超跌背离与回踩支撑',
+            recommend: [{ key: 'OVERSOLD_DIVERGENCE', label: '超跌背离' }],
+            caution: [{ key: 'BREAKOUT_PRESSURE', label: '放量突破' }],
+        },
+        indices: [{
+            symbol: 'sh000852', name: '中证1000', layer: '中小盘', is_small_cap: true, day_pct: -0.6,
+            periods: {
+                '15': { state: 'confirm', label: '拐头确认', oversold_score: 62, rsi14: 26, blunt: true, desc: '拐头' },
+                '30': { state: 'warning', label: '超跌预警', oversold_score: 68, rsi14: 24, blunt: false, desc: '超跌' },
+                '60': { state: 'weak', label: '下行中', oversold_score: 30, rsi14: 38, blunt: false, desc: '下行' },
+            },
+            levels: { close: 5500, stop: 5400, target: 5680, rr: 1.8 },
+        }],
+        backtest: {
+            '60': { period: '60', label: '60分钟', status: 'insufficient_data', n: 2, sample_from: '2026-08-01 10:30:00', sample_to: '2026-11-27 15:00:00',
+                    reason: '已到期样本 2 次 < 5 次', horizons: [{ k: 1, n: 2, avg_ret_pct: null, win_rate_pct: null, baseline_avg_pct: 0.05, baseline_win_pct: 51 }],
+                    events: [{ time: '2026-11-20 14:00:00', confirm_count: 4, t1_pct: 0.8 }], rule: '冷却2日' },
+        },
+    });
+    assert.match(element('resonanceHero').innerHTML, /右侧共振确认/);
+    assert.match(element('resonanceAlertBar').innerHTML, /权重护盘伪低点预警/);
+    assert.match(element('resonanceMatrix').innerHTML, /中证1000/);
+    assert.match(element('resonanceMatrix').innerHTML, /背离钝化/);
+    assert.match(element('resonanceBacktest').innerHTML, /样本不足/);
+    assert.match(element('macroResonanceLink').innerHTML, /小周期共振触发/);
+    assert.match(element('screenerEnvBar').innerHTML, /超跌背离/);
+    assert.doesNotMatch(element('resonanceHero').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('resonanceBacktest').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('screenerEnvBar').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    context.renderResonancePanel({});
+    assert.doesNotMatch(element('resonanceHero').innerHTML, /undefined|NaN/);
+    assert.doesNotMatch(element('resonanceMatrix').innerHTML, /undefined|NaN/);
+
+    // 测试 extended 已达目标勿追高态
+    context.renderResonancePanel({
+        summary: { phase: 'extended', phase_label: '反抽已达目标（勿追高 · 分批止盈）', extended_count: 5 },
+        indices: [{ symbol: 'sh000001', name: '上证指数', layer: '权重', periods: {}, levels: { close: 3600, target: 3517, target_reached: true, rr: null } }],
+    });
+    assert.match(element('subTabResonanceBadge').textContent, /勿追/);
+    assert.match(element('resonanceAlertBar').innerHTML, /切勿追高/);
+    assert.match(element('resonanceMatrix').innerHTML, /已达/);
+
+    // 反抽主攻题材、四角色>=20只池、分时拉升共振时间与 10年历史回测契约 (v3.8.2 / v3.8.3)
+    const styleCss = fs.readFileSync(path.join(__dirname, 'style.css'), 'utf8');
+    assert.ok(html.includes('id="reboundTopPicksTitle"'));
+    assert.ok(html.includes('rebound-picks-scroll'));
+    assert.ok(html.includes('rebound-scroll-hint'));
+    assert.ok(styleCss.includes('table.rebound-picks-table thead th'));
+    assert.ok(styleCss.includes('.rebound-bt-cards'));
+    assert.ok(styleCss.includes('@media (max-width: 768px)'));
+    assert.ok(!html.includes('class="report-dim-tab active" data-pick-role'));
+    assert.ok(html.includes('class="rebound-role-btn active" data-pick-role="all"'));
+    assert.ok(html.includes('data-pick-role="first_mover"'));
+    assert.ok(typeof context.renderReboundPicks === 'function');
+    context.renderReboundPicks({
+        phase: 'extended',
+        phase_label: '反抽已达目标（勿追高 · 分批止盈）',
+        index_timing: { low_time: '09:55', turn_time: '10:08', low_pct: 0.19, detail: '代表指数于 09:55 探明低点，于 10:08 共振启动' },
+        style_guidance: { tone: 'warn', small_vs_large: '成长/小盘占优', growth_vs_def: '成长占优', message: '严禁在日内暴涨后盲目追高！' },
+        role_meta: {
+            first_mover: { label: '🚀 先手共振首攻', desc: '早于或与指数同步点火' },
+            trend_pullback: { label: '🏛️ 强趋势低吸', desc: '60日主线强+回调不透支' },
+        },
+        role_counts: { all: 40, first_mover: 20, trend_pullback: 20, capacity_leader: 20, oversold_bounce: 20 },
+        themes: [{
+            name: '半导体', kind: '行业', continuity_tag: '主线延续', pct: 15.23, net_yi: 232.99, net_ratio_pct: 18.2, zt_count: 64,
+            candidates: [{ code: '002463', name: '沪电股份', role: 'first_mover', role_label: '🚀 先手共振首攻', pct: 4.5, amount_yi: 90.8, launch_time: '09:58', peak_time: '14:30', sync_code: 'lead', sync_label: '🚀 领涨先手(早10分)', buy_status: '可跟踪低吸', buy_tone: 'buyable' }],
+        }],
+        top_picks: {
+            all: [{
+                code: '002463', name: '沪电股份', board_name: '半导体', role: 'first_mover', role_label: '🚀 先手共振首攻',
+                price: 38.5, pct: 4.5, amount_yi: 90.8, ret60_pct: 28.0, ret5_pct: -2.1, dist_ma20_pct: 1.5, amt_ratio: 1.1,
+                launch_time: '09:58', peak_time: '14:30', sync_code: 'lead', sync_label: '🚀 领涨先手(早10分)',
+                buy_status: '可跟踪低吸', buy_tone: 'buyable', reason: '早于指数共振拐点启动',
+            }],
+        },
+        backtest: {
+            available: true,
+            scenarios: {
+                left_ice: { title: '左侧冰点', desc: '说明', trigger_days: 52, strategies: [{ key: 'trend_pullback', label: '🏛️ 强趋势低吸', status: 'ok', n: 48, t1_avg_pct: 0.88, t1_win_pct: 58.3, t3_avg_pct: 1.34, t3_win_pct: 58.3, t5_avg_pct: 1.73, t5_win_pct: 58.3, mfe3_avg_pct: 7.48, t3_alpha_pct: 0.91 }] },
+                right_turn: { title: '右侧止跌', desc: '说明', trigger_days: 66, strategies: [{ key: 'benchmark', label: '基准', status: 'insufficient_data', n: 2 }] },
+            },
+            caveats: ['存在幸存者偏差'],
+        },
+    });
+    assert.match(element('reboundStyleBanner').innerHTML, /10:08/);
+    assert.match(element('reboundThemesGrid').innerHTML, /半导体/);
+    assert.match(element('reboundThemesGrid').innerHTML, /09:58/);
+    assert.match(element('reboundTopPicks').innerHTML, /沪电股份/);
+    assert.match(element('reboundTopPicks').innerHTML, /领涨先手\(早10分\)/);
+    assert.match(element('reboundPicksBacktest').innerHTML, /\+1\.34%/);
+    assert.match(element('reboundPicksBacktest').innerHTML, /样本不足/);
+    assert.doesNotMatch(element('reboundThemesGrid').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('reboundTopPicks').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('reboundPicksBacktest').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    context.renderReboundPicks({});
+    assert.doesNotMatch(element('reboundThemesGrid').innerHTML, /undefined|NaN/);
+    assert.doesNotMatch(element('reboundTopPicks').innerHTML, /undefined|NaN/);
+
+    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal, guide tab, resonance, rebound picks and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,30 +1,30 @@
 {
   "symbol": "sz399006",
-  "generated_at": "2026-10-21 00:00:52",
+  "generated_at": "2026-11-27 16:55:16",
   "model_version": "ice-vol-exceedance-v2-fhs-bands",
-  "asof_date": "2026-10-20",
-  "training_last_signal_date": "2026-09-29",
-  "kline_source": "tencent_paged",
+  "asof_date": "2026-11-27",
+  "training_last_signal_date": "2026-11-13",
+  "kline_source": "sina_fallback",
   "vol_model": {
     "spec": "sigma_d^2 = 0.4*Parkinson20^2 + 0.3*EWMA(0.94)^2 + 0.3*Std250^2; P = 1 - Phi(2.5 / (sigma_d*sqrt(10)))",
     "fitted_parameters": 0,
     "drift_assumption": "zero",
     "band_method": "pit_empirical_quantile_fhs (fallback: normal quantile when history < 250 matured days)",
-    "sample_days": 3716,
+    "sample_days": 3740,
     "validation": {
       "method": "pointwise_purged_all_partitions",
-      "n": 3586,
-      "n_eff_overlap_adj": 326,
+      "n": 3610,
+      "n_eff_overlap_adj": 328,
       "min_required": 60,
       "horizon": 10,
-      "brier": 0.2221271413975011,
-      "baseline_brier": 0.22928410074607272,
-      "brier_skill": 0.03121437258529236,
-      "bootstrap_p_value": 0.0035,
-      "partition_skill_min": 0.01968933306007803,
-      "partition_skill_max": 0.04316555293608326,
-      "log_loss": 0.6344545532874153,
-      "baseline_log_loss": 0.6515274698924831,
+      "brier": 0.2215307008189743,
+      "baseline_brier": 0.22881519381927512,
+      "brier_skill": 0.031835704957837385,
+      "bootstrap_p_value": 0.0015,
+      "partition_skill_min": 0.02078491379904357,
+      "partition_skill_max": 0.043869605244599263,
+      "log_loss": 0.6332427759710493,
+      "baseline_log_loss": 0.6507134513892996,
       "status": "validated_oos_skill",
       "reliability": [
         {
@@ -36,17 +36,17 @@
         },
         {
           "bucket": "0.25-0.35",
-          "n": 2583,
-          "mean_pred_pct": 30.7,
-          "realized_pct": 36.2,
-          "n_eff_overlap_adj": 234
+          "n": 2590,
+          "mean_pred_pct": 30.8,
+          "realized_pct": 36.1,
+          "n_eff_overlap_adj": 235
         },
         {
           "bucket": "0.35-0.45",
-          "n": 617,
+          "n": 634,
           "mean_pred_pct": 37.9,
-          "realized_pct": 42.9,
-          "n_eff_overlap_adj": 56
+          "realized_pct": 41.8,
+          "n_eff_overlap_adj": 57
         }
       ],
       "partitions_positive": 11,
@@ -55,52 +55,52 @@
     "band_coverage": {
       "band_68": {
         "nominal_pct": 68.3,
-        "realized_pct": 67.6,
-        "n": 3586,
+        "realized_pct": 67.4,
+        "n": 3610,
         "method": "normal_quantile_legacy"
       },
       "band_90": {
         "nominal_pct": 90.0,
-        "realized_pct": 87.7,
-        "n": 3586,
+        "realized_pct": 87.5,
+        "n": 3610,
         "method": "normal_quantile_legacy"
       },
       "band_68_empirical": {
         "nominal_pct": 68.0,
-        "realized_pct": 68.7,
-        "n": 3457,
+        "realized_pct": 68.3,
+        "n": 3481,
         "method": "pit_empirical_quantile_fhs"
       },
       "band_90_empirical": {
         "nominal_pct": 90.0,
-        "realized_pct": 89.7,
-        "n": 3457,
+        "realized_pct": 89.4,
+        "n": 3481,
         "method": "pit_empirical_quantile_fhs"
       },
       "standardized_return_shape": {
-        "mean_z2": 1.445,
-        "kurtosis": 24.21,
-        "skew": 1.915,
+        "mean_z2": 1.449,
+        "kurtosis": 23.93,
+        "skew": 1.895,
         "implied_t_df": 4.3,
-        "n": 3586
+        "n": 3610
       }
     },
     "challengers": {
       "har_rv_gk_normal": {
-        "n_common": 3512,
-        "brier_skill": 0.008722177269525955,
-        "champion_brier_skill_same_days": 0.029397013594355537,
-        "skill_diff_vs_champion": -0.0207,
-        "log_loss": 0.6447747873152405,
+        "n_common": 3536,
+        "brier_skill": 0.009236407067022667,
+        "champion_brier_skill_same_days": 0.028871008362053363,
+        "skill_diff_vs_champion": -0.0196,
+        "log_loss": 0.6425609539795368,
         "status": "no_oos_edge",
         "note": "HAR-RV(Corsi 2009) on Garman-Klass variance, expanding OLS, target-maturity purged; diagnostic only, not used for the displayed probability."
       },
       "har_rv_gk_scaled_normal": {
-        "n_common": 3383,
-        "brier_skill": 0.03259174167276324,
-        "champion_brier_skill_same_days": 0.031988607867785346,
-        "skill_diff_vs_champion": 0.0006,
-        "log_loss": 0.6360468617207671,
+        "n_common": 3407,
+        "brier_skill": 0.03184471933269295,
+        "champion_brier_skill_same_days": 0.03161583114157529,
+        "skill_diff_vs_champion": 0.0002,
+        "log_loss": 0.6349760104727481,
         "status": "validated_oos_skill",
         "note": "HAR-RV(Corsi 2009) on Garman-Klass variance, expanding OLS, target-maturity purged; diagnostic only, not used for the displayed probability."
       }
@@ -110,30 +110,30 @@
   "ice_bin_reference": {
     "validation": {
       "method": "expanding_purged_nonoverlapping",
-      "n": 333,
+      "n": 335,
       "min_required": 60,
       "horizon": 10,
       "prior_strength": 20.0,
-      "brier": 0.23757656893792833,
-      "baseline_brier": 0.2339666471952649,
-      "brier_skill": -0.015429215172069632,
-      "log_loss": 0.6719582154441132,
-      "baseline_log_loss": 0.6627766883128632,
+      "brier": 0.2326645590558422,
+      "baseline_brier": 0.23002598679106548,
+      "brier_skill": -0.011470757289581357,
+      "log_loss": 0.6612556907117066,
+      "baseline_log_loss": 0.65425061152144,
       "status": "no_oos_edge"
     },
     "bins": [
       {
         "bin": "0-20",
-        "n": 348,
+        "n": 349,
         "n_eff_overlap_adj": 34,
-        "hit_rate_10d": 44.8,
-        "ci_low": 39.7,
-        "ci_high": 50.1,
-        "ci_eff_low": 29.5,
-        "ci_eff_high": 61.2,
-        "mean_fwd10_pct": 2.3,
-        "mean_trade_ret_pct": 2.24,
-        "calibrated_prob": 44.2,
+        "hit_rate_10d": 44.7,
+        "ci_low": 39.6,
+        "ci_high": 49.9,
+        "ci_eff_low": 29.4,
+        "ci_eff_high": 61.1,
+        "mean_fwd10_pct": 2.28,
+        "mean_trade_ret_pct": 2.23,
+        "calibrated_prob": 44.1,
         "probability_status": "historical_estimate"
       },
       {
@@ -145,59 +145,59 @@
         "ci_high": 38.0,
         "ci_eff_low": 26.8,
         "ci_eff_high": 44.5,
-        "mean_fwd10_pct": 0.82,
-        "mean_trade_ret_pct": 0.86,
+        "mean_fwd10_pct": 0.83,
+        "mean_trade_ret_pct": 0.87,
         "calibrated_prob": 35.1,
         "probability_status": "historical_estimate"
       },
       {
         "bin": "40-60",
-        "n": 1202,
-        "n_eff_overlap_adj": 120,
+        "n": 1199,
+        "n_eff_overlap_adj": 119,
         "hit_rate_10d": 29.5,
-        "ci_low": 26.9,
-        "ci_high": 32.1,
-        "ci_eff_low": 22.0,
-        "ci_eff_high": 38.1,
-        "mean_fwd10_pct": -0.05,
-        "mean_trade_ret_pct": 0.0,
-        "calibrated_prob": 29.5,
+        "ci_low": 27.0,
+        "ci_high": 32.2,
+        "ci_eff_low": 22.1,
+        "ci_eff_high": 38.3,
+        "mean_fwd10_pct": -0.06,
+        "mean_trade_ret_pct": -0.0,
+        "calibrated_prob": 29.6,
         "probability_status": "historical_estimate"
       },
       {
         "bin": "60-80",
-        "n": 943,
-        "n_eff_overlap_adj": 94,
-        "hit_rate_10d": 32.8,
-        "ci_low": 29.8,
-        "ci_high": 35.8,
-        "ci_eff_low": 24.1,
-        "ci_eff_high": 42.8,
-        "mean_fwd10_pct": -0.13,
-        "mean_trade_ret_pct": -0.02,
-        "calibrated_prob": 32.8,
+        "n": 957,
+        "n_eff_overlap_adj": 95,
+        "hit_rate_10d": 32.3,
+        "ci_low": 29.4,
+        "ci_high": 35.3,
+        "ci_eff_low": 23.7,
+        "ci_eff_high": 42.2,
+        "mean_fwd10_pct": -0.25,
+        "mean_trade_ret_pct": -0.13,
+        "calibrated_prob": 32.3,
         "probability_status": "historical_estimate"
       },
       {
         "bin": "80-100",
-        "n": 202,
-        "n_eff_overlap_adj": 20,
-        "hit_rate_10d": 39.6,
-        "ci_low": 33.1,
-        "ci_high": 46.5,
-        "ci_eff_low": 21.6,
-        "ci_eff_high": 61.0,
-        "mean_fwd10_pct": 1.12,
-        "mean_trade_ret_pct": 1.25,
-        "calibrated_prob": 39.1,
+        "n": 214,
+        "n_eff_overlap_adj": 21,
+        "hit_rate_10d": 37.4,
+        "ci_low": 31.2,
+        "ci_high": 44.0,
+        "ci_eff_low": 20.2,
+        "ci_eff_high": 58.5,
+        "mean_fwd10_pct": 0.57,
+        "mean_trade_ret_pct": 0.7,
+        "calibrated_prob": 37.1,
         "probability_status": "historical_estimate"
       }
     ],
     "note": "冰点分分箱是描述性对照, 不再产出面板概率"
   },
-  "sample_days": 3787,
-  "baseline_rebound_hit_10d_pct": 33.9,
-  "baseline_mean_fwd10_pct": 0.46,
+  "sample_days": 3811,
+  "baseline_rebound_hit_10d_pct": 33.7,
+  "baseline_mean_fwd10_pct": 0.4,
   "rebound_threshold_pct": 2.5,
   "fwd_window": 10,
   "regime": {
@@ -209,11 +209,11 @@
       "extreme_hit_pct": 42.0
     },
     "bear_below_ma200": {
-      "n": 1857,
-      "rebound_hit_pct": 28.4,
+      "n": 1881,
+      "rebound_hit_pct": 28.1,
       "baseline_bin_hit_diff": null,
-      "extreme_n": 735,
-      "extreme_hit_pct": 30.2
+      "extreme_n": 759,
+      "extreme_hit_pct": 29.2
     }
   },
   "feature_definition": {

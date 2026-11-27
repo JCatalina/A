@@ -18,6 +18,8 @@ from news_engine import news_engine
 from market_report import MarketReportEngine
 from intraday_engine import IntradaySentimentEngine
 from prediction_journal import PredictionJournalEngine
+from resonance_engine import ResonanceEngine
+from rebound_picks_engine import ReboundPicksEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -43,10 +45,15 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_warm_intraday_sentiment, daemon=True, name="intraday-prewarm").start()
     # v3.6: 次日预判与自动验证台账同步
     threading.Thread(target=_warm_prediction_journal, daemon=True, name="journal-prewarm").start()
+    # v3.8: 六指数小周期共振雷达预热
+    threading.Thread(target=_warm_resonance, daemon=True, name="resonance-prewarm").start()
+    # v3.8.1: 反抽主攻题材、核心标的池与 10 年历史选股回测预热
+    threading.Thread(target=_warm_rebound_picks, daemon=True, name="rebound-picks-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(
         data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report,
         intraday_engine=intraday_engine, prediction_journal=prediction_journal,
+        resonance_engine=resonance_engine, rebound_picks_engine=rebound_picks_engine,
     )
     _scheduler.start()
     yield
@@ -55,7 +62,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="A股规则筛选技术指标与多维支撑压力位量化分析系统",
-    version="3.6.0",
+    version="3.8.1",
     lifespan=lifespan
 )
 
@@ -77,6 +84,10 @@ ice_engine = IceEngine()
 market_report = MarketReportEngine(index_engine=index_engine, news_engine=news_engine)
 intraday_engine = IntradaySentimentEngine(market_report=market_report)
 prediction_journal = PredictionJournalEngine(market_report=market_report, news_engine=news_engine)
+resonance_engine = ResonanceEngine(index_engine=index_engine, intraday_engine=intraday_engine)
+rebound_picks_engine = ReboundPicksEngine(
+    intraday_engine=intraday_engine, resonance_engine=resonance_engine, data_fetcher=data_fetcher
+)
 
 
 def _warm_factor_model() -> None:
@@ -112,6 +123,22 @@ def _warm_prediction_journal() -> None:
     except Exception as e:
         logger.warning(f"prediction journal prewarm failed: {e}")
 
+
+def _warm_resonance() -> None:
+    try:
+        resonance_engine.build()
+        logger.info("six-index resonance prewarm finished")
+    except Exception as e:
+        logger.warning(f"six-index resonance prewarm failed: {e}")
+
+
+def _warm_rebound_picks() -> None:
+    try:
+        rebound_picks_engine.build()
+        logger.info("rebound picks & 10y backtest prewarm finished")
+    except Exception as e:
+        logger.warning(f"rebound picks prewarm failed: {e}")
+
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
     symbol: str = Query("sh000001", description="指数代码: sh000001, sz399001, sz399006, sh000688"),
@@ -130,6 +157,28 @@ def get_index_ice_rebound(
 ):
     """大盘冰点反弹概率: 该指数自身历史的分箱校准(近250日相对冰度) + 当日情绪面快照"""
     return ice_engine.predict(symbol)
+
+
+@app.get("/api/index/resonance")
+def get_index_resonance(force: bool = Query(False, description="是否跳过短TTL缓存强制重算")):
+    """六指数小周期共振低点博弈引擎 (15m/30m/60m 矩阵 + 假底过滤 + 情绪否决 + 点时间历史回测 + 环境联动)"""
+    try:
+        data = resonance_engine.build(force=force)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("index resonance failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.get("/api/index/rebound-picks")
+def get_rebound_picks(force: bool = Query(False, description="是否跳过短TTL缓存强制拉取主攻题材与成分股")):
+    """反抽主攻题材、三大角色精选标的池及 10 年活跃股点时间历史回测对比"""
+    try:
+        data = rebound_picks_engine.build(force=force)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("rebound picks failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 USIndexSymbol = Literal["usdji", "usinx", "usixic", "usndx"]

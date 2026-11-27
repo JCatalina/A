@@ -55,11 +55,23 @@ _BROAD_NOISE_CONCEPTS = frozenset({
     "标普道琼斯", "富时罗素", "中证500", "沪深300", "上证180", "上证380", "上证50", "深证100",
     "央视50", "HS300_", "股权激励", "员工持股", "业绩预升", "业绩预降", "业绩预增", "业绩预亏",
     "破净股", "高送转", "ST板块", "次新股", "机构重仓", "基金重仓", "社保重仓", "QFII重仓",
-    "证金持股", "汇金概念", "昨日涨停", "昨日连板", "昨日触板", "参股金融", "参股券商",
+    "证金持股", "汇金概念", "证金汇金", "昨日涨停", "昨日连板", "昨日触板", "参股金融", "参股券商",
     "参股银行", "参股保险", "重组概念", "股权转让", "定增", "专精特新", "百元股", "低价股",
-    "超跌股", "含可转债", "AH股", "B股", "分拆上市", "举牌", "创业板综", "科创板",
+    "高价股", "微盘股", "超跌股", "含可转债", "AH股", "B股", "分拆上市", "举牌", "创业板综", "科创板",
     "高质押", "解禁股", "送转预期", "拟减持", "大宗交易", "独角兽", "行业龙头",
+    "TMT", "核心资产", "北向重仓", "中特估", "央企改革", "地方国资", "国企改革", "海峡两岸",
 })
+
+# 狭义等价同族词簇: 同一主线下的泛称与细分行业避免在主攻 Top6 中重复占坑
+_DEDUP_FAMILY_GROUPS = (
+    ("半导体", "芯片", "集成电路", "大基金", "国家大基金持股", "存储器", "MCU芯片"),
+    ("华为", "华为海思", "华为昇腾", "华为手机", "鸿蒙"),
+    ("光模块", "共封装光模块", "CPO", "光通信"),
+    ("电子器件", "电子元件", "元件", "电子信息"),
+    ("通信设备", "5G", "6G"),
+    ("消费电子", "消费电子产业"),
+    ("软件开发", "IT服务", "国产软件", "信创"),
+)
 
 # 东财涨停池行业(hybk) -> 题材/行业同义关键词簇, 解决新浪概念名与东财细分行业名不一致导致涨停数为0的问题
 _THEME_SYNONYM_CLUSTERS = (
@@ -90,12 +102,29 @@ def _is_noise_concept(name: str) -> bool:
 
 
 def _clean_theme_root(name: str) -> str:
-    """去除'概念'/'板块'后缀用于近义去重 (如 '光伏' 与 '光伏概念')"""
-    s = str(name or "").strip()
-    for suf in ("概念", "板块", "题材"):
+    """去除罗马数字与'概念'/'板块'/'行业'后缀用于近义去重 (如 '光伏' 与 '光伏概念', 'IT服务Ⅱ' 与 'IT服务')"""
+    s = str(name or "").replace("Ⅱ", "").replace("Ⅰ", "").strip()
+    for suf in ("概念", "板块", "题材", "行业"):
         if len(s) > len(suf) + 1 and s.endswith(suf):
             s = s[: -len(suf)]
     return s
+
+
+def _same_theme_family(name_a: str, name_b: str) -> bool:
+    """判断两板块是否属同一狭义主题族 (同词根/前缀包含/狭义同义簇)"""
+    ra, rb = _clean_theme_root(name_a), _clean_theme_root(name_b)
+    if not ra or not rb:
+        return False
+    if ra == rb:
+        return True
+    if min(len(ra), len(rb)) >= 2 and (ra.startswith(rb) or rb.startswith(ra)):
+        return True
+    for grp in _DEDUP_FAMILY_GROUPS:
+        ha = any(k in ra or ra in k for k in grp)
+        hb = any(k in rb or rb in k for k in grp)
+        if ha and hb:
+            return True
+    return False
 
 
 # 23档互斥分布桶边界 (东财 getTopicZDFenBu: -11~11 键对应的估算中位涨幅%)
@@ -196,6 +225,51 @@ def _phase_info(today: str, now: Optional[datetime] = None) -> Tuple[str, str]:
 # ---------------------------------------------------------------------------
 # 纯函数核心算法 (完全离线可单测)
 # ---------------------------------------------------------------------------
+def qq_multiday_to_trends(days_list: Any) -> List[str]:
+    """
+    将腾讯 proxy day/query 返回的多日 1 分钟累计成交额序列转为兼容东财 trends 的逐分钟差值列表。
+    每个原始点为 'HHMM price cum_vol cum_amt_yuan', 对 cum_amt 做相邻差分还原单分钟成交额(元)。
+    """
+    if not isinstance(days_list, list) or not days_list:
+        return []
+    parsed_days: List[Tuple[str, List[str]]] = []
+    for item in days_list:
+        if not isinstance(item, dict):
+            continue
+        raw_date = "".join(ch for ch in str(item.get("date") or "") if ch.isdigit())
+        rows = item.get("data")
+        if len(raw_date) != 8 or not isinstance(rows, list) or not rows:
+            continue
+        iso_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+        parsed_days.append((iso_date, rows))
+    if not parsed_days:
+        return []
+
+    parsed_days.sort(key=lambda x: x[0])
+    out: List[str] = []
+    for iso_date, rows in parsed_days[-3:]:
+        prev_cum_amt: Optional[float] = None
+        for line in rows:
+            parts = str(line).strip().split()
+            if len(parts) < 4:
+                continue
+            hhmm = "".join(ch for ch in parts[0] if ch.isdigit())
+            if len(hhmm) < 4:
+                continue
+            hm4 = hhmm[:4]
+            if not (("0930" <= hm4 <= "1130") or ("1300" <= hm4 <= "1500")):
+                continue
+            p = _f(parts[1])
+            cum_amt = _f(parts[3])
+            if p is None or cum_amt is None or cum_amt < 0:
+                continue
+            bar_amt = cum_amt if prev_cum_amt is None else max(0.0, cum_amt - prev_cum_amt)
+            prev_cum_amt = cum_amt
+            hm_str = f"{hm4[:2]}:{hm4[2:4]}"
+            out.append(f"{iso_date} {hm_str},{p:.2f},{p:.2f},{p:.2f},{p:.2f},0,{bar_amt:.2f},{p:.2f}")
+    return out
+
+
 def compute_turnover_comparison(
     sh_trends: List[str],
     sz_trends: List[str],
@@ -600,6 +674,42 @@ def _parse_sina_boards(rows: List[Dict[str, Any]], kind: str) -> List[Dict[str, 
     return out
 
 
+def _parse_qq_boards(rows: List[Dict[str, Any]], kind: str) -> List[Dict[str, Any]]:
+    """解析腾讯自选股板块接口 (hy2 申万二级 / gn 概念); zljlr 与 turnover 单位均为万元 -> 亿元"""
+    out = []
+    for x in rows or []:
+        if not isinstance(x, dict) or not x.get("name"):
+            continue
+        if kind == "概念" and x.get("stock_type") != "BK-GN":
+            continue
+        net_wan = _f(x.get("zljlr"))
+        in_wan = _f(x.get("zllr"))
+        out_wan = _f(x.get("zllc"))
+        turn_wan = _f(x.get("turnover"))
+        net_yi = _r(net_wan / 10000.0, 2) if net_wan is not None else None
+        turn_yi = (turn_wan / 10000.0) if (turn_wan is not None and turn_wan > 0) else None
+        net_ratio = _r((net_yi / turn_yi) * 100.0, 2) if (net_yi is not None and turn_yi) else None
+        lzg = x.get("lzg") if isinstance(x.get("lzg"), dict) else {}
+        out.append({
+            "kind": kind,
+            "code": str(x.get("code") or ""),
+            "name": str(x.get("name") or ""),
+            "pct": _r(_f(x.get("zdf")), 2),
+            "net_yi": net_yi,
+            "in_yi": _r(in_wan / 10000.0, 2) if in_wan is not None else None,
+            "out_yi": _r(out_wan / 10000.0, 2) if out_wan is not None else None,
+            "amount_yi": _r(turn_yi, 2) if turn_yi is not None else None,
+            "net_ratio_pct": net_ratio,
+            "turnover": _r(_f(x.get("hsl")), 2),
+            "up_down_str": str(x.get("zgb") or ""),
+            "leader_code": str(lzg.get("code") or ""),
+            "leader_name": str(lzg.get("name") or ""),
+            "leader_pct": _r(_f(lzg.get("zdf")), 2),
+            "source": "qq",
+        })
+    return out
+
+
 def identify_main_attack(
     concept_inflow: List[Dict[str, Any]],
     concept_hot: List[Dict[str, Any]],
@@ -703,7 +813,9 @@ def identify_main_attack(
             "prev_theme_archive_available": has_prev_archive,
         }
 
-    nets = sorted(x["net_yi"] for x in candidates if x["net_yi"] is not None)
+    nets_all = sorted(x["net_yi"] for x in candidates if x["net_yi"] is not None)
+    nets_ind = sorted(x["net_yi"] for x in candidates if x.get("kind") == "行业" and x["net_yi"] is not None)
+    nets_con = sorted(x["net_yi"] for x in candidates if x.get("kind") != "行业" and x["net_yi"] is not None)
     pcts = sorted(x["pct"] for x in candidates if x["pct"] is not None)
 
     def _pctile(sorted_vals: List[float], v: Optional[float]) -> float:
@@ -712,24 +824,29 @@ def identify_main_attack(
         return sum(1 for x in sorted_vals if x <= v) / len(sorted_vals)
 
     for c in candidates:
-        p_net = _pctile(nets, c["net_yi"])
+        # 行业板块股票数通常远少于泛概念, 净流入规模组内对比才不会被"TMT/芯片概念"类泛概念碾压
+        if c.get("kind") == "行业" and len(nets_ind) >= 3:
+            p_net = _pctile(nets_ind, c["net_yi"])
+        elif c.get("kind") != "行业" and len(nets_con) >= 3:
+            p_net = _pctile(nets_con, c["net_yi"])
+        else:
+            p_net = _pctile(nets_all, c["net_yi"])
         p_pct = _pctile(pcts, c["pct"])
         zt_bonus = min(1.0, c["zt_count"] / 5.0)
         if (c.get("leader_pct") or 0) >= 9.5:
             zt_bonus = max(zt_bonus, 0.5)
         cont_bonus = 0.08 if c["continuity_tag"] == "主线延续" else 0.0
-        c["attack_score"] = round((0.45 * p_net + 0.30 * p_pct + 0.25 * zt_bonus + cont_bonus) * 100, 1)
+        # 申万二级真实细分行业优先权: 避免宽泛概念挤占真实行业主线
+        kind_bonus = 0.08 if c.get("kind") == "行业" else 0.0
+        c["attack_score"] = round((0.45 * p_net + 0.30 * p_pct + 0.25 * zt_bonus + cont_bonus + kind_bonus) * 100, 1)
 
     candidates.sort(key=lambda x: (-x["attack_score"], -(x["net_yi"] or 0)))
 
-    # 近义词根去重 (如 '光伏' 与 '光伏概念' 只保留得分更高的一个, 避免同题材霸榜)
+    # 狭义同族去重 (如 '光伏'/'光伏概念', '华为海思'/'华为概念', '半导体'/'芯片概念' 不重复霸榜)
     main_attack: List[Dict[str, Any]] = []
-    seen_roots = set()
     for c in candidates:
-        root = _clean_theme_root(c["name"])
-        if root in seen_roots:
+        if any(_same_theme_family(c["name"], chosen["name"]) for chosen in main_attack):
             continue
-        seen_roots.add(root)
         main_attack.append(c)
         if len(main_attack) >= 6:
             break
@@ -1416,12 +1533,27 @@ class IntradaySentimentEngine:
     # ---------- 1. 两市同刻成交量 ----------
     def fetch_turnover_comparison(self, today: str, prev: Optional[str]) -> Dict[str, Any]:
         def _trends(secid: str) -> List[str]:
+            # 主源: 腾讯 proxy 5日 1分钟分时 (高可用防东财连接断开)
+            sym = "sh" + secid.split(".", 1)[1] if secid.startswith("1.") else (
+                "sz" + secid.split(".", 1)[1] if secid.startswith("0.") else ""
+            )
+            if sym:
+                qjs = self._get_json(
+                    f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/day/query?code={sym}",
+                    timeout=8.0, attempts=2, headers={"Referer": "https://gu.qq.com/"},
+                )
+                days_list = (((qjs or {}).get("data") or {}).get(sym) or {}).get("data") or []
+                qq_rows = qq_multiday_to_trends(days_list)
+                if qq_rows:
+                    return qq_rows
+
+            # 备源: 东财 trends2
             js = self._get_json(
                 f"https://push2his.eastmoney.com/api/qt/stock/trends2/get"
                 f"?secid={secid}&ndays=2&iscr=0"
                 f"&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13"
                 f"&fields2=f51,f52,f53,f54,f55,f56,f57,f58",
-                timeout=10,
+                timeout=8.0, attempts=1,
             )
             return ((js or {}).get("data") or {}).get("trends") or []
 
@@ -1594,29 +1726,52 @@ class IntradaySentimentEngine:
             "series": series,
         }
 
-    # ---------- 5. 热点题材 / 资金净流入 / 主力主攻方向 ----------
+    # ---------- 5. 热点题材 / 资金净流入 / 主力主攻方向 (v3.8.2: 优先腾讯申万二级hy2+gn, 失败回退新浪) ----------
     def fetch_themes_and_main_attack(
         self,
         prev: Optional[str],
         zt_ind_today: List[Dict[str, Any]],
         zt_stocks_today: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        base = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk"
-        specs = {
-            "concept_inflow": (f"{base}?page=1&num=45&sort=netamount&asc=0&fenlei=1", "概念"),
-            "concept_hot": (f"{base}?page=1&num=45&sort=avg_changeratio&asc=0&fenlei=1", "概念"),
-            "concept_outflow": (f"{base}?page=1&num=20&sort=netamount&asc=1&fenlei=1", "概念"),
-            "industry_inflow": (f"{base}?page=1&num=25&sort=netamount&asc=0&fenlei=0", "行业"),
-            "industry_hot": (f"{base}?page=1&num=25&sort=avg_changeratio&asc=0&fenlei=0", "行业"),
-            "industry_outflow": (f"{base}?page=1&num=15&sort=netamount&asc=1&fenlei=0", "行业"),
+        raw: Dict[str, List[Dict[str, Any]]] = {
+            "concept_inflow": [], "concept_hot": [], "concept_outflow": [],
+            "industry_inflow": [], "industry_hot": [], "industry_outflow": [],
         }
-        raw: Dict[str, List[Dict[str, Any]]] = {}
-        with ThreadPoolExecutor(6) as ex:
-            futs = {k: ex.submit(self._get_json, url, 8.0, 2, {"Referer": "https://finance.sina.com.cn/"}) for k, (url, _) in specs.items()}
-            for k, fut in futs.items():
-                data = fut.result()
-                kind = specs[k][1]
-                raw[k] = _parse_sina_boards(data if isinstance(data, list) else [], kind)
+        qq_base = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank"
+        qq_headers = {"Referer": "https://gu.qq.com/"}
+        with ThreadPoolExecutor(2) as ex:
+            f_hy2 = ex.submit(self._get_json, f"{qq_base}?board_type=hy2&sort_type=priceRatio&direct=down&offset=0&count=150", 6.0, 2, qq_headers)
+            f_gn = ex.submit(self._get_json, f"{qq_base}?board_type=gn&sort_type=turnover&direct=down&offset=0&count=150", 6.0, 2, qq_headers)
+            hy2_js = f_hy2.result()
+            gn_js = f_gn.result()
+
+        hy2_rows = _parse_qq_boards(((hy2_js or {}).get("data") or {}).get("rank_list") or [], "行业")
+        gn_rows = _parse_qq_boards(((gn_js or {}).get("data") or {}).get("rank_list") or [], "概念")
+        gn_rows = [x for x in gn_rows if not _is_noise_concept(x.get("name", ""))]
+
+        if hy2_rows or gn_rows:
+            raw["industry_inflow"] = sorted(hy2_rows, key=lambda x: -(x.get("net_yi") if x.get("net_yi") is not None else -1e9))[:25]
+            raw["industry_hot"] = sorted(hy2_rows, key=lambda x: -(x.get("pct") if x.get("pct") is not None else -1e9))[:25]
+            raw["industry_outflow"] = sorted(hy2_rows, key=lambda x: (x.get("net_yi") if x.get("net_yi") is not None else 1e9))[:15]
+            raw["concept_inflow"] = sorted(gn_rows, key=lambda x: -(x.get("net_yi") if x.get("net_yi") is not None else -1e9))[:40]
+            raw["concept_hot"] = sorted(gn_rows, key=lambda x: -(x.get("pct") if x.get("pct") is not None else -1e9))[:40]
+            raw["concept_outflow"] = sorted(gn_rows, key=lambda x: (x.get("net_yi") if x.get("net_yi") is not None else 1e9))[:12]
+        else:
+            # 回退新浪板块接口
+            base = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk"
+            specs = {
+                "concept_inflow": (f"{base}?page=1&num=45&sort=netamount&asc=0&fenlei=1", "概念"),
+                "concept_hot": (f"{base}?page=1&num=45&sort=avg_changeratio&asc=0&fenlei=1", "概念"),
+                "concept_outflow": (f"{base}?page=1&num=20&sort=netamount&asc=1&fenlei=1", "概念"),
+                "industry_inflow": (f"{base}?page=1&num=25&sort=netamount&asc=0&fenlei=0", "行业"),
+                "industry_hot": (f"{base}?page=1&num=25&sort=avg_changeratio&asc=0&fenlei=0", "行业"),
+                "industry_outflow": (f"{base}?page=1&num=15&sort=netamount&asc=1&fenlei=0", "行业"),
+            }
+            with ThreadPoolExecutor(6) as ex:
+                futs = {k: ex.submit(self._get_json, url, 8.0, 2, {"Referer": "https://finance.sina.com.cn/"}) for k, (url, _) in specs.items()}
+                for k, fut in futs.items():
+                    data = fut.result()
+                    raw[k] = _parse_sina_boards(data if isinstance(data, list) else [], specs[k][1])
 
         prev_archive = self._disk_load(self._disk_path(f"prev_close_{prev}.json")) if prev else None
         out = identify_main_attack(

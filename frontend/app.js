@@ -137,13 +137,19 @@ document.addEventListener("DOMContentLoaded", () => {
     loadStockAnalysis(currentStockCode);
     loadScreenerResults(currentScreenerStrategy);
 
-    // v2.8: 服务常驻期间持续刷新 — 指数条 30s / 大盘研判 60s / 选股雷达 60s
+    // v2.8: 服务常驻期间持续刷新 — 指数条 30s / 大盘研判 60s / 六指数共振+反抽选股 60s / 选股雷达 60s
     setInterval(loadMarketIndices, 30000);
     setInterval(() => loadMacroIndexAnalysis(currentMacroSymbol, { silent: true }), 60000);
+    setInterval(() => {
+        loadResonanceData({ silent: true });
+        loadReboundPicks({ silent: true });
+    }, 60000);
     setInterval(() => loadScreenerResults(currentScreenerStrategy, { silent: true }), 60000);
 
-    // v3.6.7: 页面启动即后台预加载 盘中情绪 / 复盘日报 / 明日重点 / 预判台账, 实现点击Tab秒开 + 定时静默刷新
+    // v3.6.7 / v3.8.1: 页面启动即后台预加载 六指数共振 / 反抽选股 / 盘中情绪 / 复盘日报 / 明日重点 / 预判台账
     setTimeout(() => {
+        loadResonanceData({ silent: true });
+        loadReboundPicks({ silent: true });
         loadIntradaySentiment({ silent: true });
         loadReviewReport(false, { silent: true });
         loadFocusReport(false, { silent: true });
@@ -161,6 +167,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (document.visibilityState !== "visible") return;
         loadMarketIndices();
         loadMacroIndexAnalysis(currentMacroSymbol);
+        loadResonanceData({ silent: true });
+        loadReboundPicks({ silent: true });
         loadIceRebound(currentMacroSymbol);
         loadScreenerResults(currentScreenerStrategy);
         loadStockAnalysis(currentStockCode, currentPeriod, false);
@@ -472,7 +480,7 @@ async function loadStockAnalysis(code, period = currentPeriod, autoScroll = true
     try {
         currentStockCode = code;
         currentPeriod = period;
-        
+
         const res = await fetch(`/api/stock/analysis?code=${encodeURIComponent(code)}&period=${encodeURIComponent(period)}`);
         const json = await res.json();
         if (requestId !== stockRequestId) return;   // 过期响应: 用户已切换到其它标的
@@ -864,7 +872,7 @@ function renderPredictionAndPlan(data) {
 
     // 1. 多头评分仪表盘
     document.getElementById("bullishProbNum").innerText = hasScore ? score.toFixed(1) : "--";
-    
+
     if (probGaugeInst) {
         const gaugeOption = {
             backgroundColor: 'transparent',
@@ -957,9 +965,9 @@ function renderPredictionAndPlan(data) {
                 ],
                 radius: '65%',
                 center: ['50%', '50%'],
-                splitArea: { 
-                    show: true, 
-                    areaStyle: { color: ['rgba(241, 245, 249, 0.4)', 'rgba(255, 255, 255, 0.6)'] } 
+                splitArea: {
+                    show: true,
+                    areaStyle: { color: ['rgba(241, 245, 249, 0.4)', 'rgba(255, 255, 255, 0.6)'] }
                 },
                 splitLine: { lineStyle: { color: '#e2e8f0' } },
                 axisLine: { lineStyle: { color: '#cbd5e1' } },
@@ -1381,8 +1389,8 @@ function renderMacroAnalysis(data, panel = CN_MACRO_PANEL) {
     renderPeriodsQuad(data.periods, panel);
 
     const kData = (data.all_kline_data && data.all_kline_data[panel.scale])
-                  ? data.all_kline_data[panel.scale]
-                  : data.kline_data;
+        ? data.all_kline_data[panel.scale]
+        : data.kline_data;
     renderMacroKlineChart(kData, data.clustered_levels, panel);
     setTimeout(() => panel.chartInst?.resize(), 80);
 }
@@ -1394,13 +1402,13 @@ function renderMacroHeader(data, panel = CN_MACRO_PANEL) {
     const ids = panel.ids;
     document.getElementById(ids.name).innerText = data.name;
     document.getElementById(ids.price).innerText = data.current_price.toFixed(2);
-    
+
     const isUp = data.change_pct >= 0;
     const chgEl = document.getElementById(ids.chg);
     chgEl.innerText = `${isUp ? '+' : ''}${data.change_pct.toFixed(2)}%`;
     chgEl.style.background = isUp ? "rgba(225, 29, 72, 0.12)" : "rgba(5, 150, 105, 0.12)";
     chgEl.style.color = isUp ? "#e11d48" : "#059669";
-    
+
     document.getElementById(ids.desc).innerText = data.desc;
 
     // 动态展示最新实时时间戳; 美股附带行情源报价时间 (与本地计算时间常隔一个交易日)
@@ -1433,7 +1441,7 @@ function renderMacroConclusion(conclusion, panel = CN_MACRO_PANEL) {
     // 四维度解析
     const fallbackTitles = ["中期大级别方向", "当前时点节奏", "相较上一收盘", "下一步等待与防守"];
     [conclusion.macro_direction, conclusion.short_term_timing,
-     conclusion.compare_prev, conclusion.next_step].forEach((point, i) => {
+    conclusion.compare_prev, conclusion.next_step].forEach((point, i) => {
         const p = point || {};
         document.getElementById(ids.pointTitles[i]).innerText = p.title || fallbackTitles[i];
         document.getElementById(ids.pointContents[i]).innerText = p.content || "";
@@ -1566,9 +1574,9 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
             markLines.push({
                 yAxis: s.center_price,
                 lineStyle: { color: '#059669', type: 'dashed', width: 1.5 },
-                label: { 
-                    show: true, 
-                    formatter: `${s.label} 支撑 ${s.center_price.toFixed(0)}`, 
+                label: {
+                    show: true,
+                    formatter: `${s.label} 支撑 ${s.center_price.toFixed(0)}`,
                     color: '#059669',
                     backgroundColor: 'rgba(5, 150, 105, 0.12)',
                     padding: [2, 6],
@@ -1582,9 +1590,9 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
             markLines.push({
                 yAxis: r.center_price,
                 lineStyle: { color: '#dc2626', type: 'dashed', width: 1.5 },
-                label: { 
-                    show: true, 
-                    formatter: `${r.label} 压力 ${r.center_price.toFixed(0)}`, 
+                label: {
+                    show: true,
+                    formatter: `${r.label} 压力 ${r.center_price.toFixed(0)}`,
                     color: '#dc2626',
                     backgroundColor: 'rgba(220, 38, 38, 0.12)',
                     padding: [2, 6],
@@ -1605,7 +1613,7 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
             borderWidth: 1,
             extraCssText: 'box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); border-radius: 8px;',
             textStyle: { color: '#0f172a', fontSize: 12 },
-            formatter: function(params) {
+            formatter: function (params) {
                 if (!params || params.length === 0) return '';
                 const dateStr = params[0].axisValue;
                 const curScaleName = scaleNameMap[panel.scale] || "日K线";
@@ -1668,10 +1676,10 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
                 data: dates,
                 boundaryGap: true,
                 axisLine: { lineStyle: { color: '#cbd5e1' } },
-                axisLabel: { 
-                    color: '#64748b', 
+                axisLabel: {
+                    color: '#64748b',
                     fontSize: 10,
-                    formatter: function(val) {
+                    formatter: function (val) {
                         if (!val) return '';
                         // 分时线 (如 2026-08-28 14:30:00) -> 08-28 14:30
                         if (val.length > 10) return val.substring(5, 16);
@@ -1834,7 +1842,8 @@ const WORKSPACE_TABS = [
     { tab: "tabIntradayView", ws: "intradayWorkspace" },
     { tab: "tabReviewView", ws: "reviewWorkspace" },
     { tab: "tabFocusView", ws: "focusWorkspace" },
-    { tab: "tabStockView", ws: "stockWorkspace" }
+    { tab: "tabStockView", ws: "stockWorkspace" },
+    { tab: "tabGuideView", ws: "guideWorkspace" }
 ];
 
 // 金融消息面状态
@@ -1916,6 +1925,10 @@ function bindMrdiEvents() {
         switchWorkspaceView("tabFocusView", "focusWorkspace");
         loadFocusReport();
         loadPredictionJournal();
+    });
+    document.getElementById("tabGuideView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabGuideView", "guideWorkspace");
+        renderGuideWorkspace();
     });
 
     // MRDI 指数胶囊切换
@@ -2119,7 +2132,7 @@ function calculateMRDI(kData) {
     else if (prevK >= prevD && latestK < latestD) g -= 0.2;
 
     // 价格趋势贡献 (2日涨跌幅, 1% → 0.1)
-    const priceMom = n >= 3 ? (closes[n-1] - closes[n-3]) / closes[n-3] * 10 : 0;
+    const priceMom = n >= 3 ? (closes[n - 1] - closes[n - 3]) / closes[n - 3] * 10 : 0;
     g += Math.max(-0.3, Math.min(0.3, priceMom));
 
     g = Math.round(Math.max(-1, Math.min(1, g)) * 100) / 100;
@@ -2320,7 +2333,7 @@ function analyzeTrend(kData, label) {
     else score -= 0.2;
 
     // 趋势方向
-    const recentChg = (closes[n-1] - closes[Math.max(0, n-6)]) / closes[Math.max(0, n-6)] * 100;
+    const recentChg = (closes[n - 1] - closes[Math.max(0, n - 6)]) / closes[Math.max(0, n - 6)] * 100;
     if (recentChg > 3) score += 0.2;
     else if (recentChg < -3) score -= 0.2;
 
@@ -2636,7 +2649,7 @@ function renderMrdiEnvCard(mrdi, kData) {
     // 简单冰点判断: 连续3日大跌
     let iceDays = 0;
     for (let i = n - 1; i >= Math.max(0, n - 5); i--) {
-        const chg = i > 0 ? (kData[i].close - kData[i-1].close) / kData[i-1].close * 100 : 0;
+        const chg = i > 0 ? (kData[i].close - kData[i - 1].close) / kData[i - 1].close * 100 : 0;
         if (chg < -1.5) iceDays++;
     }
 
@@ -3247,6 +3260,9 @@ document.addEventListener("DOMContentLoaded", () => {
     bindIntradayEvents();
     bindReportEvents();
     bindJournalEvents();
+    bindGuideEvents();
+    bindResonanceEvents();
+    bindReboundPicksEvents();
 });
 
 /* =====================================================================
@@ -3285,7 +3301,7 @@ function ensureReportChart(id) {
     return reportCharts[id];
 }
 function resizeReportCharts() {
-    Object.values(reportCharts).forEach(c => { try { c.resize(); } catch (_) {} });
+    Object.values(reportCharts).forEach(c => { try { c.resize(); } catch (_) { } });
 }
 function chartTheme() {
     return {
@@ -3489,11 +3505,11 @@ function renderReviewSentiment(d) {
             <div><h3>连板梯队</h3>${ladders.length ? ladders.map(g => `
               <div class="ladder-group"><div class="ladder-h">${g.board}板 · ${g.stocks.length}只</div>
               <div class="ladder-stocks">${(g.stocks || []).map(s =>
-                `<span class="ladder-chip">${escapeHtml(s.name)} ${rptPct(s.pct)}</span>`).join("")}</div></div>`).join("")
-            : "<p class='report-empty'>暂无连板</p>"}</div>
+            `<span class="ladder-chip">${escapeHtml(s.name)} ${rptPct(s.pct)}</span>`).join("")}</div></div>`).join("")
+                : "<p class='report-empty'>暂无连板</p>"}</div>
             <div><h3>涨停行业分布</h3>
               <ul class="report-mini-list">${inds.map(i => `<li><span>${escapeHtml(i.name)}</span><strong>${i.count}</strong></li>`).join("")
-                || "<li>暂无</li>"}</ul>
+            || "<li>暂无</li>"}</ul>
               <h3 style="margin-top:16px">跌停样本</h3>
               <ul class="report-mini-list">${(lim.limit_down_list || []).slice(0, 8).map(s =>
                 `<li><span>${escapeHtml(s.name)}</span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
@@ -3563,8 +3579,10 @@ function renderReviewSw(d) {
             series: [{
                 type: "bar", data: ordered.map(r => r.pct),
                 itemStyle: { color: (p) => (p.value >= 0 ? "#e11d48" : "#059669") },
-                label: { show: true, position: "right", fontSize: 10,
-                    formatter: (p) => (p.value > 0 ? "+" : "") + Number(p.value).toFixed(2) },
+                label: {
+                    show: true, position: "right", fontSize: 10,
+                    formatter: (p) => (p.value > 0 ? "+" : "") + Number(p.value).toFixed(2)
+                },
             }],
         }, true);
     }
@@ -3597,8 +3615,10 @@ function renderReviewValuation(d) {
             title: { text: `${main.name} PE 历史`, left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
             xAxis: { type: "category", data: series.map(x => x[0].slice(2)) },
             yAxis: { type: "value", scale: true, name: "PE" },
-            series: [{ type: "line", data: series.map(x => x[1]), showSymbol: false, itemStyle: { color: "#7c3aed" },
-                markLine: main.median != null ? { data: [{ yAxis: main.median, name: "中位数" }], label: { formatter: "中位 {c}" } } : undefined }],
+            series: [{
+                type: "line", data: series.map(x => x[1]), showSymbol: false, itemStyle: { color: "#7c3aed" },
+                markLine: main.median != null ? { data: [{ yAxis: main.median, name: "中位数" }], label: { formatter: "中位 {c}" } } : undefined
+            }],
         }, true);
     }
     const tbl = document.getElementById("reviewValTable");
@@ -3634,13 +3654,19 @@ function renderReviewFear(d) {
             title: { text: "恐慌贪婪指数走势", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
             xAxis: { type: "category", data: series.map(x => (x.date || "").slice(5)) },
             yAxis: { type: "value", min: 0, max: 100 },
-            visualMap: { show: false, pieces: [
-                { lte: 20, color: "#059669" }, { gt: 20, lte: 40, color: "#34d399" },
-                { gt: 40, lte: 60, color: "#94a3b8" }, { gt: 60, lte: 80, color: "#fb7185" }, { gt: 80, color: "#e11d48" },
-            ], dimension: 1 },
-            series: [{ type: "line", data: series.map(x => x.score), areaStyle: { opacity: 0.15 },
-                markArea: { silent: true, data: [[{ yAxis: 0, itemStyle: { color: "rgba(5,150,105,.06)" } }, { yAxis: 20 }],
-                    [{ yAxis: 80, itemStyle: { color: "rgba(225,29,72,.06)" } }, { yAxis: 100 }]] } }],
+            visualMap: {
+                show: false, pieces: [
+                    { lte: 20, color: "#059669" }, { gt: 20, lte: 40, color: "#34d399" },
+                    { gt: 40, lte: 60, color: "#94a3b8" }, { gt: 60, lte: 80, color: "#fb7185" }, { gt: 80, color: "#e11d48" },
+                ], dimension: 1
+            },
+            series: [{
+                type: "line", data: series.map(x => x.score), areaStyle: { opacity: 0.15 },
+                markArea: {
+                    silent: true, data: [[{ yAxis: 0, itemStyle: { color: "rgba(5,150,105,.06)" } }, { yAxis: 20 }],
+                    [{ yAxis: 80, itemStyle: { color: "rgba(225,29,72,.06)" } }, { yAxis: 100 }]]
+                }
+            }],
         }, true);
     }
     const tbl = document.getElementById("reviewFgTable");
@@ -3721,12 +3747,16 @@ function renderReviewAvgPrice(d) {
             title: { text: "涨跌分布（需当日存档）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
             xAxis: { type: "category", data: dist.map(x => x.range) },
             yAxis: { type: "value" },
-            series: [{ type: "bar", data: dist.map(x => x.count),
-                itemStyle: { color: (p) => {
-                    const lab = dist[p.dataIndex]?.range || "";
-                    if (lab === "平") return "#94a3b8";
-                    return lab.startsWith("-") || lab.startsWith("<") ? "#059669" : "#e11d48";
-                } } }],
+            series: [{
+                type: "bar", data: dist.map(x => x.count),
+                itemStyle: {
+                    color: (p) => {
+                        const lab = dist[p.dataIndex]?.range || "";
+                        if (lab === "平") return "#94a3b8";
+                        return lab.startsWith("-") || lab.startsWith("<") ? "#059669" : "#e11d48";
+                    }
+                }
+            }],
         }, true);
     }
 }
@@ -3756,7 +3786,7 @@ function renderFocusReport(d) {
         <h2>一、全球定调 <span class="focus-tone tone-${g.tone?.label === "偏暖" ? "up" : g.tone?.label === "偏冷" ? "down" : "flat"}">${escapeHtml(g.tone?.label || "—")}</span></h2>
         <ul class="focus-lines">${(g.tone?.lines || []).map(l => `<li>${escapeHtml(l)}</li>`).join("") || "<li>暂无外围报价</li>"}</ul>
         ${(g.news || []).length ? `<div class="focus-news">${(g.news || []).map(n =>
-            `<div class="focus-news-item"><span class="stance-${escapeHtml(n.stance || "neutral")}">${escapeHtml(n.stance_label || n.stance || "")}</span>
+        `<div class="focus-news-item"><span class="stance-${escapeHtml(n.stance || "neutral")}">${escapeHtml(n.stance_label || n.stance || "")}</span>
              <strong>${escapeHtml(n.take || n.title)}</strong>
              <small>${escapeHtml(n.source || "")} · ${escapeHtml(n.time || "")}</small></div>`).join("")}</div>` : ""}
       </section>
@@ -3791,7 +3821,7 @@ function renderFocusReport(d) {
           </article>`).join("")}</div>
         ${(d.hot_themes || []).length ? `<h3 class="focus-sub">涨停题材脉冲</h3>
           <div class="focus-themes">${(d.hot_themes || []).map(t =>
-            `<span class="theme-chip">${escapeHtml(t.name)} <b>${t.count}</b></span>`).join("")}</div>` : ""}
+                `<span class="theme-chip">${escapeHtml(t.name)} <b>${t.count}</b></span>`).join("")}</div>` : ""}
       </section>
 
       <section class="focus-block">
@@ -3845,7 +3875,7 @@ function ensureIntradayChart(id) {
 }
 
 function resizeIntradayCharts() {
-    Object.values(intradayCharts).forEach(c => { try { c.resize(); } catch (_) {} });
+    Object.values(intradayCharts).forEach(c => { try { c.resize(); } catch (_) { } });
 }
 
 function fmtSigned(v, digits = 2, suffix = "") {
@@ -4088,14 +4118,18 @@ function renderIntradayCharts(d) {
         const th = chartTheme();
         ch1.setOption({
             ...th,
-            title: { text: "两市累计成交额同刻对比（亿）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
-            legend: { data: ["今日累计", "昨日同刻", "同刻量差"], right: 0, top: 0 },
-            grid: { left: 56, right: 48, top: 40, bottom: 30 },
-            xAxis: { type: "category", data: tSeries.map(x => x.time) },
+            title: { text: "两市累计成交额同刻对比（亿）", left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 } },
+            legend: { data: ["今日累计", "昨日同刻", "同刻量差"], left: 0, top: 24, itemWidth: 14, itemHeight: 8, itemGap: 12, textStyle: { fontSize: 11.5 } },
+            grid: { left: 58, right: 56, top: 76, bottom: 28 },
+            xAxis: { type: "category", data: tSeries.map(x => x.time), axisLabel: { fontSize: 11 } },
             yAxis: [
-                { type: "value", name: "累计(亿)" },
-                { type: "value", name: "差值(亿)", splitLine: { show: false } },
+                { type: "value", name: "累计(亿)", nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" } },
+                { type: "value", name: "差值(亿)", nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" }, splitLine: { show: false } },
             ],
+            graphic: tSeries.length ? [] : [{
+                type: "text", left: "center", top: "middle",
+                style: { text: tv.reason || "两市分时成交额暂不可用", fill: "#94a3b8", fontSize: 13, fontWeight: 600 },
+            }],
             series: [
                 { name: "今日累计", type: "line", showSymbol: false, data: tSeries.map(x => x.today_yi), itemStyle: { color: "#e11d48" }, lineStyle: { width: 2.2 } },
                 { name: "昨日同刻", type: "line", showSymbol: false, data: tSeries.map(x => x.prev_yi), itemStyle: { color: "#64748b" }, lineStyle: { width: 1.8, type: "dashed" } },
@@ -4119,13 +4153,13 @@ function renderIntradayCharts(d) {
         const th = chartTheme();
         ch2.setOption({
             ...th,
-            title: { text: "大盘主力净流入（亿）与盘中情绪轨迹（分）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
-            legend: { data: ["主力净流入", "小单净流入", "情绪温度"], right: 0, top: 0 },
-            grid: { left: 54, right: 44, top: 40, bottom: 30 },
-            xAxis: { type: "category", data: timeSet },
+            title: { text: "大盘主力净流入（亿）与盘中情绪轨迹（分）", left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 } },
+            legend: { data: ["主力净流入", "小单净流入", "情绪温度"], left: 0, top: 24, itemWidth: 14, itemHeight: 8, itemGap: 12, textStyle: { fontSize: 11.5 } },
+            grid: { left: 56, right: 50, top: 76, bottom: 28 },
+            xAxis: { type: "category", data: timeSet, axisLabel: { fontSize: 11 } },
             yAxis: [
-                { type: "value", name: "资金(亿)" },
-                { type: "value", name: "情绪分", min: 0, max: 100, splitLine: { show: false } },
+                { type: "value", name: "资金(亿)", nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" } },
+                { type: "value", name: "情绪分", min: 0, max: 100, nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" }, splitLine: { show: false } },
             ],
             series: [
                 { name: "主力净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.main_yi ?? null), itemStyle: { color: "#e11d48" }, lineStyle: { width: 2 } },
@@ -4143,7 +4177,7 @@ function renderIntradayCharts(d) {
         ch3.setOption({
             ...th,
             title: { text: "全A实时涨跌幅分布（家数）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
-            grid: { left: 48, right: 20, top: 36, bottom: 32 },
+            grid: { left: 48, right: 20, top: 46, bottom: 32 },
             xAxis: { type: "category", data: dist.map(x => x.range), axisLabel: { fontSize: 11 } },
             yAxis: { type: "value" },
             series: [{
@@ -4289,19 +4323,19 @@ function renderIntradayEcology(d) {
                 <div>
                     <h4>大肉榜 Top 6</h4>
                     <ul class="report-mini-list">${winners.slice(0, 6).map(s =>
-                        `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
+            `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
                 </div>
                 <div>
                     <h4>大面 / 核按钮榜 Top 6</h4>
                     <ul class="report-mini-list">${losers.slice(0, 6).map(s =>
-                        `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
+                `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
                 </div>
             </div>
             <div class="intraday-polar-grid" style="margin-top:14px">
                 <div>
                     <h4>跌停风险样本（共 ${lt.limit_down ?? 0} 只）</h4>
                     <ul class="report-mini-list">${dtList.slice(0, 6).map(s =>
-                        `<li><span>${escapeHtml(s.name)} <small>${escapeHtml(s.industry || "")}</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无跌停</li>"}</ul>
+                    `<li><span>${escapeHtml(s.name)} <small>${escapeHtml(s.industry || "")}</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无跌停</li>"}</ul>
                 </div>
                 <div>
                     <h4>炸板样本（共 ${lt.broken ?? 0} 只）</h4>
@@ -4482,6 +4516,834 @@ function bindJournalEvents() {
             if (js.status === "success" && js.data) renderPredictionJournal(js.data);
         } finally {
             btn.classList.remove("is-loading");
+        }
+    });
+}
+
+/* =====================================================================
+ * 专业解说 & 小白快速上手指南 (v3.7.0)
+ * ===================================================================== */
+let currentGuideCat = "all";
+let currentGuideQuery = "";
+let guideRenderedOnce = false;
+const expandedGuideIds = new Set();
+let currentGuideVisibleIds = [];
+
+function updateGuideToggleAllBtn() {
+    const btn = document.getElementById("guideToggleAllBtn");
+    if (!btn) return;
+    const allOpen = currentGuideVisibleIds.length > 0
+        && currentGuideVisibleIds.every(id => expandedGuideIds.has(id));
+    btn.textContent = allOpen ? "全部收起" : "展开全部";
+}
+
+function toggleGuideCardDom(cardEl, id) {
+    if (!cardEl || !id) return;
+    const willExpand = !expandedGuideIds.has(id);
+    if (willExpand) expandedGuideIds.add(id);
+    else expandedGuideIds.delete(id);
+    cardEl.classList.toggle("is-expanded", willExpand);
+    const head = cardEl.querySelector("[data-guide-toggle]");
+    if (head) head.setAttribute("aria-expanded", willExpand ? "true" : "false");
+    const chip = cardEl.querySelector(".guide-toggle-chip");
+    if (chip) chip.textContent = willExpand ? "收起 ▴" : "展开 ▾";
+    updateGuideToggleAllBtn();
+}
+
+function renderGuideWorkspace() {
+    const data = typeof GUIDE_DATA !== "undefined" ? GUIDE_DATA : null;
+    if (!data) return;
+
+    const sopEl = document.getElementById("guideSopGrid");
+    if (sopEl && !guideRenderedOnce) {
+        sopEl.innerHTML = (data.sopSteps || []).map(s => `
+            <article class="guide-sop-card">
+                <div class="guide-sop-top">
+                    <span class="guide-sop-step">${escapeHtml(s.step || "")}</span>
+                    <span class="guide-sop-time">${escapeHtml(s.time || "")}</span>
+                </div>
+                <h3>${escapeHtml(s.action || "")}</h3>
+                <p>${escapeHtml(s.detail || "")}</p>
+                <button type="button" class="guide-jump-btn" data-jump-tab="${escapeHtml(s.tabId || "")}">
+                    前往 ${escapeHtml(s.tabLabel || "")} →
+                </button>
+            </article>
+        `).join("");
+    }
+
+    const tabsEl = document.getElementById("guideCategoryTabs");
+    if (tabsEl && !guideRenderedOnce) {
+        tabsEl.innerHTML = (data.categories || []).map(c => `
+            <button type="button" class="report-dim-tab${c.id === currentGuideCat ? " active" : ""}" data-guide-cat="${escapeHtml(c.id)}">
+                ${escapeHtml(c.label)}
+            </button>
+        `).join("");
+    }
+
+    const pitEl = document.getElementById("guidePitfallsGrid");
+    if (pitEl && !guideRenderedOnce) {
+        pitEl.innerHTML = (data.pitfalls || []).map(p => `
+            <article class="guide-pitfall-card">
+                <h4>${escapeHtml(p.title || "")}</h4>
+                <p>${escapeHtml(p.desc || "")}</p>
+            </article>
+        `).join("");
+    }
+
+    guideRenderedOnce = true;
+    renderGuideCards();
+}
+
+function renderGuideCards() {
+    const data = typeof GUIDE_DATA !== "undefined" ? GUIDE_DATA : null;
+    const gridEl = document.getElementById("guideCardsGrid");
+    const countEl = document.getElementById("guideCountText");
+    if (!data || !gridEl) return;
+
+    const q = (currentGuideQuery || "").trim().toLowerCase();
+    const catMap = Object.fromEntries((data.categories || []).map(c => [c.id, c.label]));
+    const items = (data.indicators || []).filter(item => {
+        if (currentGuideCat !== "all" && item.category !== currentGuideCat) return false;
+        if (!q) return true;
+        const hay = `${item.name} ${item.en} ${item.plain} ${item.source} ${item.purpose} ${item.proUsage} ${item.pitfall} ${item.tabLabel}`.toLowerCase();
+        return hay.includes(q);
+    });
+
+    currentGuideVisibleIds = items.map(item => String(item.id || ""));
+    if (countEl) countEl.textContent = `当前展示 ${items.length} / ${(data.indicators || []).length} 项指标`;
+
+    if (!items.length) {
+        gridEl.innerHTML = `<div class="focus-empty">未找到包含「${escapeHtml(currentGuideQuery)}」的指标，请换个关键词试试。</div>`;
+        updateGuideToggleAllBtn();
+        return;
+    }
+
+    gridEl.innerHTML = items.map(item => {
+        const gid = String(item.id || "");
+        const isExpanded = expandedGuideIds.has(gid);
+        return `
+        <article class="guide-card${isExpanded ? " is-expanded" : ""}" data-guide-id="${escapeHtml(gid)}">
+            <header class="guide-card-head" data-guide-toggle="${escapeHtml(gid)}" role="button" tabindex="0" aria-expanded="${isExpanded ? "true" : "false"}">
+                <div class="guide-head-main">
+                    <span class="guide-cat-badge">${escapeHtml(catMap[item.category] || item.category || "")}</span>
+                    <h3>${escapeHtml(item.name || "")}</h3>
+                    <small class="guide-en">${escapeHtml(item.en || "")}</small>
+                </div>
+                <div class="guide-head-actions">
+                    <button type="button" class="guide-jump-btn" data-jump-tab="${escapeHtml(item.tabId || "")}">
+                        看 ${escapeHtml(item.tabLabel || "")} →
+                    </button>
+                    <span class="guide-toggle-chip">${isExpanded ? "收起 ▴" : "展开 ▾"}</span>
+                </div>
+            </header>
+
+            <div class="guide-card-body">
+                <div class="guide-plain-box">
+                    <span class="guide-block-tag plain">💡 小白大白话</span>
+                    <p>${escapeHtml(item.plain || "")}</p>
+                </div>
+
+                <div class="guide-detail-rows">
+                    <div class="guide-detail-item">
+                        <span class="guide-block-tag src">📡 数据与公式来源</span>
+                        <p>${escapeHtml(item.source || "")}</p>
+                    </div>
+                    <div class="guide-detail-item">
+                        <span class="guide-block-tag use">🎯 核心用处</span>
+                        <p>${escapeHtml(item.purpose || "")}</p>
+                    </div>
+                    <div class="guide-detail-item">
+                        <span class="guide-block-tag pro">🧠 专业实战用法</span>
+                        <p>${escapeHtml(item.proUsage || "")}</p>
+                    </div>
+                </div>
+
+                <div class="guide-pitfall-box">
+                    <strong>⚠️ 避坑与口径红线：</strong>
+                    <span>${escapeHtml(item.pitfall || "")}</span>
+                </div>
+            </div>
+        </article>`;
+    }).join("");
+    updateGuideToggleAllBtn();
+}
+
+function bindGuideEvents() {
+    const ws = document.getElementById("guideWorkspace");
+    if (!ws) return;
+    renderGuideWorkspace();
+
+    ws.addEventListener("click", (e) => {
+        const catBtn = e.target.closest("[data-guide-cat]");
+        if (catBtn) {
+            currentGuideCat = catBtn.dataset.guideCat || "all";
+            ws.querySelectorAll("[data-guide-cat]").forEach(b => b.classList.toggle("active", b === catBtn));
+            renderGuideCards();
+            return;
+        }
+        const jumpBtn = e.target.closest("[data-jump-tab]");
+        if (jumpBtn) {
+            const tabId = jumpBtn.dataset.jumpTab;
+            if (tabId) {
+                document.getElementById(tabId)?.click();
+                if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+            }
+            return;
+        }
+        const toggleAllBtn = e.target.closest("#guideToggleAllBtn");
+        if (toggleAllBtn) {
+            const allOpen = currentGuideVisibleIds.length > 0
+                && currentGuideVisibleIds.every(id => expandedGuideIds.has(id));
+            if (allOpen) currentGuideVisibleIds.forEach(id => expandedGuideIds.delete(id));
+            else currentGuideVisibleIds.forEach(id => expandedGuideIds.add(id));
+            renderGuideCards();
+            return;
+        }
+        const toggleHead = e.target.closest("[data-guide-toggle]");
+        if (toggleHead) {
+            const id = toggleHead.dataset.guideToggle || "";
+            const cardEl = toggleHead.closest(".guide-card");
+            toggleGuideCardDom(cardEl, id);
+        }
+    });
+
+    ws.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        if (e.target.closest("button, input")) return;
+        const toggleHead = e.target.closest("[data-guide-toggle]");
+        if (!toggleHead) return;
+        e.preventDefault();
+        const id = toggleHead.dataset.guideToggle || "";
+        const cardEl = toggleHead.closest(".guide-card");
+        toggleGuideCardDom(cardEl, id);
+    });
+
+    const input = document.getElementById("guideSearchInput");
+    let timer = null;
+    input?.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+            currentGuideQuery = input.value || "";
+            renderGuideCards();
+        }, 180);
+    });
+}
+
+/* =====================================================================
+ * 六指数小周期共振低点博弈雷达 & 全局环境联动 (v3.8.0)
+ * ===================================================================== */
+let resonanceData = null;
+let resonanceRequestId = 0;
+let currentMacroSubView = "single";
+
+function switchMacroSubView(view) {
+    currentMacroSubView = view === "resonance" ? "resonance" : "single";
+    const singleEl = document.getElementById("macroSingleView");
+    const resEl = document.getElementById("macroResonanceView");
+    const btnSingle = document.getElementById("subTabSingleMacro");
+    const btnRes = document.getElementById("subTabResonance");
+
+    if (singleEl) singleEl.style.display = currentMacroSubView === "single" ? "block" : "none";
+    if (resEl) resEl.style.display = currentMacroSubView === "resonance" ? "flex" : "none";
+    btnSingle?.classList?.toggle?.("active", currentMacroSubView === "single");
+    btnRes?.classList?.toggle?.("active", currentMacroSubView === "resonance");
+
+    if (currentMacroSubView === "single") {
+        setTimeout(() => { try { macroKlineChartInst?.resize?.(); } catch (_) { } }, 60);
+    } else {
+        if (!resonanceData) loadResonanceData();
+        if (!reboundPicksData) loadReboundPicks();
+    }
+}
+
+async function loadResonanceData(opts = {}) {
+    const force = !!opts.force;
+    const silent = !!opts.silent;
+    const reqId = ++resonanceRequestId;
+    const timeEl = document.getElementById("resonanceUpdateTime");
+    if (!silent && timeEl) timeEl.textContent = "扫描六指数小周期…";
+    try {
+        const res = await fetch(`/api/index/resonance${force ? "?force=true" : ""}`);
+        const js = await res.json();
+        if (reqId !== resonanceRequestId) return;
+        if (js.status !== "success" || !js.data) throw new Error(js.message || "共振数据拉取失败");
+        resonanceData = js.data;
+        renderResonancePanel(resonanceData);
+        if (timeEl) timeEl.textContent = `更新 ${resonanceData.generated_at || "—"} · 耗时 ${resonanceData.elapsed_sec ?? "—"}s`;
+    } catch (e) {
+        if (reqId !== resonanceRequestId) return;
+        if (timeEl) timeEl.textContent = "拉取失败: " + (e.message || e);
+        if (!resonanceData) {
+            const hero = document.getElementById("resonanceHero");
+            if (hero) hero.innerHTML = `<div class="report-error">${escapeHtml(e.message || String(e))}</div>`;
+        }
+    }
+}
+
+function _renderResonanceCell(cell) {
+    if (!cell || cell.state === "nodata") {
+        return `<td class="res-cell state-nodata"><span class="res-state-badge">数据不足</span></td>`;
+    }
+    const st = cell.state || "neutral";
+    const meta = [];
+    if (cell.oversold_score != null) meta.push(`超跌${Number(cell.oversold_score).toFixed(0)}`);
+    if (cell.rsi14 != null) meta.push(`RSI ${Number(cell.rsi14).toFixed(0)}`);
+    if (cell.blunt) meta.push(`<b>背离钝化</b>`);
+    return `
+        <td class="res-cell state-${escapeHtml(st)}" title="${escapeHtml(cell.desc || "")}">
+            <div class="res-cell-top">
+                <span class="res-state-badge">${escapeHtml(cell.label || "中性")}</span>
+            </div>
+            <div class="res-cell-meta">${meta.join(" · ") || "—"}</div>
+        </td>`;
+}
+
+function _renderResonanceBacktestCard(title, bt) {
+    if (!bt) {
+        return `<div class="resonance-bt-card"><h4>${escapeHtml(title)}</h4><p class="report-empty">暂无回测数据</p></div>`;
+    }
+    const ok = bt.status === "ok";
+    const horizons = bt.horizons || [];
+    const spanTxt = bt.sample_from && bt.sample_to
+        ? `${bt.sample_from.slice(0, 10)} ~ ${bt.sample_to.slice(0, 10)}` : "—";
+    const events = bt.events || [];
+    return `
+        <article class="resonance-bt-card">
+            <header class="resonance-bt-head">
+                <div>
+                    <h4>${escapeHtml(title)}</h4>
+                    <small>区间 ${escapeHtml(spanTxt)} · 共触发 <b>${bt.n ?? 0}</b> 次</small>
+                </div>
+                <span class="res-bt-badge ${ok ? "ok" : "warn"}">${ok ? "样本充足" : "样本不足"}</span>
+            </header>
+            ${!ok ? `<p class="resonance-bt-note">${escapeHtml(bt.reason || "样本不足 (<5 次)，仅作规则参考，不展示统计均值。")}</p>` : `
+                <div class="resonance-bt-path">
+                    <span>3日内平均最大反弹：${rptPct(bt.max_rebound_avg_pct)}</span>
+                    <span>3日内平均最大回撤：${rptPct(bt.max_drawdown_avg_pct)}</span>
+                </div>
+            `}
+            <div class="report-table-wrap">
+                <table class="report-table">
+                    <thead><tr><th>窗口</th><th>样本数</th><th>信号均益</th><th>正收益占比</th><th>无条件基线均值</th><th>基线正占比</th></tr></thead>
+                    <tbody>${horizons.map(h => `
+                        <tr>
+                            <td><b>T+${h.k}</b></td>
+                            <td>${h.n ?? 0}</td>
+                            <td>${h.avg_ret_pct != null ? rptPct(h.avg_ret_pct) : "<span class='muted'>样本不足</span>"}</td>
+                            <td>${h.win_rate_pct != null ? `${Number(h.win_rate_pct).toFixed(1)}%` : "—"}</td>
+                            <td>${h.baseline_avg_pct != null ? rptPct(h.baseline_avg_pct) : "—"}</td>
+                            <td>${h.baseline_win_pct != null ? `${Number(h.baseline_win_pct).toFixed(1)}%` : "—"}</td>
+                        </tr>`).join("") || "<tr><td colspan=6>暂无统计</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+            ${events.length ? `
+                <div class="resonance-bt-events">
+                    <span class="bt-ev-lbl">最近信号：</span>
+                    ${events.map(ev => `<span class="res-ev-chip">${escapeHtml((ev.time || "").slice(5, 16))} (${ev.confirm_count ?? 0}指 · T+1 ${ev.t1_pct != null ? rptPct(ev.t1_pct) : "未到期"})</span>`).join("")}
+                </div>` : ""}
+            <p class="resonance-bt-rule">${escapeHtml(bt.rule || "")}</p>
+        </article>`;
+}
+
+function renderResonancePanel(d) {
+    if (!d) return;
+    const sum = d.summary || {};
+    const cyc = d.cycle || {};
+    const gate = d.sentiment_gate || {};
+    const plan = d.plan || {};
+    const phase = sum.phase || "none";
+    const fake = sum.fake_bottom || {};
+
+    const pill = document.getElementById("subTabResonanceBadge");
+    if (pill) {
+        const shortLabels = {
+            confirm: `共振确认 ${sum.confirm_count ?? 0}/6`,
+            extended: "已达目标·勿追",
+            warning: `左侧预警 ${sum.warn_count ?? 0}/6`,
+            veto: "情绪否决",
+            none: "无共振",
+        };
+        pill.textContent = shortLabels[phase] || "无共振";
+        pill.className = `subview-phase-pill phase-${phase}`;
+    }
+
+    const discEl = document.getElementById("resonanceDisclaimer");
+    if (discEl && d.disclaimer) discEl.textContent = d.disclaimer;
+
+    const alertEl = document.getElementById("resonanceAlertBar");
+    if (alertEl) {
+        const msgs = [];
+        if (fake.flag && fake.message) msgs.push(`🚨 权重护盘伪低点预警：${fake.message}`);
+        if (phase === "veto" && gate.reason) msgs.push(`🛑 情绪否决生效：${gate.reason}`);
+        if (phase === "extended") msgs.push("⚠️ 当前反抽已越过 60 分钟 MA20 或短线超买，不再作为低吸买点，切勿追高！");
+        if (Array.isArray(sum.reasons)) {
+            sum.reasons.forEach(r => { if (r) msgs.push(`ℹ️ ${r}`); });
+        }
+        if (msgs.length) {
+            alertEl.style.display = "flex";
+            alertEl.className = `resonance-alert-bar ${fake.flag || phase === "veto" || phase === "extended" ? "is-danger" : "is-info"}`;
+            alertEl.innerHTML = msgs.map(m => `<div>${escapeHtml(m)}</div>`).join("");
+        } else {
+            alertEl.style.display = "none";
+            alertEl.innerHTML = "";
+        }
+    }
+
+    const heroEl = document.getElementById("resonanceHero");
+    if (heroEl) {
+        const warnNames = (sum.warn_symbols || []).join("、") || "暂无";
+        const confNames = (sum.confirm_symbols || []).join("、") || "暂无";
+        heroEl.innerHTML = `
+            <article class="resonance-hero-card phase-${escapeHtml(phase)}">
+                <div class="res-hero-top">
+                    <span class="res-hero-kicker">两阶段递进 · 多指数小周期共振判定</span>
+                    <span class="res-phase-badge phase-${escapeHtml(phase)}">${escapeHtml(sum.phase_label || "无共振信号")}</span>
+                </div>
+                <p class="res-hero-desc">${escapeHtml(sum.phase_desc || "正在汇总六指数 15m/30m/60m 微观结构…")}</p>
+                <div class="res-filters-row">
+                    <div class="res-filter-chip ${(sum.warn_count ?? 0) >= 4 ? "ok" : ""}">
+                        <small>1. 左侧超跌/背离</small>
+                        <b>${sum.warn_count ?? 0} / 6 指数</b>
+                    </div>
+                    <div class="res-filter-chip ${(sum.confirm_count ?? 0) >= 3 ? "ok" : ""}">
+                        <small>2. 右侧拐头确认</small>
+                        <b>${sum.confirm_count ?? 0} / 6 指数</b>
+                    </div>
+                    <div class="res-filter-chip ${sum.small_cap_in ? "ok" : ""}">
+                        <small>3. 中小盘参与</small>
+                        <b>${sum.small_cap_in ? "✓ 已参与" : "未满足"}</b>
+                    </div>
+                    <div class="res-filter-chip ${gate.status === "veto" ? "bad" : (gate.status === "pass" ? "ok" : "")}">
+                        <small>4. 跌停扩散闸门</small>
+                        <b>${escapeHtml(gate.label || "待核对")}</b>
+                    </div>
+                </div>
+                <div class="res-list-line">
+                    <span><b>超跌区指数：</b>${escapeHtml(warnNames)}</span>
+                    <span><b>已拐头指数：</b>${escapeHtml(confNames)}</span>
+                </div>
+                <div class="res-rule-tip"><b>📐 判定口径：</b>${escapeHtml(sum.rule || "")}</div>
+            </article>
+
+            <article class="resonance-plan-card mode-${escapeHtml(cyc.mode || "unknown")}">
+                <div class="res-hero-top">
+                    <span class="res-hero-kicker">大周期仓位隔离与反抽纪律</span>
+                    <span class="res-cycle-pill">${escapeHtml(cyc.label || "大周期未知")}</span>
+                </div>
+                <div class="res-plan-headline">${escapeHtml(plan.headline || "按大周期许可执行")}</div>
+                <ul class="res-plan-list">
+                    <li><span>大周期背景：</span><b>${escapeHtml(cyc.detail || "—")}</b>${cyc.op_license ? `（${escapeHtml(cyc.op_license)}）` : ""}</li>
+                    <li><span>建议仓位上限：</span><b class="highlight-pos">${escapeHtml(plan.position || "—")}</b></li>
+                    <li><span>持仓时间上限：</span><b>${escapeHtml(plan.hold || "—")}</b></li>
+                    <li><span>止盈与止损铁律：</span><b>${escapeHtml(plan.exit || "—")}</b></li>
+                </ul>
+                <div class="res-gate-note"><b>情绪门详情：</b>${escapeHtml(gate.reason || "—")}</div>
+            </article>`;
+    }
+
+    const matrixEl = document.getElementById("resonanceMatrix");
+    if (matrixEl) {
+        const rows = d.indices || [];
+        matrixEl.innerHTML = `
+            <table class="report-table resonance-table">
+                <thead>
+                    <tr>
+                        <th>指数（市场分层）</th>
+                        <th>今日涨跌</th>
+                        <th>15分钟（预警触发）</th>
+                        <th>30分钟（结构确认）</th>
+                        <th>60分钟（反抽背景）</th>
+                        <th>共振止损参考</th>
+                        <th>60m MA20 目标</th>
+                        <th>参考赔率</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(item => {
+                        const p = item.periods || {};
+                        const lv = item.levels || {};
+                        return `
+                        <tr class="${item.is_small_cap ? "is-smallcap-row" : ""}">
+                            <td>
+                                <div class="res-idx-name">
+                                    <strong>${escapeHtml(item.name || item.symbol || "")}</strong>
+                                    <span class="res-layer-tag ${item.is_small_cap ? "small" : ""}">${escapeHtml(item.layer || "")}</span>
+                                </div>
+                            </td>
+                            <td>${item.day_pct != null ? rptPct(item.day_pct) : "—"}</td>
+                            ${_renderResonanceCell(p["15"])}
+                            ${_renderResonanceCell(p["30"])}
+                            ${_renderResonanceCell(p["60"])}
+                            <td>${lv.stop != null ? rptNum(lv.stop, 2) : "—"}</td>
+                            <td>${lv.target != null ? `${rptNum(lv.target, 2)}${lv.target_reached ? ' <small class="res-reached-tag">(已达)</small>' : ""}` : "—"}</td>
+                            <td>${lv.rr != null ? `${Number(lv.rr).toFixed(2)}:1` : (lv.target_reached ? "<span class='muted'>已超目标</span>" : "—")}</td>
+                        </tr>`;
+                    }).join("") || "<tr><td colspan=8>暂无六指数数据</td></tr>"}
+                </tbody>
+            </table>`;
+    }
+
+    const btEl = document.getElementById("resonanceBacktest");
+    if (btEl) {
+        const bt = d.backtest || {};
+        btEl.innerHTML = [
+            _renderResonanceBacktestCard("60分钟级别共振回测（约 800 根历史）", bt["60"]),
+            _renderResonanceBacktestCard("30分钟级别共振回测（约 800 根历史）", bt["30"]),
+        ].join("");
+    }
+
+    renderMacroResonanceLink(d);
+    renderScreenerEnvLink(d);
+}
+
+function renderMacroResonanceLink(d) {
+    const el = document.getElementById("macroResonanceLink");
+    if (!el || !d) return;
+    const sum = d.summary || {};
+    const phase = sum.phase || "none";
+    const plan = d.plan || {};
+    const fake = sum.fake_bottom || {};
+
+    if (!sum.phase_label && !plan.headline) {
+        el.style.display = "none";
+        el.innerHTML = "";
+        return;
+    }
+
+    el.style.display = "flex";
+    el.className = `resonance-inline-link phase-${escapeHtml(phase)}${fake.flag ? " has-fake" : ""}`;
+    let text = `⚡ 小周期共振雷达：${sum.phase_label || "无共振信号"}`;
+    if (phase === "confirm") {
+        text = `⚡ 小周期共振触发：${sum.phase_label} · ${plan.title || ""}（${plan.position || ""}），独立于大周期防踏空`;
+    } else if (phase === "extended") {
+        text = `⚠️ 小周期反抽已达目标/超买：切勿高位追高，点击查看主攻方向低吸观察池 →`;
+    } else if (phase === "warning") {
+        text = `⚡ 小周期左侧预警（${sum.warn_count ?? 0}/6 指数超跌）：暂不接飞刀，切入共振矩阵盯盘拐头 →`;
+    } else if (phase === "veto") {
+        text = `🛑 小周期拐头已被跌停扩散情绪否决：跌停未收敛前暂缓反抽 →`;
+    }
+    if (fake.flag) text += "｜⚠️ 当前存在权重护盘伪低点";
+    el.innerHTML = `
+        <span class="res-inline-text">${escapeHtml(text)}</span>
+        <button type="button" class="guide-jump-btn" data-open-resonance="1">查看六指数共振矩阵 →</button>
+    `;
+}
+
+function renderScreenerEnvLink(d) {
+    const bar = document.getElementById("screenerEnvBar");
+    const env = d?.env_link;
+    if (!bar) return;
+    if (!env || !env.title) {
+        bar.style.display = "none";
+        bar.innerHTML = "";
+        return;
+    }
+
+    const recList = env.recommend || [];
+    const cauList = env.caution || [];
+    const recKeys = new Set(recList.map(x => x.key));
+    const cauKeys = new Set(cauList.map(x => x.key));
+
+    bar.style.display = "flex";
+    bar.className = `screener-env-bar tone-${escapeHtml(env.tone || "flat")}`;
+    bar.innerHTML = `
+        <div class="sc-env-top">
+            <span class="sc-env-badge tone-${escapeHtml(env.tone || "flat")}">🧭 ${escapeHtml(env.title)}</span>
+            <span class="sc-env-pos">环境参考仓位：<b>${escapeHtml(env.position || "—")}</b></span>
+            <button type="button" class="sc-env-goto" data-goto-resonance="1">共振详情 →</button>
+        </div>
+        <p class="sc-env-headline">${escapeHtml(env.headline || "")}</p>
+        <div class="sc-env-tags">
+            ${recList.length ? `<span class="sc-env-lbl">适配策略：</span>${recList.map(x => `<button type="button" class="sc-env-chip rec" data-pick-strategy="${escapeHtml(x.key)}">★ ${escapeHtml(x.label)}</button>`).join("")}` : ""}
+            ${cauList.length ? `<span class="sc-env-lbl">谨慎追高：</span>${cauList.map(x => `<span class="sc-env-chip cau">⚠ ${escapeHtml(x.label)}</span>`).join("")}` : ""}
+        </div>
+    `;
+
+    if (typeof document.querySelectorAll === "function") {
+        document.querySelectorAll(".screener-tabs .sc-tab").forEach(btn => {
+            const st = btn.dataset?.strategy || "";
+            btn.classList?.toggle?.("is-env-rec", recKeys.has(st));
+            btn.classList?.toggle?.("is-env-caution", cauKeys.has(st));
+        });
+    }
+}
+
+function bindResonanceEvents() {
+    document.getElementById("macroSubviewBar")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-macro-subview]");
+        if (btn) switchMacroSubView(btn.dataset.macroSubview);
+    });
+
+    document.getElementById("resonanceRefreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try {
+            await Promise.all([loadResonanceData({ force: true }), loadReboundPicks({ force: true })]);
+        } finally { btn.classList.remove("is-loading"); }
+    });
+
+    document.getElementById("macroResonanceLink")?.addEventListener("click", (e) => {
+        if (e.target.closest("[data-open-resonance]")) {
+            switchMacroSubView("resonance");
+            if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+    });
+
+    document.getElementById("screenerEnvBar")?.addEventListener("click", (e) => {
+        const pick = e.target.closest("[data-pick-strategy]");
+        if (pick) {
+            const st = pick.dataset.pickStrategy;
+            document.querySelector(`.screener-tabs .sc-tab[data-strategy="${st}"]`)?.click();
+            return;
+        }
+        if (e.target.closest("[data-goto-resonance]")) {
+            document.getElementById("tabIndexView")?.click();
+            switchMacroSubView("resonance");
+            if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+    });
+}
+
+/* =====================================================================
+ * 反抽主攻题材、三大角色精选标的池 & 10年点时间回测 (v3.8.1)
+ * ===================================================================== */
+let reboundPicksData = null;
+let reboundPicksRequestId = 0;
+let currentReboundPickRole = "all";
+
+async function loadReboundPicks(opts = {}) {
+    const force = !!opts.force;
+    const reqId = ++reboundPicksRequestId;
+    try {
+        const res = await fetch(`/api/index/rebound-picks${force ? "?force=true" : ""}`);
+        const js = await res.json();
+        if (reqId !== reboundPicksRequestId) return;
+        if (js.status !== "success" || !js.data) throw new Error(js.message || "主攻标的加载失败");
+        reboundPicksData = js.data;
+        renderReboundPicks(reboundPicksData);
+    } catch (e) {
+        if (reqId !== reboundPicksRequestId) return;
+        if (!reboundPicksData) {
+            const el = document.getElementById("reboundThemesGrid");
+            if (el) el.innerHTML = `<div class="report-error">${escapeHtml(e.message || String(e))}</div>`;
+        }
+    }
+}
+
+function _renderReboundBtScenario(sc) {
+    if (!sc) return "";
+    const rows = sc.strategies || [];
+    const fmtStat = (v, win) => {
+        if (v == null) return "<span class='muted'>样本不足</span>";
+        const w = win != null ? ` <small>(正${Number(win).toFixed(0)}%)</small>` : "";
+        return `${rptPct(v)}${w}`;
+    };
+    return `
+        <article class="resonance-bt-card">
+            <header class="resonance-bt-head">
+                <div>
+                    <h4>${escapeHtml(sc.title || "")}</h4>
+                    <small>${escapeHtml(sc.desc || "")} · 触发 <b>${sc.trigger_days ?? 0}</b> 次</small>
+                </div>
+            </header>
+            <div class="report-table-wrap">
+                <table class="report-table">
+                    <thead>
+                        <tr><th>打法角色</th><th>样本</th><th>T+1 扣费均益</th><th>T+3 扣费均益</th><th>3日均冲高</th><th>T+3 超额Alpha</th><th>T+5 扣费均益</th></tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map(r => `
+                            <tr class="${r.key === "trend_pullback" ? "is-best-strat" : ""}">
+                                <td><strong>${escapeHtml(r.label || r.key || "")}</strong></td>
+                                <td>${r.n ?? 0}</td>
+                                <td>${r.status === "ok" ? fmtStat(r.t1_avg_pct, r.t1_win_pct) : "<span class='muted'>样本不足</span>"}</td>
+                                <td>${r.status === "ok" ? fmtStat(r.t3_avg_pct, r.t3_win_pct) : "<span class='muted'>样本不足</span>"}</td>
+                                <td>${r.status === "ok" && r.mfe3_avg_pct != null ? rptPct(r.mfe3_avg_pct) : "—"}</td>
+                                <td>${r.key === "benchmark" ? "<span class='muted'>基准</span>" : (r.status === "ok" && r.t3_alpha_pct != null ? rptPct(r.t3_alpha_pct) : "—")}</td>
+                                <td>${r.status === "ok" ? fmtStat(r.t5_avg_pct, r.t5_win_pct) : "<span class='muted'>样本不足</span>"}</td>
+                            </tr>`).join("") || "<tr><td colspan=7>暂无回测结果</td></tr>"}
+                    </tbody>
+                </table>
+            </div>
+        </article>`;
+}
+
+function renderReboundPicks(d) {
+    if (!d) return;
+    const styleEl = document.getElementById("reboundStyleBanner");
+    const sg = d.style_guidance || {};
+    const it = d.index_timing || {};
+    if (styleEl) {
+        if (sg.message || it.detail) {
+            styleEl.style.display = "flex";
+            styleEl.className = `rebound-style-banner tone-${escapeHtml(sg.tone || "neutral")}`;
+            const timingHtml = it.detail ? `
+                <div class="rb-timing-bar">
+                    <span>📍 <b>指数盘中低点：</b>${escapeHtml(it.low_time || "—")}${it.low_pct != null ? ` (${rptPct(it.low_pct)})` : ""}</span>
+                    <span>⚡ <b>共振拐头基准：</b>${escapeHtml(it.turn_time || "尚无连续拐头")}</span>
+                    <span class="rb-timing-note">${escapeHtml(it.detail)}</span>
+                </div>` : "";
+            styleEl.innerHTML = `
+                <div class="rb-style-tags">
+                    <span class="rb-style-pill">大小盘：${escapeHtml(sg.small_vs_large || "—")}</span>
+                    <span class="rb-style-pill">风格偏好：${escapeHtml(sg.growth_vs_def || "—")}</span>
+                    <span class="rb-style-pill">阶段：${escapeHtml(d.phase_label || "—")}</span>
+                </div>
+                ${timingHtml}
+                ${sg.message ? `<p class="rb-style-msg">${escapeHtml(sg.message)}</p>` : ""}`;
+        } else {
+            styleEl.style.display = "none";
+            styleEl.innerHTML = "";
+        }
+    }
+
+    const counts = d.role_counts || {};
+    const roleMeta = d.role_meta || {};
+    const roleBtnLabels = {
+        all: "全部精选",
+        first_mover: "🚀 先手共振首攻",
+        trend_pullback: "🏛️ 强趋势低吸",
+        capacity_leader: "🔥 容量趋势中军",
+        oversold_bounce: "⚡ 超跌弹性反弹",
+    };
+    if (typeof document.querySelectorAll === "function") {
+        document.querySelectorAll("#reboundRoleTabs [data-pick-role]").forEach(btn => {
+            const rk = btn.dataset?.pickRole || "all";
+            const cnt = counts[rk] != null ? counts[rk] : (((d.top_picks || {})[rk]) || []).length;
+            const base = roleBtnLabels[rk] || rk;
+            btn.textContent = cnt != null ? `${base} (${cnt})` : base;
+            btn.classList?.toggle?.("active", rk === currentReboundPickRole);
+        });
+    }
+
+    const themesEl = document.getElementById("reboundThemesGrid");
+    const themes = d.themes || [];
+    if (themesEl) {
+        themesEl.innerHTML = themes.length ? themes.map((th, idx) => `
+            <article class="rebound-theme-card">
+                <header class="rb-theme-head">
+                    <div class="rb-theme-title-row">
+                        <span class="focus-idx">${idx + 1}</span>
+                        <strong>${escapeHtml(th.name || "")}</strong>
+                        <span class="intraday-tag">${escapeHtml(th.kind || "概念")}</span>
+                        <span class="intraday-cont-tag">${escapeHtml(th.continuity_tag || "活跃")}</span>
+                    </div>
+                    <div class="rb-theme-metrics">
+                        <span>涨幅 ${th.pct != null ? rptPct(th.pct) : "—"}</span>
+                        <span>净流入 <b>${th.net_yi != null ? rptNum(th.net_yi, 1, "亿") : "—"}</b></span>
+                        <span>净占比 <b>${th.net_ratio_pct != null ? rptNum(th.net_ratio_pct, 1, "%") : "—"}</b></span>
+                        <span>涨停 <b>${th.zt_count ?? 0}</b>家</span>
+                    </div>
+                </header>
+                <div class="rb-theme-cands">
+                    ${(th.candidates || []).map(c => `
+                        <div class="rb-cand-row">
+                            <button type="button" class="pick-stock-btn" data-jump-stock="${escapeHtml(c.code || "")}">
+                                <b>${escapeHtml(c.name || "")}</b> <small>${escapeHtml(c.code || "")}</small>
+                            </button>
+                            <span class="pick-role-badge role-${escapeHtml(c.role || "capacity_leader")}">${escapeHtml(c.role_label || "")}</span>
+                            ${c.launch_time ? `<span class="rb-cand-launch" title="${escapeHtml(c.sync_label || "")}">⏱ ${escapeHtml(c.launch_time)}</span>` : ""}
+                            <span class="rb-cand-pct">${c.pct != null ? rptPct(c.pct) : "—"}</span>
+                            <span class="rb-cand-amt">${c.amount_yi != null ? rptNum(c.amount_yi, 1, "亿") : "—"}</span>
+                            <span class="pick-status-tag tone-${escapeHtml(c.buy_tone || "buyable")}">${escapeHtml(c.buy_status || "")}</span>
+                        </div>`).join("") || `<div class="muted" style="padding:8px 0;font-size:12px;">暂无符合条件的可买成分股</div>`}
+                </div>
+            </article>`).join("") : `<div class="focus-empty">暂无主攻题材数据</div>`;
+    }
+
+    const list = ((d.top_picks || {})[currentReboundPickRole]) || [];
+    const titleEl = document.getElementById("reboundTopPicksTitle");
+    if (titleEl) {
+        const meta = roleMeta[currentReboundPickRole];
+        const rName = roleBtnLabels[currentReboundPickRole] || currentReboundPickRole;
+        titleEl.textContent = meta
+            ? `📌 ${rName} · 共 ${list.length} 只（${meta.desc}）`
+            : `📌 ${rName} · 共 ${list.length} 只（点击任意标的直查支撑压力与交易计划）`;
+    }
+
+    const topEl = document.getElementById("reboundTopPicks");
+    if (topEl) {
+        topEl.innerHTML = `
+            <table class="report-table rebound-picks-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>标的（点看计划）</th>
+                        <th>主攻题材</th>
+                        <th>归属角色</th>
+                        <th>拉升 / 高点</th>
+                        <th>vs 指数共振点</th>
+                        <th>现价 / 涨跌</th>
+                        <th>成交额</th>
+                        <th>60日 / 5日趋势</th>
+                        <th>偏离MA20 / 量比</th>
+                        <th>买入姿态</th>
+                        <th>入选逻辑</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${list.map((c, idx) => `
+                        <tr>
+                            <td class="muted">${idx + 1}</td>
+                            <td>
+                                <button type="button" class="pick-stock-btn" data-jump-stock="${escapeHtml(c.code || "")}">
+                                    <strong>${escapeHtml(c.name || "")}</strong>
+                                    <small>${escapeHtml(c.code || "")} →</small>
+                                </button>
+                            </td>
+                            <td>${escapeHtml(c.board_name || "—")}</td>
+                            <td><span class="pick-role-badge role-${escapeHtml(c.role || "capacity_leader")}">${escapeHtml(c.role_label || "")}</span></td>
+                            <td>${c.launch_time ? `<b>${escapeHtml(c.launch_time)}</b>${c.peak_time ? `<div class="cell-sub">峰 ${escapeHtml(c.peak_time)}</div>` : ""}` : "—"}</td>
+                            <td><span class="sync-badge sync-${escapeHtml(c.sync_code || "none")}">${escapeHtml(c.sync_label || "—")}</span></td>
+                            <td>${c.price != null ? `<b>${rptNum(c.price, 2)}</b>` : "—"}<div class="cell-sub">${c.pct != null ? rptPct(c.pct) : "—"}</div></td>
+                            <td>${c.amount_yi != null ? rptNum(c.amount_yi, 1, "亿") : "—"}</td>
+                            <td><div>60日 ${c.ret60_pct != null ? rptPct(c.ret60_pct, 1) : "—"}</div><div class="cell-sub">5日 ${c.ret5_pct != null ? rptPct(c.ret5_pct, 1) : "—"}</div></td>
+                            <td><div>${c.dist_ma20_pct != null ? rptPct(c.dist_ma20_pct, 1) : "—"}</div><div class="cell-sub">量比 ${c.amt_ratio != null ? rptNum(c.amt_ratio, 2, "x") : "—"}</div></td>
+                            <td><span class="pick-status-tag tone-${escapeHtml(c.buy_tone || "buyable")}">${escapeHtml(c.buy_status || "")}</span></td>
+                            <td class="muted">${escapeHtml(c.reason || "")}</td>
+                        </tr>`).join("") || "<tr><td colspan=12>当前角色暂无匹配标的，请切换上方角色标签查看</td></tr>"}
+                </tbody>
+            </table>`;
+    }
+
+    const btEl = document.getElementById("reboundPicksBacktest");
+    if (btEl) {
+        const bt = d.backtest || {};
+        if (!bt.available) {
+            btEl.innerHTML = `<div class="resonance-bt-note">${escapeHtml(bt.reason || "10 年历史面板暂不可用")}</div>`;
+        } else {
+            const sc = bt.scenarios || {};
+            const cavs = (bt.caveats || []).map(x => `<li>${escapeHtml(x)}</li>`).join("");
+            btEl.innerHTML = `
+                <div class="rebound-bt-cards">
+                    ${_renderReboundBtScenario(sc.left_ice)}
+                    ${_renderReboundBtScenario(sc.right_turn)}
+                </div>
+                ${cavs ? `<ul class="rebound-bt-caveats">${cavs}</ul>` : ""}`;
+        }
+    }
+}
+
+function bindReboundPicksEvents() {
+    document.getElementById("reboundRoleTabs")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-pick-role]");
+        if (!btn) return;
+        currentReboundPickRole = btn.dataset.pickRole || "all";
+        document.querySelectorAll("#reboundRoleTabs [data-pick-role]").forEach(b => b.classList.toggle("active", b === btn));
+        if (reboundPicksData) renderReboundPicks(reboundPicksData);
+        const topEl = document.getElementById("reboundTopPicks");
+        if (topEl) topEl.scrollTop = 0;
+    });
+
+    document.getElementById("reboundPicksSection")?.addEventListener("click", (e) => {
+        const stBtn = e.target.closest("[data-jump-stock]");
+        if (!stBtn) return;
+        const code = stBtn.dataset.jumpStock;
+        if (code) {
+            document.getElementById("tabStockView")?.click();
+            loadStockAnalysis(code);
+            if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
         }
     });
 }
