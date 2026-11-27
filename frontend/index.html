@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.5.0">
+    <link rel="stylesheet" href="/static/style.css?v=3.6.6">
 </head>
 <body>
     <div class="app-container">
@@ -1165,6 +1165,22 @@
             <div class="focus-sections" id="focusSections">
                 <div class="focus-empty">正在生成晨报…</div>
             </div>
+            <section class="focus-block journal-section" id="focusJournalSection">
+                <div class="journal-head">
+                    <div>
+                        <h2>五、次日预判与自动验证归因台账</h2>
+                        <p class="journal-sub">每日收盘自动验证前一日预判，并对命中/失误检索【外围】与【内因】原因留档</p>
+                    </div>
+                    <div class="journal-actions">
+                        <button type="button" class="report-refresh-btn" id="journalGenerateBtn">⚡ 生成/更新当期预判</button>
+                        <button type="button" class="report-refresh-btn" id="journalVerifyBtn">✅ 核对历史预判</button>
+                    </div>
+                </div>
+                <div class="journal-stats" id="journalStats"></div>
+                <div class="journal-list" id="journalList">
+                    <div class="focus-empty">正在加载预判与验证记录…</div>
+                </div>
+            </section>
             <footer class="report-footer">
                 <p>明日重点关注 · 盘前自动化晨报，不构成投资建议</p>
                 <small>板块与龙头由申万一级强弱、涨停题材与市值龙头自动挑选；MACD 状态基于日线计算。</small>
@@ -1174,6 +1190,6 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=3.5.0"></script>
+    <script src="/static/app.js?v=3.6.7"></script>
 </body>
 </html>

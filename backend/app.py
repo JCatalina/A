@@ -17,6 +17,7 @@ from factor_engine import FactorEngine
 from news_engine import news_engine
 from market_report import MarketReportEngine
 from intraday_engine import IntradaySentimentEngine
+from prediction_journal import PredictionJournalEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -40,10 +41,12 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_warm_market_report, daemon=True, name="report-prewarm").start()
     # v3.5: 盘中情绪与昨日对比预热
     threading.Thread(target=_warm_intraday_sentiment, daemon=True, name="intraday-prewarm").start()
+    # v3.6: 次日预判与自动验证台账同步
+    threading.Thread(target=_warm_prediction_journal, daemon=True, name="journal-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(
         data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report,
-        intraday_engine=intraday_engine,
+        intraday_engine=intraday_engine, prediction_journal=prediction_journal,
     )
     _scheduler.start()
     yield
@@ -52,7 +55,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="A股规则筛选技术指标与多维支撑压力位量化分析系统",
-    version="3.5.0",
+    version="3.6.0",
     lifespan=lifespan
 )
 
@@ -73,6 +76,7 @@ us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
 market_report = MarketReportEngine(index_engine=index_engine, news_engine=news_engine)
 intraday_engine = IntradaySentimentEngine(market_report=market_report)
+prediction_journal = PredictionJournalEngine(market_report=market_report, news_engine=news_engine)
 
 
 def _warm_factor_model() -> None:
@@ -99,6 +103,14 @@ def _warm_intraday_sentiment() -> None:
         logger.info("intraday sentiment prewarm finished")
     except Exception as e:
         logger.warning(f"intraday sentiment prewarm failed: {e}")
+
+
+def _warm_prediction_journal() -> None:
+    try:
+        prediction_journal.sync_and_verify_all()
+        logger.info("prediction journal prewarm finished")
+    except Exception as e:
+        logger.warning(f"prediction journal prewarm failed: {e}")
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -369,6 +381,39 @@ def archive_intraday_close(force: bool = Query(False)):
         if not snap:
             return {"status": "skipped", "message": "未到收盘或归档已存在"}
         return {"status": "success", "data": snap}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+# ---------- 次日预判与自动验证归因台账 (v3.6) ----------
+@app.get("/api/prediction/journal")
+def get_prediction_journal():
+    """获取预判台账、次日验证对比记录与累计命中率统计"""
+    try:
+        data = prediction_journal.sync_and_verify_all()
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("prediction journal failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.post("/api/prediction/generate")
+def generate_next_prediction(force: bool = Query(True)):
+    """手动生成/刷新下一交易日(或今日盘前)预判"""
+    try:
+        item = prediction_journal.generate_prediction(force=force)
+        return {"status": "success", "data": item}
+    except Exception as e:
+        logger.exception("prediction generate failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.post("/api/prediction/verify")
+def verify_predictions_now():
+    """手动触发待验证历史预判的收盘核对与外围/内因归因"""
+    try:
+        data = prediction_journal.sync_and_verify_all()
+        return {"status": "success", "data": data}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 

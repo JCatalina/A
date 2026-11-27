@@ -243,6 +243,37 @@ async function main() {
     context.renderIntradaySentiment({});
     assert.doesNotMatch(element('intradayScorePanel').innerHTML, /undefined|NaN/);
 
-    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment and markup contracts');
+    // 次日预判与自动验证归因台账 (v3.6)
+    for (const id of ['focusJournalSection', 'journalStats', 'journalList', 'journalGenerateBtn', 'journalVerifyBtn']) {
+        assert.ok(html.includes(`id="${id}"`), `missing journal markup id=${id}`);
+    }
+    assert.ok(typeof context.renderPredictionJournal === 'function');
+    context.renderPredictionJournal({
+        stats: { total: 1, verified: 1, pending: 0, hit: 0, partial: 0, miss: 1, direction_accuracy_pct: 0, sentiment_accuracy_pct: 0 },
+        records: [{
+            target_date: '2026-11-27', base_date: '2026-11-26', created_at: '2026-11-26 16:00:00', status: 'verified',
+            prediction: {
+                index_direction: '看涨', direction_rule: '上证>+0.30%为看涨', expected_range: '支撑 3420 ~ 压力 3510',
+                sentiment_trend: '升温', volume_trend: '放量', focus_sectors: [{ name: '电子', role: '主线' }],
+                external_drivers: ['美股收涨'], internal_drivers: ['两市放量'],
+            },
+            verification: {
+                overall_result: '失误', direction_hit: false, sentiment_hit: false, volume_hit: false,
+                actual: { sh_close: 3410, sh_pct: -1.92, index_direction: '看跌', sentiment_trend: '降温退潮', limit_up: 22, limit_down: 24, prev_zt_avg_pct: -2.4, turnover_yi: 11000, turnover_chg_pct: -16.5, volume_trend: '缩量' },
+                sector_checks: [{ name: '电子', pct: -3.5 }],
+            },
+            attribution: {
+                lesson: '外围放鹰叠加内因缩量退潮导致预判失误。',
+                external_reasons: ['富时A50期货波动显著(-1.80%)'],
+                internal_reasons: ['两市缩量16.5%'],
+            },
+        }],
+    });
+    assert.match(element('journalList').innerHTML, /失误/);
+    assert.match(element('journalList').innerHTML, /外围原因检索/);
+    assert.match(element('journalList').innerHTML, /内因原因检索/);
+    assert.doesNotMatch(element('journalList').innerHTML, /undefined|NaN/);
+
+    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

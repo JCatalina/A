@@ -142,6 +142,20 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(() => loadMacroIndexAnalysis(currentMacroSymbol, { silent: true }), 60000);
     setInterval(() => loadScreenerResults(currentScreenerStrategy, { silent: true }), 60000);
 
+    // v3.6.7: 页面启动即后台预加载 盘中情绪 / 复盘日报 / 明日重点 / 预判台账, 实现点击Tab秒开 + 定时静默刷新
+    setTimeout(() => {
+        loadIntradaySentiment({ silent: true });
+        loadReviewReport(false, { silent: true });
+        loadFocusReport(false, { silent: true });
+        loadPredictionJournal();
+    }, 300);
+    setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+        loadReviewReport(true, { silent: true });
+        loadFocusReport(true, { silent: true });
+        loadPredictionJournal();
+    }, 300000);
+
     // 页面重新可见时立即全量刷新: 解决挂机数日后切回页面第一眼仍是旧数据的问题
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible") return;
@@ -150,6 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadIceRebound(currentMacroSymbol);
         loadScreenerResults(currentScreenerStrategy);
         loadStockAnalysis(currentStockCode, currentPeriod, false);
+        loadIntradaySentiment({ silent: true });
     });
 });
 
@@ -333,7 +348,7 @@ function bindEvents() {
                     searchDropdown.innerHTML = json.data.slice(0, 8).map(s => `
                         <div class="search-item" data-code="${escapeHtml(s.code)}">
                             <span><strong>${escapeHtml(s.code)}</strong> ${escapeHtml(s.name)}</span>
-                            <span style="color: ${s.change_pct >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${Number(s.price).toFixed(2)} (${s.change_pct > 0 ? '+' : ''}${Number(s.change_pct)}%)</span>
+                            <span style="color: ${s.change_pct >= 0 ? '#e11d48' : '#059669'}">${Number(s.price).toFixed(2)} (${s.change_pct > 0 ? '+' : ''}${Number(s.change_pct)}%)</span>
                         </div>
                     `).join("");
                     searchDropdown.style.display = "block";
@@ -436,7 +451,7 @@ async function loadMarketIndices() {
                 return `
                     <div class="ticker-item">
                         <span class="ticker-name">${escapeHtml(idx.name)}</span>
-                        <span class="ticker-price" style="color: ${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${Number(idx.price).toFixed(2)}</span>
+                        <span class="ticker-price" style="color: ${isUp ? '#e11d48' : '#059669'}">${Number(idx.price).toFixed(2)}</span>
                         <span class="ticker-chg ${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${Number(idx.change_pct).toFixed(2)}%</span>
                     </div>
                 `;
@@ -494,12 +509,12 @@ function renderStockSummary(data) {
     const isUp = data.change_pct >= 0;
 
     priceEl.innerText = data.price.toFixed(2);
-    priceEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
+    priceEl.style.color = isUp ? "#e11d48" : "#059669";
 
     chgEl.innerText = `${isUp ? '+' : ''}${data.change_pct.toFixed(2)}%`;
     chgEl.className = `change-pct-badge ${isUp ? 'up' : 'down'}`;
-    chgEl.style.background = isUp ? "rgba(0, 245, 160, 0.15)" : "rgba(255, 51, 102, 0.15)";
-    chgEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
+    chgEl.style.background = isUp ? "rgba(225, 29, 72, 0.12)" : "rgba(5, 150, 105, 0.12)";
+    chgEl.style.color = isUp ? "#e11d48" : "#059669";
 
     // 无数据时显示 "--" 而非乐观默认值，避免误导
     document.getElementById("metricTurnover").innerText = data.turnover != null ? `${data.turnover.toFixed(2)}%` : "--%";
@@ -658,7 +673,7 @@ function renderKlineAndSubchart(data) {
             yAxisIndex: 1,
             data: rawK.map((k, i) => ({
                 value: k.volume,
-                itemStyle: { color: k.close >= k.open ? '#059669' : '#dc2626' }
+                itemStyle: { color: k.close >= k.open ? '#e11d48' : '#059669' }
             }))
         }];
     }
@@ -717,10 +732,10 @@ function renderKlineAndSubchart(data) {
                 type: 'candlestick',
                 data: kValues,
                 itemStyle: {
-                    color: '#059669',
-                    color0: '#dc2626',
-                    borderColor: '#059669',
-                    borderColor0: '#dc2626'
+                    color: '#e11d48',
+                    color0: '#059669',
+                    borderColor: '#e11d48',
+                    borderColor0: '#059669'
                 },
                 markLine: {
                     symbol: ['none', 'none'],
@@ -1383,8 +1398,8 @@ function renderMacroHeader(data, panel = CN_MACRO_PANEL) {
     const isUp = data.change_pct >= 0;
     const chgEl = document.getElementById(ids.chg);
     chgEl.innerText = `${isUp ? '+' : ''}${data.change_pct.toFixed(2)}%`;
-    chgEl.style.background = isUp ? "rgba(0, 245, 160, 0.15)" : "rgba(255, 51, 102, 0.15)";
-    chgEl.style.color = isUp ? "var(--neon-green)" : "var(--neon-red)";
+    chgEl.style.background = isUp ? "rgba(225, 29, 72, 0.12)" : "rgba(5, 150, 105, 0.12)";
+    chgEl.style.color = isUp ? "#e11d48" : "#059669";
     
     document.getElementById(ids.desc).innerText = data.desc;
 
@@ -1606,7 +1621,7 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
                         resHtml += `
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:2px 0;">
                                 <span style="color:#64748b">开 / 收:</span>
-                                <span style="font-family:var(--font-mono); font-weight:700; color:${isUp ? 'var(--neon-green)' : 'var(--neon-red)'}">${o.toFixed(2)} / ${c.toFixed(2)} (${isUp ? '+' : ''}${chgPct}%)</span>
+                                <span style="font-family:var(--font-mono); font-weight:700; color:${isUp ? '#e11d48' : '#059669'}">${o.toFixed(2)} / ${c.toFixed(2)} (${isUp ? '+' : ''}${chgPct}%)</span>
                             </div>
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:2px 0;">
                                 <span style="color:#64748b">高 / 低:</span>
@@ -1625,7 +1640,7 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
                         resHtml += `
                             <div style="display:flex; justify-content:space-between; gap:16px; margin:1px 0; font-size:11px;">
                                 <span style="color:${p.color}; font-weight:600;">■ ${p.seriesName}:</span>
-                                <span style="font-family:var(--font-mono); font-weight:700; color:${val >= 0 ? 'var(--neon-green)' : 'var(--neon-red)'}">${typeof val === 'number' ? val.toFixed(3) : val}</span>
+                                <span style="font-family:var(--font-mono); font-weight:700; color:${val >= 0 ? '#e11d48' : '#059669'}">${typeof val === 'number' ? val.toFixed(3) : val}</span>
                             </div>
                         `;
                     }
@@ -1693,10 +1708,10 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
                 type: 'candlestick',
                 data: kValues,
                 itemStyle: {
-                    color: '#059669',
-                    color0: '#dc2626',
-                    borderColor: '#059669',
-                    borderColor0: '#dc2626'
+                    color: '#e11d48',
+                    color0: '#059669',
+                    borderColor: '#e11d48',
+                    borderColor0: '#059669'
                 },
                 markLine: markLines.length > 0 ? {
                     symbol: ['none', 'none'],
@@ -1715,7 +1730,7 @@ function renderMacroKlineChart(klineData, levels, panel = CN_MACRO_PANEL) {
                 yAxisIndex: 1,
                 data: hist.map(val => ({
                     value: val,
-                    itemStyle: { color: val >= 0 ? '#059669' : '#dc2626' }
+                    itemStyle: { color: val >= 0 ? '#e11d48' : '#059669' }
                 }))
             },
             { name: 'DIF', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: dif, showSymbol: false, lineStyle: { color: '#0284c7', width: 1.2 } },
@@ -1883,7 +1898,12 @@ function bindMrdiEvents() {
 
     document.getElementById("tabIntradayView")?.addEventListener("click", () => {
         switchWorkspaceView("tabIntradayView", "intradayWorkspace");
-        loadIntradaySentiment();
+        if (intradayData) {
+            renderIntradaySentiment(intradayData);
+            loadIntradaySentiment({ silent: true });
+        } else {
+            loadIntradaySentiment();
+        }
         setTimeout(() => resizeIntradayCharts(), 120);
     });
 
@@ -1895,6 +1915,7 @@ function bindMrdiEvents() {
     document.getElementById("tabFocusView")?.addEventListener("click", () => {
         switchWorkspaceView("tabFocusView", "focusWorkspace");
         loadFocusReport();
+        loadPredictionJournal();
     });
 
     // MRDI 指数胶囊切换
@@ -2694,7 +2715,7 @@ function renderMrdiTechChart(kData, levels) {
         series: [
             {
                 name: 'K线', type: 'candlestick', data: kValues, xAxisIndex: 0, yAxisIndex: 0,
-                itemStyle: { color: '#059669', color0: '#dc2626', borderColor: '#059669', borderColor0: '#dc2626' },
+                itemStyle: { color: '#e11d48', color0: '#059669', borderColor: '#e11d48', borderColor0: '#059669' },
                 markLine: markLines.length > 0 ? { symbol: ['none', 'none'], data: markLines } : undefined
             },
             { name: 'MA5', type: 'line', data: ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { color: '#2563eb', width: 1.2 } },
@@ -2703,13 +2724,13 @@ function renderMrdiTechChart(kData, levels) {
             {
                 name: '成交量', type: 'bar', data: volumes.map((v, i) => ({
                     value: v,
-                    itemStyle: { color: kValues[i] && kValues[i][1] >= kValues[i][0] ? 'rgba(5,150,105,0.5)' : 'rgba(220,38,38,0.5)' }
+                    itemStyle: { color: kValues[i] && kValues[i][1] >= kValues[i][0] ? 'rgba(225,29,72,0.5)' : 'rgba(5,150,105,0.5)' }
                 })),
                 xAxisIndex: 1, yAxisIndex: 1
             },
             {
                 name: 'MACD柱', type: 'bar', xAxisIndex: 2, yAxisIndex: 2,
-                data: hist.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#059669' : '#dc2626' } }))
+                data: hist.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#e11d48' : '#059669' } }))
             },
             { name: 'DIF', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: dif, showSymbol: false, lineStyle: { color: '#0284c7', width: 1.2 } },
             { name: 'DEA', type: 'line', xAxisIndex: 2, yAxisIndex: 2, data: dea, showSymbol: false, lineStyle: { color: '#d97706', width: 1.2 } }
@@ -3225,6 +3246,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindNewsEvents();
     bindIntradayEvents();
     bindReportEvents();
+    bindJournalEvents();
 });
 
 /* =====================================================================
@@ -3273,13 +3295,14 @@ function chartTheme() {
     };
 }
 
-async function loadReviewReport(force = false) {
+async function loadReviewReport(force = false, opts = {}) {
+    const silent = !!(opts && opts.silent);
     if (reviewLoadedOnce && !force && reviewReportData) {
         renderReviewReport(reviewReportData);
         return;
     }
     const t = document.getElementById("reviewUpdateTime");
-    if (t) t.textContent = "拉取复盘日报…";
+    if (t && !silent) t.textContent = "拉取复盘日报…";
     try {
         const res = await fetch("/api/report/review");
         const js = await res.json();
@@ -3289,18 +3312,21 @@ async function loadReviewReport(force = false) {
         renderReviewReport(reviewReportData);
         if (t) t.textContent = `生成于 ${reviewReportData.generated_at || "—"} · 耗时 ${reviewReportData.elapsed_sec || "—"}s`;
     } catch (e) {
-        if (t) t.textContent = "加载失败: " + (e.message || e);
-        document.getElementById("reviewHeadline").innerHTML = `<li class="report-error">${escapeHtml(e.message || String(e))}</li>`;
+        if (!silent) {
+            if (t) t.textContent = "加载失败: " + (e.message || e);
+            document.getElementById("reviewHeadline").innerHTML = `<li class="report-error">${escapeHtml(e.message || String(e))}</li>`;
+        }
     }
 }
 
-async function loadFocusReport(force = false) {
+async function loadFocusReport(force = false, opts = {}) {
+    const silent = !!(opts && opts.silent);
     if (focusLoadedOnce && !force && focusReportData) {
         renderFocusReport(focusReportData);
         return;
     }
     const t = document.getElementById("focusUpdateTime");
-    if (t) t.textContent = "拉取晨报…";
+    if (t && !silent) t.textContent = "拉取晨报…";
     try {
         const res = await fetch("/api/report/focus");
         const js = await res.json();
@@ -3310,8 +3336,10 @@ async function loadFocusReport(force = false) {
         renderFocusReport(focusReportData);
         if (t) t.textContent = `生成于 ${focusReportData.generated_at || "—"} · 耗时 ${focusReportData.elapsed_sec || "—"}s`;
     } catch (e) {
-        if (t) t.textContent = "加载失败: " + (e.message || e);
-        document.getElementById("focusSections").innerHTML = `<div class="focus-empty report-error">${escapeHtml(e.message || String(e))}</div>`;
+        if (!silent) {
+            if (t) t.textContent = "加载失败: " + (e.message || e);
+            document.getElementById("focusSections").innerHTML = `<div class="focus-empty report-error">${escapeHtml(e.message || String(e))}</div>`;
+        }
     }
 }
 
@@ -4315,4 +4343,145 @@ function bindIntradayEvents() {
     if (typeof window !== "undefined") {
         window.addEventListener("resize", () => resizeIntradayCharts());
     }
+}
+
+/* =====================================================================
+ * 次日预判与自动验证归因台账 (v3.6)
+ * ===================================================================== */
+let journalData = null;
+
+async function loadPredictionJournal() {
+    const listEl = document.getElementById("journalList");
+    if (!listEl) return;
+    try {
+        const res = await fetch("/api/prediction/journal");
+        const js = await res.json();
+        if (js.status !== "success" || !js.data) throw new Error(js.message || "台账加载失败");
+        journalData = js.data;
+        renderPredictionJournal(journalData);
+    } catch (e) {
+        listEl.innerHTML = `<div class="focus-empty report-error">${escapeHtml(e.message || String(e))}</div>`;
+    }
+}
+
+function renderPredictionJournal(data) {
+    if (!data) return;
+    const statsEl = document.getElementById("journalStats");
+    const listEl = document.getElementById("journalList");
+    const st = data.stats || {};
+    if (statsEl) {
+        statsEl.innerHTML = [
+            rptCard("累计预判", `${st.total ?? 0} 期`, `已验证 ${st.verified ?? 0} · 待验证 ${st.pending ?? 0}`),
+            rptCard("命中 / 部分 / 失误", `${st.hit ?? 0} / ${st.partial ?? 0} / ${st.miss ?? 0}`, "收盘后自动对照"),
+            rptCard("方向命中率", st.direction_accuracy_pct != null ? `${rptNum(st.direction_accuracy_pct, 1)}%` : "—", "上证涨跌区间核对"),
+            rptCard("情绪命中率", st.sentiment_accuracy_pct != null ? `${rptNum(st.sentiment_accuracy_pct, 1)}%` : "—", "升温/分化/退潮核对"),
+        ].join("");
+    }
+
+    if (!listEl) return;
+    const records = data.records || [];
+    if (!records.length) {
+        listEl.innerHTML = `<div class="focus-empty">暂无预判记录，点击右上角「⚡ 生成/更新当期预判」即可创建。</div>`;
+        return;
+    }
+
+    listEl.innerHTML = records.map(rec => {
+        const p = rec.prediction || {};
+        const v = rec.verification;
+        const a = rec.attribution;
+        const isVer = rec.status === "verified" && v;
+        const ov = isVer ? (v.overall_result || "—") : "待收盘验证";
+        const ovCls = !isVer ? "pending" : (ov === "命中" ? "hit" : ov === "部分命中" ? "partial" : "miss");
+        const act = (v && v.actual) || {};
+        const sectors = (p.focus_sectors || []).map(s => `${escapeHtml(s.name)}(${escapeHtml(s.role || "")})`).join("、") || "—";
+        const secChecks = (v && v.sector_checks) || [];
+        const stageTxt = rec.stage ? ` · ${rec.stage}` : "";
+        const initDiff = rec.initial_direction && rec.initial_direction !== p.index_direction
+            ? `（盘后初版:${rec.initial_direction} → 隔夜美股修正:${p.index_direction}）` : "";
+
+        return `
+        <article class="journal-card status-${ovCls}">
+            <header class="journal-card-head">
+                <div class="journal-dates">
+                    <strong>目标日：${escapeHtml(rec.target_date || "—")}</strong>
+                    <small>基期：${escapeHtml(rec.base_date || "—")}${escapeHtml(stageTxt)} · 更新于 ${escapeHtml(rec.created_at || "—")}${escapeHtml(initDiff)}</small>
+                </div>
+                <span class="journal-result-badge ${ovCls}">${escapeHtml(ov)}</span>
+            </header>
+
+            <div class="journal-compare-grid">
+                <div class="journal-col">
+                    <h4>📌 预判内容</h4>
+                    <ul>
+                        <li>大盘方向：<b>${escapeHtml(p.index_direction || "—")}</b> <small>(${escapeHtml(p.expected_range || "—")})</small></li>
+                        <li>情绪演变：<b>${escapeHtml(p.sentiment_trend || "—")}</b> · 量能：<b>${escapeHtml(p.volume_trend || "—")}</b></li>
+                        <li>关注板块：${sectors}</li>
+                        <li class="journal-rule-tip">口径：${escapeHtml(p.direction_rule || "")}</li>
+                    </ul>
+                    <div class="journal-drivers">
+                        <div><b>外围依据：</b>${escapeHtml((p.external_drivers || []).join("；") || "—")}</div>
+                        <div><b>内因依据：</b>${escapeHtml((p.internal_drivers || []).join("；") || "—")}</div>
+                    </div>
+                </div>
+
+                <div class="journal-col">
+                    <h4>📊 次日真实结果与核对</h4>
+                    ${isVer ? `
+                        <ul>
+                            <li>上证实盘：<b>${rptNum(act.sh_close, 2)}</b> ${rptPct(act.sh_pct)}（实际：<b>${escapeHtml(act.index_direction || "—")}</b>）
+                                <span class="journal-check ${v.direction_hit ? "ok" : "bad"}">${v.direction_hit ? "✓命中" : "✗偏离"}</span>
+                            </li>
+                            <li>情绪实盘：<b>${escapeHtml(act.sentiment_trend || "—")}</b>（涨停${act.limit_up ?? "—"} / 跌停${act.limit_down ?? "—"} / 昨涨停${rptPct(act.prev_zt_avg_pct)}）
+                                <span class="journal-check ${v.sentiment_hit ? "ok" : "bad"}">${v.sentiment_hit ? "✓命中" : "✗偏离"}</span>
+                            </li>
+                            <li>量能实盘：${act.turnover_yi != null ? (act.turnover_yi / 10000).toFixed(2) + "万亿" : "—"} (${rptPct(act.turnover_chg_pct)} · ${escapeHtml(act.volume_trend || "—")})
+                                <span class="journal-check ${v.volume_hit ? "ok" : "bad"}">${v.volume_hit ? "✓命中" : "✗偏离"}</span>
+                            </li>
+                            <li>板块检验：${secChecks.map(sc => `${escapeHtml(sc.name)} ${sc.pct != null ? rptPct(sc.pct) : "—"}`).join(" · ") || "—"}</li>
+                        </ul>
+                    ` : `<p class="journal-pending-note">目标交易日尚未收盘，15:15 后系统自动拉取收盘数据并完成对比验证与归因。</p>`}
+                </div>
+            </div>
+
+            ${a ? `
+                <div class="journal-attr-box">
+                    <div class="journal-attr-lesson"><b>📝 复盘总结：</b>${escapeHtml(a.lesson || "")}</div>
+                    <div class="journal-attr-cols">
+                        <div>
+                            <h5>🌍 外围原因检索</h5>
+                            <ul>${(a.external_reasons || []).map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+                        </div>
+                        <div>
+                            <h5>🇨🇳 内因原因检索</h5>
+                            <ul>${(a.internal_reasons || []).map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+                        </div>
+                    </div>
+                </div>
+            ` : ""}
+        </article>`;
+    }).join("");
+}
+
+function bindJournalEvents() {
+    document.getElementById("journalGenerateBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try {
+            await fetch("/api/prediction/generate?force=true", { method: "POST" });
+            await loadPredictionJournal();
+        } finally {
+            btn.classList.remove("is-loading");
+        }
+    });
+    document.getElementById("journalVerifyBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try {
+            const res = await fetch("/api/prediction/verify", { method: "POST" });
+            const js = await res.json();
+            if (js.status === "success" && js.data) renderPredictionJournal(js.data);
+        } finally {
+            btn.classList.remove("is-loading");
+        }
+    });
 }

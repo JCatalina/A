@@ -45,7 +45,8 @@ class RefreshScheduler(threading.Thread):
     """常驻后台调度器: 保活 + 盘后自动任务, 所有失败仅记日志, 不影响正常接口"""
 
     def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine,
-                 factor_engine=None, news_engine=None, market_report=None, intraday_engine=None):
+                 factor_engine=None, news_engine=None, market_report=None, intraday_engine=None,
+                 prediction_journal=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
@@ -55,12 +56,14 @@ class RefreshScheduler(threading.Thread):
         self.news = news_engine
         self.report = market_report
         self.intraday = intraday_engine
+        self.journal = prediction_journal
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
         self._last_news_ts = 0.0
         self._scan_date: Optional[date] = None    # 已完成自动扫描的日期
         self._calib_date: Optional[date] = None   # 已完成盘后校准的日期
         self._report_date: Optional[date] = None  # 已完成日报存档的日期
+        self._preopen_journal_date: Optional[date] = None  # 已完成盘前终版预判的日期
         self._calib_fail_ts = 0.0                 # 最近一次盘后校准失败时刻 (重试退避基准)
         self._stop = threading.Event()
 
@@ -109,12 +112,20 @@ class RefreshScheduler(threading.Thread):
         elif time.time() - self._last_offhours_ts >= OFFHOURS_WARM_INTERVAL:
             self._last_offhours_ts = time.time()
             self.warm_offhours()
-            # 盘前低频: 刷新晨报缓存 (前瞻当天或下一交易日)
+            # 盘前低频: 刷新晨报缓存 (前瞻当天或下一交易日) + 05:30~09:25 融合隔夜美股生成盘前终版预判
             if self.report is not None and now.time() < dtime(9, 30):
                 try:
                     self.report.build_focus()
                 except Exception as e:
                     logger.warning(f"Scheduler focus rebuild failed: {e}")
+            if (self.journal is not None and dtime(5, 30) <= now.time() < dtime(9, 25)
+                    and self._preopen_journal_date != today):
+                try:
+                    self.journal.refresh_preopen_prediction(now=now)
+                    self._preopen_journal_date = today
+                    logger.info("Pre-open prediction refreshed with overnight US market")
+                except Exception as e:
+                    logger.warning(f"Scheduler preopen prediction failed: {e}")
 
     def _warm_news_if_due(self) -> None:
         """独立线程刷新: 七个外部源即使慢也不拖住 A 股保活 tick (引擎内部防重入)"""
@@ -155,6 +166,22 @@ class RefreshScheduler(threading.Thread):
         self._warm_analysis_results()
         if self.intraday is not None:
             try:
+                self.intraday.build_intraday()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours intraday failed: {e}")
+        if self.report is not None:
+            try:
+                self.report.build_review()
+                self.report.build_focus()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours report failed: {e}")
+        if self.journal is not None:
+            try:
+                self.journal.sync_and_verify_all()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours journal failed: {e}")
+        if self.intraday is not None:
+            try:
                 self.intraday.sample_intraday()
             except Exception as e:
                 logger.warning(f"Scheduler warm intraday failed: {e}")
@@ -169,6 +196,22 @@ class RefreshScheduler(threading.Thread):
                 except Exception as e:
                     logger.warning(f"Scheduler offhours kline failed {sym}:{scale}: {e}")
         self._warm_analysis_results()
+        if self.intraday is not None:
+            try:
+                self.intraday.build_intraday()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours intraday failed: {e}")
+        if self.report is not None:
+            try:
+                self.report.build_review()
+                self.report.build_focus()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours report failed: {e}")
+        if self.journal is not None:
+            try:
+                self.journal.sync_and_verify_all()
+            except Exception as e:
+                logger.warning(f"Scheduler offhours journal failed: {e}")
         if self.intraday is not None:
             try:
                 self.intraday.sample_intraday()
@@ -276,6 +319,8 @@ class RefreshScheduler(threading.Thread):
                     self.report.build_focus()
                     if self.intraday is not None:
                         self.intraday.archive_close_snapshot(force=True)
+                    if self.journal is not None:
+                        self.journal.sync_and_verify_all()
                     logger.info("Post-close market report finished")
                 except Exception as e:
                     logger.warning(f"Market report build failed: {e}")

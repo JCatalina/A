@@ -128,5 +128,32 @@ class TestReviewHeadline(unittest.TestCase):
         self.assertTrue(any("北向成交额" in x for x in lines))
 
 
+class TestTencentKlineAdapter(unittest.TestCase):
+    def test_secid_to_qq(self):
+        self.assertEqual(MarketReportEngine._secid_to_qq("1.000001"), "sh000001")
+        self.assertEqual(MarketReportEngine._secid_to_qq("0.399001"), "sz399001")
+        self.assertEqual(MarketReportEngine._secid_to_qq("0.899050"), "bj899050")
+        self.assertEqual(MarketReportEngine._secid_to_qq("1.601088"), "sh601088")
+        self.assertIsNone(MarketReportEngine._secid_to_qq("90.BK0475"))
+
+    def test_kline_tencent_parse(self):
+        eng = MarketReportEngine()
+        eng._get_json = lambda *a, **kw: {  # type: ignore
+            "data": {
+                "sh000001": {
+                    "day": [
+                        ["2026-11-25", "3450", "3460", "3470", "3440", "1000", {}, "0.5", "30000"],
+                        ["2026-11-26", "3460", "3494.6", "3500", "3455", "1200", {}, "0.6", "40000"],
+                    ]
+                }
+            }
+        }
+        rows = eng._kline_tencent("sh000001", 10)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[-1]["date"], "2026-11-26")
+        self.assertAlmostEqual(rows[-1]["amount"], 400000000.0)
+        self.assertAlmostEqual(rows[-1]["pct"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

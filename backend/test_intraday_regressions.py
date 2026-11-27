@@ -131,6 +131,25 @@ class TestLimitPoolsAndThemes(unittest.TestCase):
         res_no_arc = identify_main_attack(c_in, [], [], [], [{"name": "华为海思", "count": 4}], prev_archive=None)
         self.assertFalse(res_no_arc["prev_theme_archive_available"])
 
+    def test_noise_concept_filtered_and_synonym_zt_matched(self):
+        c_in = [
+            {"kind": "概念", "name": "股权激励", "pct": 3.0, "net_yi": 200.0, "net_ratio_pct": 15.0, "leader_name": "X", "leader_pct": 10.0},
+            {"kind": "概念", "name": "融资融券", "pct": 1.0, "net_yi": 190.0, "net_ratio_pct": 10.0, "leader_name": "Y", "leader_pct": 10.0},
+            {"kind": "概念", "name": "华为海思", "pct": 7.5, "net_yi": 80.0, "net_ratio_pct": 25.0, "leader_name": "诚迈科技", "leader_pct": 20.0},
+            {"kind": "概念", "name": "光伏", "pct": 4.0, "net_yi": 60.0, "net_ratio_pct": 15.0, "leader_name": "A", "leader_pct": 10.0},
+            {"kind": "概念", "name": "光伏概念", "pct": 5.5, "net_yi": 70.0, "net_ratio_pct": 18.0, "leader_name": "B", "leader_pct": 20.0},
+        ]
+        zt_ind = [{"name": "半导体", "count": 6}, {"name": "光伏设备", "count": 4}]
+        res = identify_main_attack(c_in, [], [], [], zt_ind, prev_archive=None)
+        names_in = [x["name"] for x in res["concept_inflow"]]
+        self.assertNotIn("股权激励", names_in)
+        self.assertNotIn("融资融券", names_in)
+        hisi = next(x for x in res["concept_inflow"] if x["name"] == "华为海思")
+        self.assertEqual(hisi["zt_count"], 6)
+        atk_names = [x["name"] for x in res["main_attack"]]
+        # 光伏与光伏概念近义去重只保留一个
+        self.assertEqual(sum(1 for n in atk_names if "光伏" in n), 1)
+
 
 class TestSentimentAndRiskGates(unittest.TestCase):
     @staticmethod

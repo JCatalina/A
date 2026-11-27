@@ -49,6 +49,55 @@ INTRADAY_INDEX_CODES = [
     ("sh000922", "中证红利"),
 ]
 
+# 宽基/财务/交易属性类"伪题材"黑名单: 这些标签包含上千只股票导致净流入虚高, 不代表盘中真实炒作主线
+_BROAD_NOISE_CONCEPTS = frozenset({
+    "融资融券", "转融券标的", "深股通", "沪股通", "陆股通", "MSCI", "MSCI中国", "MSCI大盘",
+    "标普道琼斯", "富时罗素", "中证500", "沪深300", "上证180", "上证380", "上证50", "深证100",
+    "央视50", "HS300_", "股权激励", "员工持股", "业绩预升", "业绩预降", "业绩预增", "业绩预亏",
+    "破净股", "高送转", "ST板块", "次新股", "机构重仓", "基金重仓", "社保重仓", "QFII重仓",
+    "证金持股", "汇金概念", "昨日涨停", "昨日连板", "昨日触板", "参股金融", "参股券商",
+    "参股银行", "参股保险", "重组概念", "股权转让", "定增", "专精特新", "百元股", "低价股",
+    "超跌股", "含可转债", "AH股", "B股", "分拆上市", "举牌", "创业板综", "科创板",
+    "高质押", "解禁股", "送转预期", "拟减持", "大宗交易", "独角兽", "行业龙头",
+})
+
+# 东财涨停池行业(hybk) -> 题材/行业同义关键词簇, 解决新浪概念名与东财细分行业名不一致导致涨停数为0的问题
+_THEME_SYNONYM_CLUSTERS = (
+    ("半导体", "芯片", "集成电路", "海思", "电子器件", "电子元件", "光刻", "存储", "封测", "电子信息", "元件", "光学光电子", "消费电子"),
+    ("软件", "国产软件", "信创", "华为", "鸿蒙", "云计算", "大数据", "算力", "人工智能", "大模型", "IT服务", "计算机", "互联网", "数据要素", "东数西算"),
+    ("通信", "光模块", "CPO", "5G", "6G", "卫星", "通信设备", "通信服务"),
+    ("军工", "国防军工", "军民融合", "航天", "商业航天", "航空", "航母", "无人机", "低空", "航天航空", "军工电子", "航海装备"),
+    ("光伏", "光伏概念", "TOPCon", "HJT", "风电", "储能", "锂电", "固态电池", "新能源", "光伏设备", "电池", "电网设备", "电力设备"),
+    ("汽车", "特斯拉", "新能源车", "智能驾驶", "无人驾驶", "汽车整车", "汽车零部件", "汽车服务", "飞行汽车"),
+    ("机器人", "人形机器人", "减速器", "工业母机", "自动化", "机械", "专用设备", "通用设备", "电机"),
+    ("医药", "创新药", "中药", "医疗器械", "生物制品", "化学制药", "医药商业", "CRO", "减肥药"),
+    ("金融", "券商", "证券", "银行", "保险", "多元金融", "互联网金融", "金融科技"),
+    ("消费", "白酒", "食品", "零售", "旅游", "酒店", "纺织", "美容", "影视", "传媒", "游戏"),
+    ("周期", "有色", "黄金", "稀土", "煤炭", "石油", "化工", "化学制品", "钢铁", "水泥", "建材", "地产", "房地产"),
+)
+
+
+def _is_noise_concept(name: str) -> bool:
+    nm = str(name or "").strip()
+    if not nm:
+        return True
+    if nm in _BROAD_NOISE_CONCEPTS:
+        return True
+    for kw in ("MSCI", "标普", "罗素", "深股通", "沪股通", "融券", "重仓", "昨日", "预升", "预降", "预增", "预亏", "成分"):
+        if kw in nm:
+            return True
+    return False
+
+
+def _clean_theme_root(name: str) -> str:
+    """去除'概念'/'板块'后缀用于近义去重 (如 '光伏' 与 '光伏概念')"""
+    s = str(name or "").strip()
+    for suf in ("概念", "板块", "题材"):
+        if len(s) > len(suf) + 1 and s.endswith(suf):
+            s = s[: -len(suf)]
+    return s
+
+
 # 23档互斥分布桶边界 (东财 getTopicZDFenBu: -11~11 键对应的估算中位涨幅%)
 _FENBU_MID = {
     -11: -10.0, -10: -9.5, -9: -8.5, -8: -7.5, -7: -6.5, -6: -5.5,
@@ -558,18 +607,26 @@ def identify_main_attack(
     industry_hot: List[Dict[str, Any]],
     zt_ind_today: List[Dict[str, Any]],
     prev_archive: Optional[Dict[str, Any]] = None,
+    zt_stocks_today: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     三因子共振识别「主力主攻方向」并叠加昨日热点/资金存档做持续性标注:
       attack_score = 0.45 * 主力净流入分位 + 0.30 * 涨幅分位 + 0.25 * 涨停共振加成
+    先过滤融资融券/股权激励/业绩预升等宽基伪题材, 再按同义词簇对齐涨停池统计真实涨停数。
     """
+    c_in_clean = [x for x in (concept_inflow or []) if not _is_noise_concept(x.get("name", ""))]
+    c_hot_clean = [x for x in (concept_hot or []) if not _is_noise_concept(x.get("name", ""))]
+    i_in_clean = list(industry_inflow or [])
+    i_hot_clean = list(industry_hot or [])
+
     merged: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for item in (concept_inflow or []) + (concept_hot or []) + (industry_inflow or []) + (industry_hot or []):
+    for item in c_in_clean + c_hot_clean + i_in_clean + i_hot_clean:
         key = (item.get("kind", "概念"), item.get("name", ""))
         if key[1] and key not in merged:
             merged[key] = dict(item)
 
     zt_map = {x["name"]: int(x["count"]) for x in (zt_ind_today or []) if x.get("name")}
+    zt_stock_set = set(zt_stocks_today or [])
     prev_themes = (prev_archive or {}).get("themes") or {}
     prev_all: Dict[str, Dict[str, Any]] = {}
     prev_top_names = set()
@@ -583,13 +640,27 @@ def identify_main_attack(
                 prev_top_names.add(nm)
     has_prev_archive = bool(prev_all)
 
-    def _match_zt(board_name: str) -> int:
+    def _clusters_for(nm: str) -> List[Tuple[str, ...]]:
+        return [cl for cl in _THEME_SYNONYM_CLUSTERS if any(k in nm or nm in k for k in cl)]
+
+    def _match_zt(board_name: str, leader_name: str = "") -> int:
         if board_name in zt_map:
             return zt_map[board_name]
         best = 0
         for zn, zc in zt_map.items():
             if len(zn) >= 2 and (zn in board_name or board_name in zn):
                 best = max(best, zc)
+        if best == 0:
+            # 同义词簇匹配: 如 '华为海思'/'电子信息' 命中 '半导体'/'软件开发'/'IT服务Ⅱ'
+            b_clusters = _clusters_for(board_name)
+            if b_clusters:
+                matched_total = 0
+                for zn, zc in zt_map.items():
+                    if any(any(k in zn or zn in k for k in cl) for cl in b_clusters):
+                        matched_total += zc
+                best = matched_total
+        if best == 0 and leader_name and leader_name in zt_stock_set:
+            best = 1
         return best
 
     def _enrich(lst: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -597,7 +668,7 @@ def identify_main_attack(
         for item in lst:
             row = dict(item)
             nm = row["name"]
-            row["zt_count"] = _match_zt(nm)
+            row["zt_count"] = _match_zt(nm, str(row.get("leader_name") or ""))
             pr = prev_all.get(nm)
             row["prev_net_yi"] = pr.get("net_yi") if pr else None
             row["prev_pct"] = pr.get("pct") if pr else None
@@ -610,10 +681,10 @@ def identify_main_attack(
             res.append(row)
         return res
 
-    c_in = _enrich(concept_inflow)
-    c_hot = _enrich(concept_hot)
-    i_in = _enrich(industry_inflow)
-    i_hot = _enrich(industry_hot)
+    c_in = _enrich(c_in_clean)
+    c_hot = _enrich(c_hot_clean)
+    i_in = _enrich(i_in_clean)
+    i_hot = _enrich(i_hot_clean)
 
     # 筛选净流入 > 0 且 涨幅 > 0 的方向参与主攻排序
     candidates = [
@@ -651,13 +722,14 @@ def identify_main_attack(
 
     candidates.sort(key=lambda x: (-x["attack_score"], -(x["net_yi"] or 0)))
 
-    # 去重领涨方向 (保留最能代表主攻方向的前 6 个)
+    # 近义词根去重 (如 '光伏' 与 '光伏概念' 只保留得分更高的一个, 避免同题材霸榜)
     main_attack: List[Dict[str, Any]] = []
-    seen_names = set()
+    seen_roots = set()
     for c in candidates:
-        if c["name"] in seen_names:
+        root = _clean_theme_root(c["name"])
+        if root in seen_roots:
             continue
-        seen_names.add(c["name"])
+        seen_roots.add(root)
         main_attack.append(c)
         if len(main_attack) >= 6:
             break
@@ -1274,11 +1346,38 @@ class IntradaySentimentEngine:
     # ---------- 交易日历与阶段 ----------
     def _index_daily_kline(self, secid: str, lmt: int = 30) -> List[Dict[str, Any]]:
         def _load():
+            sym = None
+            if secid.startswith("1."):
+                sym = "sh" + secid.split(".", 1)[1]
+            elif secid.startswith("0."):
+                sym = "sz" + secid.split(".", 1)[1]
+            if sym:
+                qjs = self._get_json(
+                    f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={sym},day,,,{min(max(lmt, 10), 640)},qfq",
+                    timeout=8.0, attempts=2, headers={"Referer": "https://gu.qq.com/"},
+                )
+                raw = (((qjs or {}).get("data") or {}).get(sym) or {}).get("day") or []
+                rows = []
+                prev_c = None
+                for r in raw:
+                    if isinstance(r, list) and len(r) >= 6:
+                        c = _f(r[2])
+                        amt_w = _f(r[8]) if len(r) > 8 else None
+                        if c is not None:
+                            rows.append({
+                                "date": str(r[0])[:10],
+                                "close": c,
+                                "amount": amt_w * 10000.0 if amt_w is not None else None,
+                                "pct": _pct(c, prev_c) if prev_c else 0.0,
+                            })
+                            prev_c = c
+                if rows:
+                    return rows[-lmt:]
             js = self._get_json(
                 f"https://push2his.eastmoney.com/api/qt/stock/kline/get"
                 f"?secid={secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f59"
                 f"&klt=101&fqt=1&end=20500101&lmt={lmt}",
-                timeout=10,
+                timeout=8.0, attempts=1,
             )
             rows = []
             for line in ((js or {}).get("data") or {}).get("klines") or []:
@@ -1500,15 +1599,16 @@ class IntradaySentimentEngine:
         self,
         prev: Optional[str],
         zt_ind_today: List[Dict[str, Any]],
+        zt_stocks_today: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         base = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk"
         specs = {
-            "concept_inflow": (f"{base}?page=1&num=20&sort=netamount&asc=0&fenlei=1", "概念"),
-            "concept_hot": (f"{base}?page=1&num=20&sort=avg_changeratio&asc=0&fenlei=1", "概念"),
-            "concept_outflow": (f"{base}?page=1&num=12&sort=netamount&asc=1&fenlei=1", "概念"),
-            "industry_inflow": (f"{base}?page=1&num=20&sort=netamount&asc=0&fenlei=0", "行业"),
-            "industry_hot": (f"{base}?page=1&num=20&sort=avg_changeratio&asc=0&fenlei=0", "行业"),
-            "industry_outflow": (f"{base}?page=1&num=12&sort=netamount&asc=1&fenlei=0", "行业"),
+            "concept_inflow": (f"{base}?page=1&num=45&sort=netamount&asc=0&fenlei=1", "概念"),
+            "concept_hot": (f"{base}?page=1&num=45&sort=avg_changeratio&asc=0&fenlei=1", "概念"),
+            "concept_outflow": (f"{base}?page=1&num=20&sort=netamount&asc=1&fenlei=1", "概念"),
+            "industry_inflow": (f"{base}?page=1&num=25&sort=netamount&asc=0&fenlei=0", "行业"),
+            "industry_hot": (f"{base}?page=1&num=25&sort=avg_changeratio&asc=0&fenlei=0", "行业"),
+            "industry_outflow": (f"{base}?page=1&num=15&sort=netamount&asc=1&fenlei=0", "行业"),
         }
         raw: Dict[str, List[Dict[str, Any]]] = {}
         with ThreadPoolExecutor(6) as ex:
@@ -1526,8 +1626,9 @@ class IntradaySentimentEngine:
             raw["industry_hot"],
             zt_ind_today,
             prev_archive=prev_archive,
+            zt_stocks_today=zt_stocks_today,
         )
-        out["concept_outflow"] = raw["concept_outflow"]
+        out["concept_outflow"] = [x for x in raw["concept_outflow"] if not _is_noise_concept(x.get("name", ""))][:12]
         out["industry_outflow"] = raw["industry_outflow"]
         out["available"] = any(len(raw[k]) > 0 for k in raw)
         if not out["prev_theme_archive_available"]:
@@ -1690,7 +1791,8 @@ class IntradaySentimentEngine:
 
             lim_today = limits.get("today") or {}
             lim_prev = limits.get("prev") or {}
-            themes = self.fetch_themes_and_main_attack(prev, lim_today.get("industries") or [])
+            zt_names = [s.get("name") for g in (lim_today.get("ladder") or []) for s in (g.get("stocks") or []) if s.get("name")]
+            themes = self.fetch_themes_and_main_attack(prev, lim_today.get("industries") or [], zt_stocks_today=zt_names)
 
             score_today = compute_sentiment_score(lim_today, breadth, turnover, capital_flow, themes, is_prev=False)
             score_prev = compute_sentiment_score(lim_prev, breadth, turnover, capital_flow, themes, is_prev=True)

@@ -165,12 +165,8 @@ class MarketReportEngine:
         self.index_engine = index_engine
         self.news_engine = news_engine
         self.report_dir = report_dir
-        self.session = requests.Session()
-        self.session.trust_env = False
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
-            "Referer": "https://data.eastmoney.com/",
-        })
+        self._tls = threading.local()
+        self.session = self._make_session()
         self._mem: Dict[str, Tuple[float, Any]] = {}
         self._mem_lock = threading.Lock()
         # RLock: _build_focus 内嵌 build_review(单飞锁), 可重入避免自死锁
@@ -178,6 +174,23 @@ class MarketReportEngine:
         # 常驻进程的 _mem 内存保护: 容量上限 + 过期清扫 (键按日期/股票累积, 只写不删会无界增长)
         self._mem_max_entries = 400
         self._mem_sweep_ttl = 24 * 3600
+
+    @staticmethod
+    def _make_session() -> requests.Session:
+        sess = requests.Session()
+        sess.trust_env = False
+        sess.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+            "Referer": "https://data.eastmoney.com/",
+        })
+        return sess
+
+    def _session(self) -> requests.Session:
+        sess = getattr(self._tls, "session", None)
+        if sess is None:
+            sess = self._make_session()
+            self._tls.session = sess
+        return sess
 
     # ---------- 缓存与 HTTP ----------
     def _store(self, key: str, val: Any, now_ts: float) -> None:
@@ -218,13 +231,14 @@ class MarketReportEngine:
             return val
 
     def _get_json(self, url: str, timeout: float = 10, attempts: int = 2, **kw) -> Optional[Dict[str, Any]]:
+        sess = self._session()
         for i in range(attempts):
             try:
-                return self.session.get(url, timeout=timeout, **kw).json()
+                return sess.get(url, timeout=timeout, **kw).json()
             except Exception as e:
                 if i == attempts - 1:
                     logger.warning("report fetch failed %s: %s", url[:90], e)
-                time.sleep(0.4 * (i + 1))
+                time.sleep(0.3 * (i + 1))
         return None
 
     def _disk_path(self, name: str) -> str:
@@ -250,12 +264,61 @@ class MarketReportEngine:
         except Exception as e:
             logger.warning("report disk save failed %s: %s", name, e)
 
-    # ---------- 日K ----------
+    # ---------- 日K (腾讯 newfqkline 主源 + 东财 push2his 回退) ----------
+    @staticmethod
+    def _secid_to_qq(secid: str) -> Optional[str]:
+        """东财 secid 转腾讯证券代码: 1.000001->sh000001, 0.399001->sz399001, 0.899050->bj899050"""
+        if "." not in secid:
+            return None
+        mkt, code = secid.split(".", 1)
+        if mkt == "90":
+            return None
+        if mkt == "0" and code.startswith(("899", "92", "8", "4")):
+            return f"bj{code}"
+        if mkt == "1":
+            return f"sh{code}"
+        if mkt == "0":
+            return f"sz{code}"
+        return None
+
+    def _kline_tencent(self, sym: str, lmt: int) -> List[Dict[str, Any]]:
+        """腾讯 proxy newfqkline 日K: 支持全部 A股指数与个股, row[8] 为真实成交额(万元)"""
+        req_n = min(max(lmt, 10), 640)
+        js = self._get_json(
+            f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={sym},day,,,{req_n},qfq",
+            timeout=10, attempts=2, headers={"Referer": "https://gu.qq.com/"},
+        )
+        node = ((js or {}).get("data") or {}).get(sym) or {}
+        raw = node.get("qfqday") or node.get("day") or []
+        rows: List[Dict[str, Any]] = []
+        prev_c: Optional[float] = None
+        for r in raw:
+            if not isinstance(r, list) or len(r) < 6:
+                continue
+            d_str = str(r[0])[:10]
+            o, c, h, l, vol = _f(r[1]), _f(r[2]), _f(r[3]), _f(r[4]), _f(r[5])
+            if None in (o, c, h, l, vol):
+                continue
+            amt_wan = _f(r[8]) if len(r) > 8 else None
+            amt_yuan = amt_wan * 10000.0 if amt_wan is not None else 0.0
+            pct = _pct(c, prev_c) if prev_c else 0.0
+            prev_c = c
+            rows.append({
+                "date": d_str, "open": o, "close": c, "high": h, "low": l,
+                "volume": vol, "amount": amt_yuan, "pct": pct,
+            })
+        return rows[-lmt:] if rows else []
+
     def kline(self, secid: str, lmt: int = 300, ttl: float = 600) -> List[Dict[str, Any]]:
         def _load():
+            qq_sym = self._secid_to_qq(secid)
+            if qq_sym:
+                rows = self._kline_tencent(qq_sym, lmt)
+                if rows:
+                    return rows
             js = self._get_json("https://push2his.eastmoney.com/api/qt/stock/kline/get"
                                 f"?secid={secid}&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57,f59"
-                                f"&klt=101&fqt=1&end=20500101&lmt={lmt}", timeout=12, attempts=3)
+                                f"&klt=101&fqt=1&end=20500101&lmt={lmt}", timeout=8, attempts=2)
             rows = []
             for line in ((js or {}).get("data") or {}).get("klines") or []:
                 p = str(line).split(",")
@@ -532,13 +595,13 @@ class MarketReportEngine:
             return sorted(rows, key=lambda r: r["date"]) or None
         return self._cached("margin", 1800, _load) or []
 
-    # ---------- 申万一级行业 ----------
+    # ---------- 行业板块 (东财申万一级主源 + 新浪行业资金/涨幅无缝回退) ----------
     def sw_boards(self) -> List[Dict[str, Any]]:
         def _load():
             out = {}
             for pn in range(1, 8):
                 js = self._get_json("https://push2.eastmoney.com/api/qt/clist/get?pz=100&po=1&np=1&fltt=2&invt=2&fid=f3"
-                                    f"&fs=m:90+t:2&fields=f2,f3,f6,f12,f14,f104,f105,f128,f136,f140&pn={pn}", timeout=10) or {}
+                                    f"&fs=m:90+t:2&fields=f2,f3,f6,f12,f14,f104,f105,f128,f136,f140&pn={pn}", timeout=6, attempts=1) or {}
                 diff = (js.get("data") or {}).get("diff") or []
                 for b in diff:
                     if b.get("f14") in SW1:
@@ -548,46 +611,98 @@ class MarketReportEngine:
                 if len(diff) < 100 or len(out) == len(SW1):
                     break
             return list(out.values()) or None
-        return self._cached("sw_boards", 3600, _load) or []
+        return self._cached("sw_boards", 1800, _load) or []
+
+    def _sina_industries_fallback(self) -> List[Dict[str, Any]]:
+        """东财 clist/push2his 断连时的行业回退源: 新浪行业板块实时涨跌、资金流与龙头"""
+        def _load():
+            js = self._get_json(
+                "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                "MoneyFlow.ssl_bkzj_bk?page=1&num=50&sort=avg_changeratio&asc=0&fenlei=0",
+                timeout=8, attempts=2, headers={"Referer": "https://finance.sina.com.cn/"},
+            )
+            if not isinstance(js, list):
+                return None
+            rows = []
+            for idx, x in enumerate(js):
+                nm = x.get("name")
+                pct_raw = _f(x.get("avg_changeratio"))
+                if not nm or pct_raw is None:
+                    continue
+                in_a = _f(x.get("inamount")) or 0.0
+                out_a = _f(x.get("outamount")) or 0.0
+                ts_sym = str(x.get("ts_symbol") or "")
+                ts_code = ts_sym[2:] if len(ts_sym) == 8 and ts_sym[:2] in ("sh", "sz", "bj") else ts_sym
+                ts_pct = _f(x.get("ts_changeratio"))
+                rows.append({
+                    "name": nm,
+                    "code": x.get("category") or "",
+                    "source": "sina",
+                    "pct": _r(pct_raw * 100, 2),
+                    "pct5": None,
+                    "pct20": None,
+                    "amount_yi": _r((in_a + out_a) / 1e8, 1),
+                    "amount_ratio": None,
+                    "streak": None,
+                    "rank5": idx + 1,
+                    "leader": x.get("ts_name"),
+                    "leader_code": ts_code,
+                    "leader_pct": _r(ts_pct * 100, 2) if ts_pct is not None else None,
+                })
+            return rows or None
+        return self._cached("sina_industries_fallback", 300, _load) or []
 
     def sw_industries(self, d: str, live_date: Optional[str]) -> List[Dict[str, Any]]:
         boards = self.sw_boards()
-        with ThreadPoolExecutor(8) as ex:
-            klines = list(ex.map(lambda b: self.kline(f"90.{b['code']}", 40), boards))
         rows = []
-        for b, kl in zip(boards, klines):
-            kl = self._upto(kl, d)
-            if not kl or kl[-1]["date"] != d:
-                continue
-            closes = [r["close"] for r in kl]
-            amts = [r["amount"] for r in kl]
-            streak = 0
-            for r in reversed(kl):
-                if (r["pct"] or 0) > 0 and streak >= 0:
-                    streak += 1
-                elif (r["pct"] or 0) < 0 and streak <= 0:
-                    streak -= 1
-                else:
-                    break
-            row = {"name": b["name"], "code": b["code"], "pct": kl[-1]["pct"],
-                   "pct5": _pct(closes[-1], closes[-6]) if len(closes) > 5 else None,
-                   "pct20": _pct(closes[-1], closes[-21]) if len(closes) > 20 else None,
-                   "amount_yi": _r(amts[-1] / 1e8, 1),
-                   "amount_ratio": _r(amts[-1] / statistics.mean(amts[-6:-1]), 2) if len(amts) > 5 and statistics.mean(amts[-6:-1]) else None,
-                   "streak": streak}
-            if live_date == d:
-                row.update({"up": b.get("live_up"), "down": b.get("live_down"),
-                            "leader": b.get("live_leader"), "leader_pct": b.get("live_leader_pct")})
-            rows.append(row)
+        if boards:
+            with ThreadPoolExecutor(8) as ex:
+                klines = list(ex.map(lambda b: self.kline(f"90.{b['code']}", 40), boards))
+            for b, kl in zip(boards, klines):
+                kl = self._upto(kl, d)
+                if not kl or kl[-1]["date"] != d:
+                    continue
+                closes = [r["close"] for r in kl]
+                amts = [r["amount"] for r in kl]
+                streak = 0
+                for r in reversed(kl):
+                    if (r["pct"] or 0) > 0 and streak >= 0:
+                        streak += 1
+                    elif (r["pct"] or 0) < 0 and streak <= 0:
+                        streak -= 1
+                    else:
+                        break
+                row = {"name": b["name"], "code": b["code"], "pct": kl[-1]["pct"],
+                       "pct5": _pct(closes[-1], closes[-6]) if len(closes) > 5 else None,
+                       "pct20": _pct(closes[-1], closes[-21]) if len(closes) > 20 else None,
+                       "amount_yi": _r(amts[-1] / 1e8, 1),
+                       "amount_ratio": _r(amts[-1] / statistics.mean(amts[-6:-1]), 2) if len(amts) > 5 and statistics.mean(amts[-6:-1]) else None,
+                       "streak": streak}
+                if live_date == d:
+                    row.update({"up": b.get("live_up"), "down": b.get("live_down"),
+                                "leader": b.get("live_leader"), "leader_pct": b.get("live_leader_pct")})
+                rows.append(row)
+        if not rows:
+            rows = self._sina_industries_fallback()
         rows.sort(key=lambda r: -(r["pct"] or 0))
-        for i, r in enumerate(sorted(rows, key=lambda r: -(r["pct5"] or -999))):
+        for i, r in enumerate(sorted(rows, key=lambda r: -(r["pct5"] if r.get("pct5") is not None else (r["pct"] or -999)))):
             r["rank5"] = i + 1
         return rows
 
     def board_leaders(self, board_code: str, d: str, n: int = 3) -> List[Dict[str, Any]]:
+        if str(board_code).startswith("new_"):
+            js = self._cached(f"cons_sina:{board_code}", 1800, lambda: self._get_json(
+                "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                f"Market_Center.getHQNodeData?page=1&num={n + 3}&sort=amount&asc=0&node={board_code}",
+                timeout=8, headers={"Referer": "https://finance.sina.com.cn/"},
+            ))
+            if isinstance(js, list) and js:
+                pairs = [(str(c.get("code", "")), str(c.get("name", ""))) for c in js[:n] if c.get("code")]
+                return self.stock_brief(pairs, d)
+            return []
         js = self._cached(f"cons:{board_code}", 3600, lambda: self._get_json(
             "https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=8&po=1&np=1&fltt=2&invt=2&fid=f20"
-            f"&fs=b:{board_code}&fields=f12,f14,f20", timeout=10))
+            f"&fs=b:{board_code}&fields=f12,f14,f20", timeout=8, attempts=1))
         cons = ((js or {}).get("data") or {}).get("diff") or []
         return self.stock_brief([(c["f12"], c["f14"]) for c in cons[:n]], d)
 
@@ -1175,8 +1290,11 @@ class MarketReportEngine:
         for r in sorted(sw, key=lambda r: -r["_score"]):
             if len([p for p in picked if p["role"] == "主线"]) >= 3:
                 break
-            if (r["pct5"] or 0) > 0 and (r["pct"] or 0) > -1:
-                add(r, "主线", f"近5日 {self._pct(r.get('pct5'))}（申万一级第{r['rank5']}），当日 {self._pct(r.get('pct'))}，量比 {r.get('amount_ratio')}")
+            pct5 = r.get("pct5")
+            if (pct5 is not None and pct5 > 0 and (r["pct"] or 0) > -1) or (pct5 is None and (r["pct"] or 0) > 1.0):
+                why = (f"近5日 {self._pct(pct5)}（申万一级第{r['rank5']}），当日 {self._pct(r.get('pct'))}，量比 {r.get('amount_ratio')}"
+                       if pct5 is not None else f"当日领涨 {self._pct(r.get('pct'))}，板块成交参考 {r.get('amount_yi')}亿")
+                add(r, "主线", why)
         im = {i["symbol"]: i for i in review["indices"]}
         div = im.get("sh000922")
         picked.append({"name": "红利高股息", "role": "防御", "board_code": None, "pct": div.get("pct") if div else None,

@@ -203,13 +203,13 @@ body {
 }
 
 .ticker-chg.up {
-    background: rgba(5, 150, 105, 0.12);
-    color: var(--neon-green);
+    background: rgba(225, 29, 72, 0.12);
+    color: #e11d48;
 }
 
 .ticker-chg.down {
-    background: rgba(220, 38, 38, 0.12);
-    color: var(--neon-red);
+    background: rgba(5, 150, 105, 0.12);
+    color: #059669;
 }
 
 /* 头部右侧操作区 */
@@ -1057,12 +1057,12 @@ body {
 }
 
 .sc-chg-num.up {
-    color: var(--neon-green);
+    color: #e11d48;
     font-weight: 700;
 }
 
 .sc-chg-num.down {
-    color: var(--neon-red);
+    color: #059669;
     font-weight: 700;
 }
 
@@ -1157,8 +1157,8 @@ body {
     font-weight: 700;
 }
 
-.us-ticker-item.up .ut-chg { color: var(--neon-green); }
-.us-ticker-item.down .ut-chg { color: var(--neon-red); }
+.us-ticker-item.up .ut-chg { color: #e11d48; }
+.us-ticker-item.down .ut-chg { color: #059669; }
 
 .us-ticker-time {
     margin-left: auto;
@@ -3068,6 +3068,7 @@ body {
     }
     .header-left {
         width: 100%;
+        min-width: 0;
         flex-wrap: wrap;
         gap: 10px;
     }
@@ -3076,10 +3077,13 @@ body {
     }
     .nav-view-switch {
         width: 100%;
-        padding: 3px;
+        max-width: 100%;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 4px;
     }
     .nav-tab {
-        flex: 1;
+        flex: 1 1 auto;
         justify-content: center;
         padding: 6px 8px;
         font-size: 12px;
@@ -3087,21 +3091,34 @@ body {
     }
     .market-ticker {
         width: 100%;
-        padding: 2px 4px;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+        padding: 0;
+        overflow: visible;
     }
-    .market-ticker::-webkit-scrollbar {
-        display: none;
+    .ticker-item {
+        justify-content: space-between;
+        padding: 6px 8px;
+        gap: 4px;
+        font-size: 11.5px;
+        min-width: 0;
+    }
+    .ticker-chg {
+        font-size: 11px;
+        padding: 1px 4px;
     }
     .header-right {
         width: 100%;
+        flex-wrap: wrap;
+        gap: 8px;
     }
     .search-box-wrapper {
-        flex: 1;
+        flex: 1 1 220px;
         min-width: 0;
     }
-    .search-box-wrapper input {
+    .search-box-wrapper input,
+    .search-box-wrapper input:focus {
         flex: 1;
         width: auto;
         min-width: 0;
@@ -3318,6 +3335,10 @@ body {
         padding: 5px 6px;
         gap: 4px;
     }
+    .scan-action-btn {
+        width: 100%;
+        justify-content: center;
+    }
     .charts-master-container {
         grid-template-columns: 1fr 64px;
         height: 360px;
@@ -3382,8 +3403,8 @@ body {
     margin-top: 4px;
     text-align: center;
 }
-.ice-lift.pos { color: var(--neon-green); }
-.ice-lift.neg { color: var(--neon-red); }
+.ice-lift.pos { color: #e11d48; }
+.ice-lift.neg { color: #059669; }
 .ice-detail-block {
     flex: 1 1 300px;
     display: flex;
@@ -3799,16 +3820,16 @@ body {
 
 .news-stance.hawkish,
 .news-stance.risk_off {
-    background: #fef2f2;
-    border-color: #fecaca;
-    color: #b91c1c;
+    background: #ecfdf5;
+    border-color: #a7f3d0;
+    color: #047857;
 }
 
 .news-stance.dovish,
 .news-stance.risk_on {
-    background: #ecfdf5;
-    border-color: #a7f3d0;
-    color: #047857;
+    background: #fff1f2;
+    border-color: #fecdd3;
+    color: #be123c;
 }
 
 .news-stance.neutral {
@@ -3851,13 +3872,13 @@ body {
 }
 
 .news-sector-list.bullish li {
-    background: rgba(5, 150, 105, 0.05);
-    border-color: #a7f3d0;
+    background: rgba(225, 29, 72, 0.04);
+    border-color: #fecdd3;
 }
 
 .news-sector-list.bearish li {
-    background: rgba(220, 38, 38, 0.04);
-    border-color: #fecaca;
+    background: rgba(5, 150, 105, 0.05);
+    border-color: #a7f3d0;
 }
 
 .news-sector-list strong {
@@ -3866,8 +3887,8 @@ body {
     margin-bottom: 2px;
 }
 
-.news-sector-list.bullish strong { color: var(--neon-green); }
-.news-sector-list.bearish strong { color: var(--neon-red); }
+.news-sector-list.bullish strong { color: #e11d48; }
+.news-sector-list.bearish strong { color: #059669; }
 
 .news-chain {
     list-style: none;
@@ -3989,10 +4010,10 @@ body {
     color: var(--color-text-main);
 }
 
-.news-digest-mood.warm { background: rgba(5, 150, 105, 0.08); }
-.news-digest-mood.warm strong { color: var(--neon-green); }
-.news-digest-mood.cold { background: rgba(220, 38, 38, 0.06); }
-.news-digest-mood.cold strong { color: var(--neon-red); }
+.news-digest-mood.warm { background: rgba(225, 29, 72, 0.07); }
+.news-digest-mood.warm strong { color: #e11d48; }
+.news-digest-mood.cold { background: rgba(5, 150, 105, 0.08); }
+.news-digest-mood.cold strong { color: #059669; }
 .news-digest-mood.mixed { background: rgba(217, 119, 6, 0.08); }
 .news-digest-mood.mixed strong { color: var(--neon-gold); }
 
@@ -4017,8 +4038,8 @@ body {
     margin-bottom: 6px;
 }
 
-.news-digest-label.bull { color: var(--neon-green); }
-.news-digest-label.bear { color: var(--neon-red); }
+.news-digest-label.bull { color: #e11d48; }
+.news-digest-label.bear { color: #059669; }
 
 .news-heat-list {
     display: flex;
@@ -4046,10 +4067,10 @@ body {
     opacity: 0.75;
 }
 
-.news-heat-chip.bull { color: var(--neon-green); border-color: #a7f3d0; }
-.news-heat-chip.bear { color: var(--neon-red); border-color: #fecaca; }
-.news-heat-chip.bull.active { background: rgba(5, 150, 105, 0.12); }
-.news-heat-chip.bear.active { background: rgba(220, 38, 38, 0.1); }
+.news-heat-chip.bull { color: #e11d48; border-color: #fecdd3; }
+.news-heat-chip.bear { color: #059669; border-color: #a7f3d0; }
+.news-heat-chip.bull.active { background: rgba(225, 29, 72, 0.1); }
+.news-heat-chip.bear.active { background: rgba(5, 150, 105, 0.12); }
 
 .news-heat-none {
     font-size: 12px;
@@ -4279,8 +4300,8 @@ body {
     line-height: 1.4;
 }
 
-.news-mkt.up { color: var(--neon-green); border-color: #a7f3d0; }
-.news-mkt.down { color: var(--neon-red); border-color: #fecaca; }
+.news-mkt.up { color: #e11d48; border-color: #fecdd3; }
+.news-mkt.down { color: #059669; border-color: #a7f3d0; }
 .news-mkt.mixed { color: var(--neon-gold); border-color: #fde68a; }
 .news-mkt.neutral { color: #475569; }
 
@@ -4296,8 +4317,8 @@ body {
     margin-bottom: 6px;
 }
 
-.news-sector-title.bullish { color: #047857; }
-.news-sector-title.bearish { color: #b91c1c; }
+.news-sector-title.bullish { color: #be123c; }
+.news-sector-title.bearish { color: #047857; }
 
 .news-sector-list li.none { opacity: 0.6; }
 
@@ -4890,4 +4911,76 @@ body {
     .intraday-gates-grid,
     .intraday-attack-grid { grid-template-columns: 1fr; }
     .intraday-polar-grid { grid-template-columns: 1fr; }
+}
+
+/* =====================================================================
+ * 次日预判与自动验证归因台账 (v3.6)
+ * ===================================================================== */
+.journal-section { margin-top: 18px; }
+.journal-head {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start;
+    gap: 12px; margin-bottom: 14px;
+}
+.journal-sub { margin: 4px 0 0; font-size: 12.5px; color: #64748b; }
+.journal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.journal-stats {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px; margin-bottom: 14px;
+}
+.journal-list { display: flex; flex-direction: column; gap: 14px; }
+.journal-card {
+    border: 1px solid #e2e8f0; border-left: 4px solid #94a3b8;
+    border-radius: 12px; padding: 14px 16px; background: #f8fafc;
+}
+.journal-card.status-hit { border-left-color: #16a34a; background: #f0fdf4; }
+.journal-card.status-partial { border-left-color: #d97706; background: #fffbeb; }
+.journal-card.status-miss { border-left-color: #dc2626; background: #fff5f5; }
+.journal-card-head {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+    gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed #cbd5e1;
+}
+.journal-dates { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.journal-dates strong { font-size: 14px; color: #0f172a; }
+.journal-dates small { font-size: 11.5px; color: #64748b; }
+.journal-result-badge {
+    font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 999px;
+}
+.journal-result-badge.hit { background: #dcfce7; color: #166534; }
+.journal-result-badge.partial { background: #fef3c7; color: #92400e; }
+.journal-result-badge.miss { background: #fee2e2; color: #991b1b; }
+.journal-result-badge.pending { background: #e2e8f0; color: #475569; }
+
+.journal-compare-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+}
+.journal-col {
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px;
+}
+.journal-col h4 { margin: 0 0 8px; font-size: 13px; color: #0f172a; }
+.journal-col ul { margin: 0; padding-left: 16px; font-size: 12.5px; line-height: 1.65; color: #1e293b; }
+.journal-rule-tip { color: #64748b; font-size: 11.5px; }
+.journal-drivers {
+    margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e2e8f0;
+    font-size: 12px; color: #475569; line-height: 1.55; display: grid; gap: 4px;
+}
+.journal-check {
+    display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 800;
+    padding: 1px 6px; border-radius: 999px;
+}
+.journal-check.ok { background: #dcfce7; color: #166534; }
+.journal-check.bad { background: #fee2e2; color: #991b1b; }
+.journal-pending-note { margin: 8px 0 0; font-size: 12.5px; color: #64748b; line-height: 1.55; }
+
+.journal-attr-box {
+    margin-top: 10px; background: #fff; border: 1px solid #e2e8f0;
+    border-radius: 10px; padding: 10px 12px;
+}
+.journal-attr-lesson { font-size: 12.5px; color: #0f172a; margin-bottom: 8px; line-height: 1.5; }
+.journal-attr-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.journal-attr-cols h5 { margin: 0 0 6px; font-size: 12px; color: #334155; }
+.journal-attr-cols ul { margin: 0; padding-left: 16px; font-size: 12px; color: #475569; line-height: 1.55; }
+
+@media (max-width: 960px) {
+    .journal-compare-grid,
+    .journal-attr-cols { grid-template-columns: 1fr; }
 }
