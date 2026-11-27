@@ -16,6 +16,7 @@ from ice_engine import IceEngine
 from factor_engine import FactorEngine
 from news_engine import news_engine
 from market_report import MarketReportEngine
+from intraday_engine import IntradaySentimentEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -37,9 +38,12 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=lambda: news_engine.refresh(force=True), daemon=True, name="news-prewarm").start()
     # v3.4: 复盘日报 / 晨报预热
     threading.Thread(target=_warm_market_report, daemon=True, name="report-prewarm").start()
+    # v3.5: 盘中情绪与昨日对比预热
+    threading.Thread(target=_warm_intraday_sentiment, daemon=True, name="intraday-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(
-        data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report
+        data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report,
+        intraday_engine=intraday_engine,
     )
     _scheduler.start()
     yield
@@ -47,8 +51,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="A股高胜率技术指标与多维支撑压力位量化分析系统",
-    version="3.4.0",
+    title="A股规则筛选技术指标与多维支撑压力位量化分析系统",
+    version="3.5.0",
     lifespan=lifespan
 )
 
@@ -68,6 +72,7 @@ index_engine = IndexEngine()
 us_index_engine = USIndexEngine()
 ice_engine = IceEngine()
 market_report = MarketReportEngine(index_engine=index_engine, news_engine=news_engine)
+intraday_engine = IntradaySentimentEngine(market_report=market_report)
 
 
 def _warm_factor_model() -> None:
@@ -86,6 +91,14 @@ def _warm_market_report() -> None:
         logger.info("market report prewarm finished")
     except Exception as e:
         logger.warning(f"market report prewarm failed: {e}")
+
+
+def _warm_intraday_sentiment() -> None:
+    try:
+        intraday_engine.build_intraday()
+        logger.info("intraday sentiment prewarm finished")
+    except Exception as e:
+        logger.warning(f"intraday sentiment prewarm failed: {e}")
 
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
@@ -331,6 +344,30 @@ def archive_market_snapshot(force: bool = Query(False)):
         snap = market_report.archive_snapshot(force=force)
         if not snap:
             return {"status": "skipped", "message": "未到收盘或抓取失败"}
+        return {"status": "success", "data": snap}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+# ---------- A股盘中数据分析与情绪监控 (v3.5) ----------
+@app.get("/api/intraday/sentiment")
+def get_intraday_sentiment(force: bool = Query(False, description="是否跳过短TTL缓存强制拉取实时数据")):
+    """盘中全维度情绪监控、昨日对比、主力主攻方向与6大风控熔断闸门"""
+    try:
+        data = intraday_engine.build_intraday(force=force)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("intraday sentiment failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.post("/api/intraday/archive")
+def archive_intraday_close(force: bool = Query(False)):
+    """手动触发当日盘中热点与情绪收盘基线归档 (供次日对比)"""
+    try:
+        snap = intraday_engine.archive_close_snapshot(force=force)
+        if not snap:
+            return {"status": "skipped", "message": "未到收盘或归档已存在"}
         return {"status": "success", "data": snap}
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})

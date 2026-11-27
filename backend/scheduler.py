@@ -45,7 +45,7 @@ class RefreshScheduler(threading.Thread):
     """常驻后台调度器: 保活 + 盘后自动任务, 所有失败仅记日志, 不影响正常接口"""
 
     def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine,
-                 factor_engine=None, news_engine=None, market_report=None):
+                 factor_engine=None, news_engine=None, market_report=None, intraday_engine=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
@@ -54,6 +54,7 @@ class RefreshScheduler(threading.Thread):
         self.factor = factor_engine
         self.news = news_engine
         self.report = market_report
+        self.intraday = intraday_engine
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
         self._last_news_ts = 0.0
@@ -152,6 +153,11 @@ class RefreshScheduler(threading.Thread):
                 logger.warning(f"Scheduler warm realtime failed {sym}: {e}")
 
         self._warm_analysis_results()
+        if self.intraday is not None:
+            try:
+                self.intraday.sample_intraday()
+            except Exception as e:
+                logger.warning(f"Scheduler warm intraday failed: {e}")
 
     def warm_offhours(self) -> None:
         """非交易时段低频保活: 日/周K + 快照 + 研判/冰点结果, 保证打开页面即新鲜"""
@@ -163,6 +169,11 @@ class RefreshScheduler(threading.Thread):
                 except Exception as e:
                     logger.warning(f"Scheduler offhours kline failed {sym}:{scale}: {e}")
         self._warm_analysis_results()
+        if self.intraday is not None:
+            try:
+                self.intraday.sample_intraday()
+            except Exception as e:
+                logger.warning(f"Scheduler warm intraday failed: {e}")
 
     def _warm_headline(self) -> None:
         """大盘指数条快照 (fetcher 内部 15s TTL, 前端 30s 轮询秒回)"""
@@ -263,6 +274,8 @@ class RefreshScheduler(threading.Thread):
                 try:
                     self.report.build_review()
                     self.report.build_focus()
+                    if self.intraday is not None:
+                        self.intraday.archive_close_snapshot(force=True)
                     logger.info("Post-close market report finished")
                 except Exception as e:
                     logger.warning(f"Market report build failed: {e}")

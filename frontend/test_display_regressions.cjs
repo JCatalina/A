@@ -198,6 +198,51 @@ async function main() {
     assert.doesNotMatch(digest, /undefined|NaN/);
     assert.match(context.renderNewsDigest({hours: 12, count: 0}), /暂无/);
 
-    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab and markup contracts');
+    // 盘中情绪监控 TAB 与口径契约 (v3.5)
+    for (const id of ['tabIntradayView', 'intradayWorkspace', 'intradayDecisionHero', 'intradayScorePanel',
+                      'intradayGatesGrid', 'intradayCompareCards', 'intradayCompareTable',
+                      'intradayMainAttackGrid', 'intradayThemeTable', 'intradayLadderPanel', 'intradayPremiumPanel']) {
+        assert.ok(html.includes(`id="${id}"`), `missing intraday markup id=${id}`);
+    }
+    assert.ok(typeof context.loadIntradaySentiment === 'function');
+    assert.ok(typeof context.renderIntradaySentiment === 'function');
+    context.renderIntradaySentiment({
+        date: '2026-11-27', weekday: '周五', prev_date: '2026-11-26',
+        phase: 'trading_am', phase_label: '早盘实时交易中',
+        decision: {
+            level: 'no_go', title: '禁手观望 · 不建议参与', position: '0% (空仓等待)',
+            cycle_stage: '分歧退潮期', headline: '跌停家数触发熔断红线，建议空仓等待。',
+            rule_summary: '四档判定口径：触发任意≥1条红灯熔断则禁手观望',
+            block_count: 1, warn_count: 1, pass_count: 4, peak_score: 62.0, drawdown: 14.0,
+            warnings: ['主力大幅流出'],
+            gates: [{
+                key: 'loss_gate', name: '1. 亏钱效应红线', status: 'block', status_label: '熔断',
+                current_text: '跌停 18 家', prev_text: '昨跌停 3 家',
+                rule_text: '绿: 跌停≤5 ｜ 红(熔断): 跌停≥15', reason: '跌停触发红线',
+            }],
+        },
+        sentiment: {
+            score: 32.5, label: '偏冷 · 弱势', prev_score: 54.0, delta: -21.5,
+            components: [{ key: 'relay_premium', name: '接力溢价', weight_pct: 25, score: 28.0, formula: '昨涨停均涨+红盘率' }],
+        },
+        compare_rows: [{ category: '量能', name: '同刻成交额', today: '5,000亿', prev: '5,500亿', delta: '-500亿', tone: 'down', signal: '温和缩量' }],
+        turnover: { available: true, latest_time: '11:30', today_cum_yi: 5000, prev_same_time_yi: 5500, same_time_diff_pct: -9.09, estimated_full_yi: 8000 },
+        limits: { today: { limit_up: 28, limit_down: 18, broken: 15, seal_rate: 65.1, max_board: 3, prev_zt_avg_pct: -1.4, prev_zt_up_ratio: 35.0, big_loss_rate: 28.0 }, prev: { limit_up: 52, limit_down: 3, broken: 8, seal_rate: 86.7, max_board: 5, prev_zt_avg_pct: 1.8 } },
+        breadth: { available: true, up: 1200, down: 3900, up_ratio: 23.0, prev_up_ratio: 62.0 },
+        capital_flow: { available: true, main_yi: -260.5, super_yi: -180.0, prev_main_yi: 45.0 },
+        themes: { main_attack: [], concept_inflow: [], concept_hot: [], industry_inflow: [], industry_outflow: [] },
+        indices_style: { indices: [{ name: '上证指数', price: 3450.0, pct: -0.9 }], small_vs_large: -0.8, small_vs_large_label: '大盘权重占优', growth_vs_def: -1.1, growth_vs_def_label: '红利防御占优' },
+    });
+    assert.match(element('intradayDecisionHero').innerHTML, /禁手观望/);
+    assert.match(element('intradayDecisionHero').innerHTML, /参与决策判定口径/);
+    assert.match(element('intradayGatesGrid').innerHTML, /跌停≥15/);
+    assert.doesNotMatch(element('intradayDecisionHero').innerHTML, /undefined|NaN/);
+    assert.doesNotMatch(element('intradayGatesGrid').innerHTML, /undefined|NaN/);
+    assert.doesNotMatch(element('intradayCompareTable').innerHTML, /undefined|NaN/);
+    // 缺失数据空对象降级不抛错且无 NaN/undefined
+    context.renderIntradaySentiment({});
+    assert.doesNotMatch(element('intradayScorePanel').innerHTML, /undefined|NaN/);
+
+    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1816,6 +1816,7 @@ const WORKSPACE_TABS = [
     { tab: "tabUsView", ws: "usWorkspace" },
     { tab: "tabMrdiView", ws: "mrdiWorkspace" },
     { tab: "tabNewsView", ws: "newsWorkspace" },
+    { tab: "tabIntradayView", ws: "intradayWorkspace" },
     { tab: "tabReviewView", ws: "reviewWorkspace" },
     { tab: "tabFocusView", ws: "focusWorkspace" },
     { tab: "tabStockView", ws: "stockWorkspace" }
@@ -1878,6 +1879,12 @@ function bindMrdiEvents() {
     tabNews?.addEventListener("click", () => {
         switchWorkspaceView("tabNewsView", "newsWorkspace");
         loadNewsFeed({ forcePoll: true });
+    });
+
+    document.getElementById("tabIntradayView")?.addEventListener("click", () => {
+        switchWorkspaceView("tabIntradayView", "intradayWorkspace");
+        loadIntradaySentiment();
+        setTimeout(() => resizeIntradayCharts(), 120);
     });
 
     document.getElementById("tabReviewView")?.addEventListener("click", () => {
@@ -3216,6 +3223,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindMrdiEvents();
     bindUsMacroEvents();
     bindNewsEvents();
+    bindIntradayEvents();
     bindReportEvents();
 });
 
@@ -3789,4 +3797,522 @@ function bindReportEvents() {
         });
     });
     window.addEventListener("resize", () => resizeReportCharts());
+}
+
+/* =====================================================================
+ * A股盘中数据分析与情绪监控 (v3.5) — 昨日全维度对比 + 6大风控熔断闸门
+ * ===================================================================== */
+let intradayData = null;
+let intradayRequestId = 0;
+let intradayThemeTab = "concept_inflow";
+let intradayAutoPollTimer = null;
+const intradayCharts = {};
+
+function ensureIntradayChart(id) {
+    if (typeof echarts === "undefined") return null;
+    const el = document.getElementById(id);
+    if (!el) return null;
+    if (!intradayCharts[id]) intradayCharts[id] = echarts.init(el);
+    return intradayCharts[id];
+}
+
+function resizeIntradayCharts() {
+    Object.values(intradayCharts).forEach(c => { try { c.resize(); } catch (_) {} });
+}
+
+function fmtSigned(v, digits = 2, suffix = "") {
+    if (v == null || Number.isNaN(Number(v))) return "—";
+    const n = Number(v);
+    return `${n > 0 ? "+" : ""}${n.toFixed(digits)}${suffix}`;
+}
+
+async function loadIntradaySentiment(opts = {}) {
+    const force = !!opts.force;
+    const silent = !!opts.silent;
+    const reqId = ++intradayRequestId;
+    const timeEl = document.getElementById("intradayUpdateTime");
+    if (!silent && timeEl) timeEl.textContent = "同步盘中数据…";
+    try {
+        const res = await fetch(`/api/intraday/sentiment${force ? "?force=true" : ""}`);
+        const js = await res.json();
+        if (reqId !== intradayRequestId) return;
+        if (js.status !== "success" || !js.data) throw new Error(js.message || "盘中数据拉取失败");
+        intradayData = js.data;
+        renderIntradaySentiment(intradayData);
+        if (timeEl) timeEl.textContent = `更新 ${intradayData.generated_at || "—"} · 耗时 ${intradayData.elapsed_sec ?? "—"}s`;
+    } catch (e) {
+        if (reqId !== intradayRequestId) return;
+        if (timeEl) timeEl.textContent = "拉取失败: " + (e.message || e);
+        if (!intradayData) {
+            const hero = document.getElementById("intradayDecisionHero");
+            if (hero) hero.innerHTML = `<div class="report-error">${escapeHtml(e.message || String(e))}</div>`;
+        }
+    }
+}
+
+function renderIntradaySentiment(d) {
+    if (!d) return;
+    const titleEl = document.getElementById("intradayTitle");
+    if (titleEl) {
+        const prevTxt = d.prev_date ? ` vs 昨日 ${d.prev_date}` : "";
+        titleEl.textContent = `A股盘中情绪监控 · ${d.date || "—"}${d.weekday ? `（${d.weekday}）` : ""}${prevTxt}`;
+    }
+    const phaseEl = document.getElementById("intradayPhaseBadge");
+    if (phaseEl) {
+        phaseEl.textContent = d.phase_label || "盘面同步";
+        phaseEl.className = `intraday-phase-badge phase-${d.phase || "closed"}`;
+    }
+    const discEl = document.getElementById("intradayDisclaimer");
+    if (discEl && d.disclaimer) discEl.textContent = d.disclaimer;
+
+    renderIntradayDecisionAndScore(d);
+    renderIntradayGates(d);
+    renderIntradayCompare(d);
+    renderIntradayCharts(d);
+    renderIntradayThemes(d);
+    renderIntradayEcology(d);
+    setTimeout(() => resizeIntradayCharts(), 80);
+}
+
+function renderIntradayDecisionAndScore(d) {
+    const dec = d.decision || {};
+    const sent = d.sentiment || {};
+    const hero = document.getElementById("intradayDecisionHero");
+    const level = dec.level || "cautious";
+    const levelIcons = { no_go: "🚫", cautious: "⚠️", selective: "🟡", active: "🟢" };
+    if (hero) {
+        hero.className = `intraday-decision-hero level-${level}`;
+        const warnList = (dec.warnings || []).map(w => `<li>${escapeHtml(w)}</li>`).join("");
+        hero.innerHTML = `
+            <div class="intraday-hero-top">
+                <div class="intraday-hero-badge">${levelIcons[level] || "⚖️"} ${escapeHtml(dec.title || "评估中")}</div>
+                <span class="intraday-cycle-pill">周期：${escapeHtml(dec.cycle_stage || "—")}</span>
+                <span class="intraday-gate-summary">绿灯 ${dec.pass_count ?? 0} · 黄灯 ${dec.warn_count ?? 0} · 红灯 ${dec.block_count ?? 0}</span>
+            </div>
+            <div class="intraday-hero-pos">
+                <span>参考仓位上限：</span>
+                <strong>${escapeHtml(dec.position || "—")}</strong>
+                ${dec.drawdown != null ? `<small>日内峰值 ${rptNum(dec.peak_score, 1)} 分 · 回落 ${rptNum(dec.drawdown, 1)} 分</small>` : ""}
+            </div>
+            <p class="intraday-hero-headline">${escapeHtml(dec.headline || "正在汇总盘面信号…")}</p>
+            ${warnList ? `<ul class="intraday-hero-warnings">${warnList}</ul>` : ""}
+            <div class="intraday-rule-box">
+                <strong>📐 参与决策判定口径：</strong>
+                <span>${escapeHtml(dec.rule_summary || "客观规则评估")}</span>
+            </div>
+        `;
+    }
+
+    const scorePanel = document.getElementById("intradayScorePanel");
+    if (scorePanel) {
+        const sc = sent.score;
+        const delta = sent.delta;
+        const comps = sent.components || [];
+        scorePanel.innerHTML = `
+            <div class="intraday-score-head">
+                <div>
+                    <div class="intraday-score-kicker">情绪温度计（0~100 · 非概率）</div>
+                    <div class="intraday-score-main">
+                        <span class="intraday-score-num">${sc != null ? Number(sc).toFixed(1) : "—"}</span>
+                        <span class="intraday-score-label">${escapeHtml(sent.label || "数据不足")}</span>
+                    </div>
+                </div>
+                <div class="intraday-score-compare">
+                    <div>昨日对照：<b>${sent.prev_score != null ? Number(sent.prev_score).toFixed(1) + "分" : "—"}</b></div>
+                    <div>较昨日：<span class="rpt-pct ${rptTone(delta)}">${delta != null ? fmtSigned(delta, 1, "分") : "—"}</span></div>
+                </div>
+            </div>
+            <div class="intraday-dims-list">
+                ${comps.map(c => `
+                    <div class="intraday-dim-row" title="${escapeHtml(c.formula || "")}">
+                        <div class="intraday-dim-meta">
+                            <span>${escapeHtml(c.name || "")} <small>(${c.weight_pct ?? 0}%)</small></span>
+                            <b>${c.score != null ? Number(c.score).toFixed(1) : "缺"}</b>
+                        </div>
+                        <div class="intraday-dim-track">
+                            <div class="intraday-dim-fill" style="width:${c.score != null ? Math.max(0, Math.min(100, c.score)) : 0}%"></div>
+                        </div>
+                        <div class="intraday-dim-formula">${escapeHtml(c.formula || "")}</div>
+                    </div>
+                `).join("")}
+            </div>
+        `;
+    }
+}
+
+function renderIntradayGates(d) {
+    const grid = document.getElementById("intradayGatesGrid");
+    if (!grid) return;
+    const gates = (d.decision || {}).gates || [];
+    if (!gates.length) {
+        grid.innerHTML = `<div class="report-empty">暂无风控闸门数据</div>`;
+        return;
+    }
+    grid.innerHTML = gates.map(g => `
+        <article class="intraday-gate-card gate-${escapeHtml(g.status || "warn")}">
+            <header class="intraday-gate-head">
+                <strong>${escapeHtml(g.name || "")}</strong>
+                <span class="intraday-gate-badge status-${escapeHtml(g.status || "warn")}">${escapeHtml(g.status_label || "—")}</span>
+            </header>
+            <div class="intraday-gate-vals">
+                <div class="gate-cur">今日：<b>${escapeHtml(g.current_text || "—")}</b></div>
+                <div class="gate-prev">${escapeHtml(g.prev_text || "昨 —")}</div>
+            </div>
+            <p class="intraday-gate-reason">${escapeHtml(g.reason || "")}</p>
+            <div class="intraday-gate-rule"><span>口径：</span>${escapeHtml(g.rule_text || "")}</div>
+        </article>
+    `).join("");
+}
+
+function renderIntradayCompare(d) {
+    const tv = d.turnover || {};
+    const lim = (d.limits || {}).today || {};
+    const lp = (d.limits || {}).prev || {};
+    const br = d.breadth || {};
+    const cf = d.capital_flow || {};
+    const style = d.indices_style || {};
+
+    const sub = document.getElementById("intradayCompareSub");
+    if (sub) {
+        sub.textContent = `今日 ${d.date || "—"} vs 上一交易日 ${d.prev_date || "—"} ｜ 截至 ${tv.latest_time || cf.time || "最新"}`;
+    }
+
+    const cards = document.getElementById("intradayCompareCards");
+    if (cards) {
+        const diffPct = tv.same_time_diff_pct;
+        const yztDelta = (lim.prev_zt_avg_pct != null && lp.prev_zt_avg_pct != null)
+            ? lim.prev_zt_avg_pct - lp.prev_zt_avg_pct : null;
+        cards.innerHTML = [
+            rptCard(
+                `同刻成交额 (${tv.latest_time || "--"})`,
+                tv.today_cum_yi != null ? `${(tv.today_cum_yi / 10000).toFixed(2)}万亿` : "—",
+                `昨同刻 ${tv.prev_same_time_yi != null ? (tv.prev_same_time_yi / 10000).toFixed(2) + "万亿" : "—"} · ${rptPct(diffPct)} · 预计 ${tv.estimated_full_yi != null ? (tv.estimated_full_yi / 10000).toFixed(2) + "万亿" : "—"}`
+            ),
+            rptCard(
+                "昨涨停隔日溢价",
+                rptPct(lim.prev_zt_avg_pct),
+                `红盘 ${rptNum(lim.prev_zt_up_ratio, 1)}% · 昨均 ${rptPct(lp.prev_zt_avg_pct)} · 大面率 ${rptNum(lim.big_loss_rate, 1)}%`
+            ),
+            rptCard(
+                "涨停 / 连板高度",
+                `<span class="rpt-pct up">${lim.limit_up ?? "—"}</span> / <b>${lim.max_board ?? "—"}板</b>`,
+                `昨 ${lp.limit_up ?? "—"}涨停 / ${lp.max_board ?? "—"}板 · 封板率 ${rptNum(lim.seal_rate, 1)}% (昨${rptNum(lp.seal_rate, 1)}%)`
+            ),
+            rptCard(
+                "跌停 / 炸板风险",
+                `<span class="rpt-pct down">${lim.limit_down ?? "—"}跌停</span> / ${lim.broken ?? "—"}炸板`,
+                `昨 ${lp.limit_down ?? "—"}跌停 / ${lp.broken ?? "—"}炸板 · 昨涨停Δ ${yztDelta != null ? fmtSigned(yztDelta, 2, "pp") : "—"}`
+            ),
+            rptCard(
+                "全A涨跌分布",
+                br.available ? `<span class="rpt-pct up">${br.up}涨</span> / <span class="rpt-pct down">${br.down}跌</span>` : "—",
+                br.available ? `上涨占比 ${rptNum(br.up_ratio, 1)}% · 昨占比 ${br.prev_up_ratio != null ? rptNum(br.prev_up_ratio, 1) + "%" : "未存档"}` : "分布暂不可用"
+            ),
+            rptCard(
+                "大盘主力资金净流入",
+                cf.available ? `<span class="rpt-pct ${rptTone(cf.main_yi)}">${fmtSigned(cf.main_yi, 1, "亿")}</span>` : "—",
+                `超大单 ${fmtSigned(cf.super_yi, 1, "亿")} · 昨全天 ${cf.prev_main_yi != null ? fmtSigned(cf.prev_main_yi, 1, "亿") : "—"}`
+            ),
+        ].join("");
+    }
+
+    const styleBar = document.getElementById("intradayStyleBar");
+    if (styleBar) {
+        const idxs = style.indices || [];
+        styleBar.innerHTML = idxs.length ? `
+            <div class="intraday-idx-strip">
+                ${idxs.map(x => `<span class="intraday-idx-chip">
+                    <b>${escapeHtml(x.name)}</b>
+                    <span>${rptNum(x.price, 2)}</span>
+                    ${rptPct(x.pct)}
+                </span>`).join("")}
+            </div>
+            <div class="intraday-style-spreads">
+                <span>大小盘差(中证1000-上证50)：<b>${fmtSigned(style.small_vs_large, 2, "%")}</b>（${escapeHtml(style.small_vs_large_label || "—")}）</span>
+                <span>成长防御差(创指-红利)：<b>${fmtSigned(style.growth_vs_def, 2, "%")}</b>（${escapeHtml(style.growth_vs_def_label || "—")}）</span>
+            </div>
+        ` : "";
+    }
+
+    const tbl = document.getElementById("intradayCompareTable");
+    if (tbl) {
+        const rows = d.compare_rows || [];
+        tbl.innerHTML = `<table class="report-table">
+            <thead><tr><th>维度</th><th>指标</th><th>今日实时</th><th>上一交易日</th><th>日环比 Δ</th><th>盘面解读</th></tr></thead>
+            <tbody>${rows.map(r => `<tr>
+                <td><span class="intraday-cat-pill">${escapeHtml(r.category || "")}</span></td>
+                <td>${escapeHtml(r.name || "")}</td>
+                <td><strong>${escapeHtml(r.today || "—")}</strong></td>
+                <td>${escapeHtml(r.prev || "—")}</td>
+                <td><span class="rpt-pct ${escapeHtml(r.tone || "flat")}">${escapeHtml(r.delta || "—")}</span></td>
+                <td class="muted">${escapeHtml(r.signal || "—")}</td>
+            </tr>`).join("") || "<tr><td colspan=6>暂无对比数据</td></tr>"}</tbody>
+        </table>`;
+    }
+}
+
+function renderIntradayCharts(d) {
+    // 1. 两市分时累计成交额对比图
+    const tv = d.turnover || {};
+    const tSeries = tv.series || [];
+    const ch1 = ensureIntradayChart("intradayTurnoverChart");
+    if (ch1) {
+        const th = chartTheme();
+        ch1.setOption({
+            ...th,
+            title: { text: "两市累计成交额同刻对比（亿）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            legend: { data: ["今日累计", "昨日同刻", "同刻量差"], right: 0, top: 0 },
+            grid: { left: 56, right: 48, top: 40, bottom: 30 },
+            xAxis: { type: "category", data: tSeries.map(x => x.time) },
+            yAxis: [
+                { type: "value", name: "累计(亿)" },
+                { type: "value", name: "差值(亿)", splitLine: { show: false } },
+            ],
+            series: [
+                { name: "今日累计", type: "line", showSymbol: false, data: tSeries.map(x => x.today_yi), itemStyle: { color: "#e11d48" }, lineStyle: { width: 2.2 } },
+                { name: "昨日同刻", type: "line", showSymbol: false, data: tSeries.map(x => x.prev_yi), itemStyle: { color: "#64748b" }, lineStyle: { width: 1.8, type: "dashed" } },
+                {
+                    name: "同刻量差", type: "bar", yAxisIndex: 1, barMaxWidth: 6,
+                    data: tSeries.map(x => x.diff_yi),
+                    itemStyle: { color: (p) => (Number(p.value) >= 0 ? "rgba(225,29,72,0.45)" : "rgba(5,150,105,0.45)") },
+                },
+            ],
+        }, true);
+    }
+
+    // 2. 主力资金分时净流入 + 盘中情绪轨迹
+    const cfSeries = (d.capital_flow || {}).series || [];
+    const tl = d.timeline || [];
+    const timeSet = Array.from(new Set([...cfSeries.map(x => x.time), ...tl.map(x => x.time)])).sort();
+    const cfMap = Object.fromEntries(cfSeries.map(x => [x.time, x]));
+    const tlMap = Object.fromEntries(tl.map(x => [x.time, x]));
+    const ch2 = ensureIntradayChart("intradayFlowMoodChart");
+    if (ch2) {
+        const th = chartTheme();
+        ch2.setOption({
+            ...th,
+            title: { text: "大盘主力净流入（亿）与盘中情绪轨迹（分）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            legend: { data: ["主力净流入", "小单净流入", "情绪温度"], right: 0, top: 0 },
+            grid: { left: 54, right: 44, top: 40, bottom: 30 },
+            xAxis: { type: "category", data: timeSet },
+            yAxis: [
+                { type: "value", name: "资金(亿)" },
+                { type: "value", name: "情绪分", min: 0, max: 100, splitLine: { show: false } },
+            ],
+            series: [
+                { name: "主力净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.main_yi ?? null), itemStyle: { color: "#e11d48" }, lineStyle: { width: 2 } },
+                { name: "小单净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.small_yi ?? null), itemStyle: { color: "#0284c7" }, lineStyle: { width: 1.5, type: "dashed" } },
+                { name: "情绪温度", type: "line", yAxisIndex: 1, connectNulls: true, data: timeSet.map(t => tlMap[t]?.score ?? null), itemStyle: { color: "#f59e0b" }, lineStyle: { width: 2.2 } },
+            ],
+        }, true);
+    }
+
+    // 3. 全A涨跌分布图
+    const dist = (d.breadth || {}).distribution || [];
+    const ch3 = ensureIntradayChart("intradayDistChart");
+    if (ch3) {
+        const th = chartTheme();
+        ch3.setOption({
+            ...th,
+            title: { text: "全A实时涨跌幅分布（家数）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
+            grid: { left: 48, right: 20, top: 36, bottom: 32 },
+            xAxis: { type: "category", data: dist.map(x => x.range), axisLabel: { fontSize: 11 } },
+            yAxis: { type: "value" },
+            series: [{
+                type: "bar", data: dist.map(x => x.count), barMaxWidth: 28,
+                label: { show: true, position: "top", fontSize: 10 },
+                itemStyle: {
+                    color: (p) => {
+                        const lab = dist[p.dataIndex]?.range || "";
+                        if (lab === "平") return "#94a3b8";
+                        return lab.startsWith("-") || lab.startsWith("跌") ? "#059669" : "#e11d48";
+                    },
+                },
+            }],
+        }, true);
+    }
+}
+
+function renderIntradayThemes(d) {
+    const th = d.themes || {};
+    const noteEl = document.getElementById("intradayThemeNote");
+    if (noteEl && th.prev_theme_note) noteEl.textContent = th.prev_theme_note;
+
+    const grid = document.getElementById("intradayMainAttackGrid");
+    const attacks = th.main_attack || [];
+    if (grid) {
+        grid.innerHTML = attacks.length ? attacks.map((a, i) => `
+            <article class="intraday-attack-card">
+                <header>
+                    <span class="focus-idx">${i + 1}</span>
+                    <strong>${escapeHtml(a.name)}</strong>
+                    <span class="intraday-tag kind-${a.kind === "行业" ? "ind" : "con"}">${escapeHtml(a.kind || "概念")}</span>
+                    <span class="intraday-cont-tag">${escapeHtml(a.continuity_tag || "活跃")}</span>
+                </header>
+                <div class="intraday-attack-metrics">
+                    <span>主攻分 <b>${rptNum(a.attack_score, 1)}</b></span>
+                    <span>涨跌 ${rptPct(a.pct)}</span>
+                    <span>主力净流入 <b class="rpt-pct up">${fmtSigned(a.net_yi, 2, "亿")}</b></span>
+                    <span>涨停共振 <b>${a.zt_count ?? 0}只</b></span>
+                </div>
+                <div class="intraday-attack-foot">
+                    领涨：<b>${escapeHtml(a.leader_name || "—")}</b> ${rptPct(a.leader_pct)}
+                    ${a.prev_net_yi != null ? ` · 昨净流 ${fmtSigned(a.prev_net_yi, 1, "亿")}` : ""}
+                </div>
+            </article>
+        `).join("") : `<div class="report-empty">当前无明显主力净流入与涨幅共振的主攻方向（提示盘面轮动分散或偏弱）</div>`;
+    }
+
+    const prevTrackEl = document.getElementById("intradayPrevHotTrack");
+    if (prevTrackEl) {
+        const track = th.prev_hot_tracking || [];
+        prevTrackEl.innerHTML = track.length ? `
+            <div class="intraday-track-title">昨日热点今日持续性追踪：</div>
+            <div class="intraday-track-chips">
+                ${track.map(t => `<span class="intraday-track-chip status-${escapeHtml(t.status)}">
+                    <b>${escapeHtml(t.name)}</b>
+                    ${t.today_pct != null ? rptPct(t.today_pct) : "<span>—</span>"}
+                    <em>${escapeHtml(t.status)}</em>
+                </span>`).join("")}
+            </div>
+        ` : "";
+    }
+
+    renderIntradayThemeTable(d);
+}
+
+function renderIntradayThemeTable(d) {
+    const tbl = document.getElementById("intradayThemeTable");
+    if (!tbl || !d) return;
+    const th = d.themes || {};
+    const ztCmp = (d.limits || {}).zt_theme_compare || [];
+
+    if (intradayThemeTab === "zt_themes") {
+        tbl.innerHTML = `<table class="report-table">
+            <thead><tr><th>涨停行业</th><th>今日涨停数</th><th>昨日涨停数</th><th>变化 Δ</th><th>持续性状态</th></tr></thead>
+            <tbody>${ztCmp.map(r => `<tr>
+                <td><strong>${escapeHtml(r.name)}</strong></td>
+                <td>${r.today_zt}只</td>
+                <td>${r.prev_zt}只</td>
+                <td><span class="rpt-pct ${rptTone(r.delta)}">${r.delta > 0 ? "+" + r.delta : r.delta}只</span></td>
+                <td><span class="intraday-cont-tag">${escapeHtml(r.status)}</span></td>
+            </tr>`).join("") || "<tr><td colspan=5>暂无涨停行业对比</td></tr>"}</tbody>
+        </table>`;
+        return;
+    }
+
+    const renderBoardTable = (rows, emptyMsg) => `<table class="report-table">
+        <thead><tr><th>板块/题材</th><th>类别</th><th>涨跌幅</th><th>主力净流入</th><th>净占比</th><th>领涨股</th><th>涨停数</th><th>持续性</th></tr></thead>
+        <tbody>${(rows || []).slice(0, 15).map(r => `<tr>
+            <td><strong>${escapeHtml(r.name)}</strong></td>
+            <td>${escapeHtml(r.kind || "")}</td>
+            <td>${rptPct(r.pct)}</td>
+            <td><span class="rpt-pct ${rptTone(r.net_yi)}">${fmtSigned(r.net_yi, 2, "亿")}</span></td>
+            <td>${rptPct(r.net_ratio_pct)}</td>
+            <td>${escapeHtml(r.leader_name || "—")} ${rptPct(r.leader_pct)}</td>
+            <td>${r.zt_count ?? 0}</td>
+            <td><span class="intraday-cont-tag">${escapeHtml(r.continuity_tag || "—")}</span></td>
+        </tr>`).join("") || `<tr><td colspan=8>${escapeHtml(emptyMsg)}</td></tr>`}</tbody>
+    </table>`;
+
+    if (intradayThemeTab === "concept_inflow") {
+        tbl.innerHTML = renderBoardTable(th.concept_inflow, "暂无概念资金净流入数据");
+    } else if (intradayThemeTab === "concept_hot") {
+        tbl.innerHTML = renderBoardTable(th.concept_hot, "暂无盘中热点概念数据");
+    } else {
+        const inflow = renderBoardTable(th.industry_inflow, "暂无行业净流入数据");
+        const outflowRows = (th.industry_outflow || []).slice(0, 10);
+        const outflow = `<h4 class="intraday-sub-h">主力资金净流出重灾区（行业 Top 10）</h4>` + renderBoardTable(outflowRows, "暂无行业净流出数据");
+        tbl.innerHTML = inflow + outflow;
+    }
+}
+
+function renderIntradayEcology(d) {
+    const lt = (d.limits || {}).today || {};
+    const ladderEl = document.getElementById("intradayLadderPanel");
+    if (ladderEl) {
+        const ladders = lt.ladder || [];
+        const maxStocks = (lt.max_board_stocks || []).map(s => `${s.name}(${s.industry})`).join("、");
+        ladderEl.innerHTML = `
+            <h3>🪜 今日连板梯队 ${lt.max_board ? `<small>最高 ${lt.max_board}板：${escapeHtml(maxStocks || "—")}</small>` : ""}</h3>
+            ${ladders.length ? ladders.map(g => `
+                <div class="ladder-group">
+                    <div class="ladder-h">${g.board}板 · ${g.count ?? g.stocks.length}只</div>
+                    <div class="ladder-stocks">
+                        ${(g.stocks || []).map(s => `<span class="ladder-chip" title="首封 ${escapeHtml(s.seal_time || "--")} · 封单 ${rptNum(s.fund_yi, 2)}亿 · ${escapeHtml(s.industry || "")}">
+                            ${escapeHtml(s.name)} ${rptPct(s.pct)}
+                            <small>${escapeHtml(s.seal_time || "")}</small>
+                        </span>`).join("")}
+                    </div>
+                </div>
+            `).join("") : "<p class='report-empty'>当前暂无涨停封板梯队</p>"}
+        `;
+    }
+
+    const premEl = document.getElementById("intradayPremiumPanel");
+    if (premEl) {
+        const winners = lt.yzt_winners || [];
+        const losers = lt.yzt_losers || [];
+        const dtList = lt.dt_list || [];
+        const zbList = lt.zb_list || [];
+        premEl.innerHTML = `
+            <h3>💰 昨日涨停今日盈亏两极（核查接力赚钱效应）</h3>
+            <div class="intraday-polar-grid">
+                <div>
+                    <h4>大肉榜 Top 6</h4>
+                    <ul class="report-mini-list">${winners.slice(0, 6).map(s =>
+                        `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
+                </div>
+                <div>
+                    <h4>大面 / 核按钮榜 Top 6</h4>
+                    <ul class="report-mini-list">${losers.slice(0, 6).map(s =>
+                        `<li><span>${escapeHtml(s.name)} <small>(${s.ylbc}板)</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>暂无</li>"}</ul>
+                </div>
+            </div>
+            <div class="intraday-polar-grid" style="margin-top:14px">
+                <div>
+                    <h4>跌停风险样本（共 ${lt.limit_down ?? 0} 只）</h4>
+                    <ul class="report-mini-list">${dtList.slice(0, 6).map(s =>
+                        `<li><span>${escapeHtml(s.name)} <small>${escapeHtml(s.industry || "")}</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无跌停</li>"}</ul>
+                </div>
+                <div>
+                    <h4>炸板样本（共 ${lt.broken ?? 0} 只）</h4>
+                    <ul class="report-mini-list">${zbList.slice(0, 6).map(s =>
+                        `<li><span>${escapeHtml(s.name)} <small>炸${s.open_times}次</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无炸板</li>"}</ul>
+                </div>
+            </div>
+        `;
+    }
+}
+
+function bindIntradayEvents() {
+    document.getElementById("intradayRefreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.classList.add("is-loading");
+        try { await loadIntradaySentiment({ force: true }); } finally { btn.classList.remove("is-loading"); }
+    });
+
+    document.getElementById("intradayThemeTabs")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-theme-tab]");
+        if (!btn) return;
+        document.querySelectorAll("#intradayThemeTabs [data-theme-tab]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        intradayThemeTab = btn.dataset.themeTab || "concept_inflow";
+        renderIntradayThemeTable(intradayData);
+    });
+
+    if (!intradayAutoPollTimer) {
+        intradayAutoPollTimer = setInterval(() => {
+            const ws = document.getElementById("intradayWorkspace");
+            const auto = document.getElementById("intradayAutoRefreshToggle");
+            if (!ws || ws.style.display === "none") return;
+            if (auto && !auto.checked) return;
+            if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+            loadIntradaySentiment({ silent: true });
+        }, 45000);
+    }
+
+    if (typeof window !== "undefined") {
+        window.addEventListener("resize", () => resizeIntradayCharts());
+    }
 }

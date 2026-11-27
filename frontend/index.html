@@ -11,7 +11,7 @@
     <!-- ECharts -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="/static/style.css?v=3.4.0">
+    <link rel="stylesheet" href="/static/style.css?v=3.5.0">
 </head>
 <body>
     <div class="app-container">
@@ -33,6 +33,7 @@
                     <button class="nav-tab" id="tabUsView" data-target="usWorkspace">🗽 美股大盘研判</button>
                     <button class="nav-tab" id="tabMrdiView" data-target="mrdiWorkspace">🔬 MRDI 动量共振模型</button>
                     <button class="nav-tab" id="tabNewsView" data-target="newsWorkspace">📰 金融消息面</button>
+                    <button class="nav-tab" id="tabIntradayView" data-target="intradayWorkspace">🔥 盘中情绪</button>
                     <button class="nav-tab" id="tabReviewView" data-target="reviewWorkspace">📋 复盘日报</button>
                     <button class="nav-tab" id="tabFocusView" data-target="focusWorkspace">🌅 明日重点</button>
                     <button class="nav-tab" id="tabStockView" data-target="stockWorkspace">⚡ 个股量化看板</button>
@@ -974,6 +975,100 @@
             </footer>
         </main>
 
+        <!-- 主内容工作区: A股盘中数据分析与情绪监控 (v3.5) -->
+        <main class="report-workspace report-red-green intraday-workspace" id="intradayWorkspace" style="display: none;">
+            <section class="report-page-intro">
+                <div>
+                    <span class="report-eyebrow">A-SHARE · INTRADAY SENTIMENT &amp; RISK GATE</span>
+                    <h1 class="report-page-title" id="intradayTitle">A股盘中情绪与昨日对比监控</h1>
+                    <p class="report-page-desc" id="intradayMeta">实时追踪同刻成交量、昨涨停隔日溢价、连板生态、热点主攻与赚钱效应｜红涨绿跌｜情绪不稳不参与</p>
+                </div>
+                <div class="report-live-status">
+                    <span class="intraday-phase-badge" id="intradayPhaseBadge">同步中</span>
+                    <span class="report-live-dot"></span>
+                    <span id="intradayUpdateTime">同步中...</span>
+                    <label class="intraday-auto-toggle" title="盘中每45秒自动静默刷新">
+                        <input type="checkbox" id="intradayAutoRefreshToggle" checked>
+                        <span>自动刷新</span>
+                    </label>
+                    <button type="button" class="report-refresh-btn" id="intradayRefreshBtn" title="立即强制刷新实时数据">
+                        <i class="fa-solid fa-rotate"></i> 刷新
+                    </button>
+                </div>
+            </section>
+
+            <!-- 1. 参与决策灯塔 + 情绪温度计 + 口径说明 -->
+            <section class="intraday-hero-grid">
+                <div class="intraday-decision-hero level-cautious" id="intradayDecisionHero">
+                    <div class="intraday-hero-empty">正在评估盘中情绪与风控闸门…</div>
+                </div>
+                <div class="intraday-score-panel" id="intradayScorePanel">
+                    <div class="intraday-hero-empty">正在计算6维情绪温度…</div>
+                </div>
+            </section>
+
+            <!-- 2. 六大硬性风控熔断闸门 (每项显式标注判定口径) -->
+            <section class="intraday-section">
+                <div class="intraday-sec-head">
+                    <h2>🛡️ 情绪稳定性风控闸门（带判定口径）</h2>
+                    <span class="intraday-sec-sub">任一红灯熔断或处于分歧退潮期，系统自动判定「禁手观望 · 不参与」</span>
+                </div>
+                <div class="intraday-gates-grid" id="intradayGatesGrid"></div>
+            </section>
+
+            <!-- 3. 今日盘中 vs 上一交易日 核心数据对比 -->
+            <section class="intraday-section">
+                <div class="intraday-sec-head">
+                    <h2>⚖️ 今日实时 vs 上一交易日 核心对比</h2>
+                    <span class="intraday-sec-sub" id="intradayCompareSub">全维度对照（含同刻量能、隔日溢价、连板高度与亏钱效应）</span>
+                </div>
+                <div class="report-cards" id="intradayCompareCards"></div>
+                <div class="intraday-style-bar" id="intradayStyleBar"></div>
+                <div class="report-table-wrap" id="intradayCompareTable"></div>
+            </section>
+
+            <!-- 4. ECharts 分时量能对比 & 主力资金情绪轨迹 -->
+            <section class="intraday-charts-grid">
+                <div class="report-chart intraday-chart" id="intradayTurnoverChart"></div>
+                <div class="report-chart intraday-chart" id="intradayFlowMoodChart"></div>
+            </section>
+
+            <!-- 5. 热点题材 / 资金净流入 / 主力主攻方向 -->
+            <section class="intraday-section">
+                <div class="intraday-sec-head">
+                    <h2>🎯 主力主攻方向与热点资金追踪</h2>
+                    <span class="intraday-sec-sub" id="intradayThemeNote">交叉融合主力净流入(45%) + 涨幅(30%) + 涨停共振(25%)</span>
+                </div>
+                <div class="intraday-attack-grid" id="intradayMainAttackGrid"></div>
+                <div class="intraday-prev-track" id="intradayPrevHotTrack"></div>
+                <div class="intraday-theme-tabs" id="intradayThemeTabs">
+                    <button type="button" class="report-dim-tab active" data-theme-tab="concept_inflow">主力净流入概念</button>
+                    <button type="button" class="report-dim-tab" data-theme-tab="concept_hot">盘中涨幅热点概念</button>
+                    <button type="button" class="report-dim-tab" data-theme-tab="industry_flow">行业资金净流入 / 净流出</button>
+                    <button type="button" class="report-dim-tab" data-theme-tab="zt_themes">涨停题材昨日对比</button>
+                </div>
+                <div class="report-table-wrap" id="intradayThemeTable"></div>
+            </section>
+
+            <!-- 6. 接力生态明细 (连板梯队 / 昨涨停大肉大面 / 跌停炸板 / 涨跌分布) -->
+            <section class="intraday-section">
+                <div class="intraday-sec-head">
+                    <h2>🧱 连板梯队、隔日溢价明细与全A涨跌分布</h2>
+                    <span class="intraday-sec-sub">核查空间龙头高度、昨日打板盈亏分布与亏钱效应样本</span>
+                </div>
+                <div class="intraday-ecology-grid">
+                    <div class="intraday-panel-box" id="intradayLadderPanel"></div>
+                    <div class="intraday-panel-box" id="intradayPremiumPanel"></div>
+                </div>
+                <div class="report-chart" id="intradayDistChart"></div>
+            </section>
+
+            <footer class="report-footer">
+                <p>A股盘中情绪监控 · 客观盘面统计与风控规则评估，不构成未来涨跌概率预测或投资建议</p>
+                <small id="intradayDisclaimer">红涨绿跌；涨跌停与昨涨停池实时对比上一交易日，板块资金昨日对比在每日收盘自动存档后次日生效。</small>
+            </footer>
+        </main>
+
         <!-- 主内容工作区: A股复盘日报 -->
         <main class="report-workspace report-red-green" id="reviewWorkspace" style="display: none;">
             <section class="report-page-intro">
@@ -1079,6 +1174,6 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/app.js?v=3.4.0"></script>
+    <script src="/static/app.js?v=3.5.0"></script>
 </body>
 </html>
