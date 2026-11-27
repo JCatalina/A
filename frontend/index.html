@@ -21,7 +21,7 @@
     <noscript>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     </noscript>
-    <link rel="stylesheet" href="/static/style.css?v=3.8.4">
+    <link rel="stylesheet" href="/static/style.css?v=3.8.5">
 </head>
 
 <body>
@@ -1176,12 +1176,13 @@
                 <div class="report-table-wrap" id="intradayThemeTable"></div>
             </section>
 
-            <!-- 6. 接力生态明细 (连板梯队 / 昨涨停大肉大面 / 跌停炸板 / 涨跌分布) -->
+            <!-- 6. 接力生态明细 (连板梯队今日vs昨日 / 昨涨停大肉大面对比 / 涨跌分布) -->
             <section class="intraday-section">
                 <div class="intraday-sec-head">
-                    <h2>🧱 连板梯队、隔日溢价明细与全A涨跌分布</h2>
-                    <span class="intraday-sec-sub">核查空间龙头高度、昨日打板盈亏分布与亏钱效应样本</span>
+                    <h2>🧱 连板梯队、隔日溢价与全A涨跌分布（今日 vs 昨日全维度对照）</h2>
+                    <span class="intraday-sec-sub">核查空间龙头高度对比、昨日连板梯队明细、打板盈亏对比与全A涨跌分布对照</span>
                 </div>
+                <div class="report-chart intraday-eco-chart" id="intradayEcologyChart"></div>
                 <div class="intraday-ecology-grid">
                     <div class="intraday-panel-box" id="intradayLadderPanel"></div>
                     <div class="intraday-panel-box" id="intradayPremiumPanel"></div>
@@ -1373,8 +1374,8 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/guide_data.js?v=3.8.4"></script>
-    <script src="/static/app.js?v=3.8.4"></script>
+    <script src="/static/guide_data.js?v=3.8.5"></script>
+    <script src="/static/app.js?v=3.8.5"></script>
 </body>
 
 </html>

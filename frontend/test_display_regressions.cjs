@@ -426,6 +426,39 @@ async function main() {
     assert.doesNotMatch(element('reboundThemesGrid').innerHTML, /undefined|NaN/);
     assert.doesNotMatch(element('reboundTopPicks').innerHTML, /undefined|NaN/);
 
+    assert.ok(html.includes('id="intradayEcologyChart"'));
+    context.renderIntradayEcology({
+        limits: {
+            today: { limit_up: 100, continuous: 20, first_board: 80, max_board: 6, limit_down: 0, broken: 10, seal_rate: 90, prev_zt_avg_pct: 5.5, prev_zt_up_ratio: 82, prev_lianban_avg_pct: 6.1, big_loss_rate: 3.1, ladder: [{ board: 6, count: 1, stocks: [{ name: '克莱机电', pct: 10.02, seal_time: '13:10' }] }] },
+            prev: { limit_up: 50, continuous: 10, first_board: 40, max_board: 5, limit_down: 4, broken: 18, seal_rate: 73, prev_zt_avg_pct: 1.2, prev_zt_up_ratio: 54, prev_lianban_avg_pct: 2.1, big_loss_rate: 17.6, ladder: [{ board: 5, count: 1, stocks: [{ name: '克来机电', pct: 10.0, seal_time: '09:31' }] }] },
+            ladder_compare: [{ board: 6, today_count: 1, prev_count: 0, delta: 1 }, { board: 5, today_count: 0, prev_count: 1, delta: -1 }],
+        },
+    });
+    assert.match(element('intradayLadderPanel').innerHTML, /今\/昨阶梯数对照/);
+    assert.match(element('intradayPremiumPanel').innerHTML, /今 vs 昨接力对照/);
+    context.renderReboundPicks({
+        phase: 'confirm',
+        themes: [{
+            name: 'CPO概念', kind: '概念', continuity_tag: '主线延续', pct: 12.59, pct_5d: 14.32, net_yi: 180.0, net_d5_yi: 240.0,
+            amount_yi: 2518.0, amt_ratio_prev: 1.66, amt_ratio_ma60: 1.41, market_share_pct: 12.3, zt_share_pct: 10.0,
+            zt_count: 40, early_zt_count: 3, first_seal_time: '09:37', filtered_noise_count: 18,
+            tier_label: '核心主线 85', tags: ['全程抗跌共振', '早盘3板', '101只'],
+            days_5: [{ md: '11-25', env: '深跌', is_deep_drop: true, pct: -5.1, excess_pct: -1.9 }, { md: '11-27', env: '反弹', pct: 12.59, excess_pct: 6.1 }],
+            role_cards: [
+                { code: '300308', name: '中际旭创', badge: '资金龙头', tone: 'gold', pct: 19.25, meta: '流5694亿 · 额313亿 · 换6.0%' },
+                { code: '601138', name: '工业富联', badge: '权重龙头', tone: 'blue', pct: 9.15, meta: '流8880亿 · 额86亿 · 换1.0%' },
+            ],
+            more_cards: [{ code: '300502', name: '新易盛', badge: '容量中军·封板', tone: 'midcap', pct: 20.0, is_zt: true, meta: '流2846亿 · 14:47封 · 封5.9亿' }],
+            more_zt_count: 1, more_midcap_count: 1,
+        }],
+    });
+    assert.match(element('reboundThemesGrid').innerHTML, /核心主线 85/);
+    assert.match(element('reboundThemesGrid').innerHTML, /资金龙头/);
+    assert.match(element('reboundThemesGrid').innerHTML, /权重龙头/);
+    assert.match(element('reboundThemesGrid').innerHTML, /已自动屏蔽.*18/);
+    assert.match(element('reboundThemesGrid').innerHTML, /展开更多核心股/);
+    assert.doesNotMatch(element('reboundThemesGrid').innerHTML, /undefined|NaN/);
+
     console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal, guide tab, resonance, rebound picks and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

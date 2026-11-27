@@ -4142,58 +4142,255 @@ function renderIntradayCharts(d) {
         }, true);
     }
 
-    // 2. 主力资金分时净流入 + 盘中情绪轨迹
-    const cfSeries = (d.capital_flow || {}).series || [];
+    // 2. 主力资金分时净流入 + 盘中情绪轨迹 (支持叠加昨日对照)
+    const cf = d.capital_flow || {};
+    const cfSeries = cf.series || [];
     const tl = d.timeline || [];
-    const timeSet = Array.from(new Set([...cfSeries.map(x => x.time), ...tl.map(x => x.time)])).sort();
+    const prevTl = d.prev_timeline || [];
+    const prevScore = (d.sentiment || {}).prev_score;
+    const timeSet = Array.from(new Set([
+        ...cfSeries.map(x => x.time),
+        ...tl.map(x => x.time),
+        ...prevTl.map(x => x.time),
+    ])).sort();
     const cfMap = Object.fromEntries(cfSeries.map(x => [x.time, x]));
     const tlMap = Object.fromEntries(tl.map(x => [x.time, x]));
+    const prevTlMap = Object.fromEntries(prevTl.map(x => [x.time, x]));
     const ch2 = ensureIntradayChart("intradayFlowMoodChart");
     if (ch2) {
         const th = chartTheme();
+        const legendItems = ["主力净流入", "小单净流入", "情绪温度"];
+        if (prevTl.length) legendItems.push("昨日情绪");
+        const moodSeries = {
+            name: "情绪温度", type: "line", yAxisIndex: 1, connectNulls: true,
+            data: timeSet.map(t => tlMap[t]?.score ?? null),
+            itemStyle: { color: "#f59e0b" }, lineStyle: { width: 2.2 },
+        };
+        if (!prevTl.length && prevScore != null) {
+            moodSeries.markLine = {
+                symbol: "none",
+                label: { formatter: `昨收情绪 ${Number(prevScore).toFixed(1)}分`, position: "insideEndTop", fontSize: 10.5, color: "#64748b" },
+                lineStyle: { color: "#94a3b8", type: "dashed", width: 1.4 },
+                data: [{ yAxis: Number(prevScore) }],
+            };
+        }
+        const mainSeries = {
+            name: "主力净流入", type: "line", showSymbol: false,
+            data: timeSet.map(t => cfMap[t]?.main_yi ?? null),
+            itemStyle: { color: "#e11d48" }, lineStyle: { width: 2 },
+        };
+        if (cf.prev_main_yi != null) {
+            mainSeries.markLine = {
+                symbol: "none",
+                label: { formatter: `昨全天主力 ${fmtSigned(cf.prev_main_yi, 0, "亿")}`, position: "insideStartTop", fontSize: 10.5, color: "#475569" },
+                lineStyle: { color: "#cbd5e1", type: "dotted", width: 1.3 },
+                data: [{ yAxis: Number(cf.prev_main_yi) }],
+            };
+        }
+        const seriesList = [
+            mainSeries,
+            { name: "小单净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.small_yi ?? null), itemStyle: { color: "#0284c7" }, lineStyle: { width: 1.5, type: "dashed" } },
+            moodSeries,
+        ];
+        if (prevTl.length) {
+            seriesList.push({
+                name: "昨日情绪", type: "line", yAxisIndex: 1, connectNulls: true, showSymbol: false,
+                data: timeSet.map(t => prevTlMap[t]?.score ?? null),
+                itemStyle: { color: "#94a3b8" }, lineStyle: { width: 1.6, type: "dashed" },
+            });
+        }
         ch2.setOption({
             ...th,
-            title: { text: "大盘主力净流入（亿）与盘中情绪轨迹（分）", left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 } },
-            legend: { data: ["主力净流入", "小单净流入", "情绪温度"], left: 0, top: 24, itemWidth: 14, itemHeight: 8, itemGap: 12, textStyle: { fontSize: 11.5 } },
+            title: { text: "大盘主力净流入（亿）与盘中情绪轨迹（含昨日对照）", left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 } },
+            legend: { data: legendItems, left: 0, top: 24, itemWidth: 14, itemHeight: 8, itemGap: 12, textStyle: { fontSize: 11.5 } },
             grid: { left: 56, right: 50, top: 76, bottom: 28 },
             xAxis: { type: "category", data: timeSet, axisLabel: { fontSize: 11 } },
             yAxis: [
                 { type: "value", name: "资金(亿)", nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" } },
                 { type: "value", name: "情绪分", min: 0, max: 100, nameGap: 12, nameTextStyle: { fontSize: 11, color: "#64748b" }, splitLine: { show: false } },
             ],
+            series: seriesList,
+        }, true);
+    }
+
+    // 3. 今日 vs 昨日 涨停/连板/炸板/跌停 生态双柱对比图
+    const lim = (d.limits || {}).today || {};
+    const lp = (d.limits || {}).prev || {};
+    const chEco = ensureIntradayChart("intradayEcologyChart");
+    if (chEco) {
+        const th = chartTheme();
+        const ecoLabels = ["涨停家数", "连板股数", "首板家数", "炸板家数", "跌停家数", "最高连板", "昨涨停大面"];
+        const tVals = [lim.limit_up ?? 0, lim.continuous ?? 0, lim.first_board ?? 0, lim.broken ?? 0, lim.limit_down ?? 0, lim.max_board ?? 0, lim.big_loss_count ?? 0];
+        const pVals = [lp.limit_up ?? 0, lp.continuous ?? 0, lp.first_board ?? 0, lp.broken ?? 0, lp.limit_down ?? 0, lp.max_board ?? 0, lp.big_loss_count ?? 0];
+        const prevDateTag = d.prev_date ? ` (${d.prev_date})` : "";
+        chEco.setOption({
+            ...th,
+            title: { text: `情绪与涨跌停生态对比：今日 (${d.date || "—"}) vs 上一交易日${prevDateTag}`, left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 } },
+            legend: { data: ["今日实时", "上一交易日"], left: 0, top: 24, itemWidth: 14, itemHeight: 8, itemGap: 14, textStyle: { fontSize: 11.5 } },
+            grid: { left: 48, right: 20, top: 72, bottom: 28 },
+            tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+            xAxis: { type: "category", data: ecoLabels, axisLabel: { fontSize: 11.5 } },
+            yAxis: { type: "value", name: "家数/板数", nameGap: 10, nameTextStyle: { fontSize: 11, color: "#64748b" } },
             series: [
-                { name: "主力净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.main_yi ?? null), itemStyle: { color: "#e11d48" }, lineStyle: { width: 2 } },
-                { name: "小单净流入", type: "line", showSymbol: false, data: timeSet.map(t => cfMap[t]?.small_yi ?? null), itemStyle: { color: "#0284c7" }, lineStyle: { width: 1.5, type: "dashed" } },
-                { name: "情绪温度", type: "line", yAxisIndex: 1, connectNulls: true, data: timeSet.map(t => tlMap[t]?.score ?? null), itemStyle: { color: "#f59e0b" }, lineStyle: { width: 2.2 } },
+                { name: "今日实时", type: "bar", barMaxWidth: 24, data: tVals, itemStyle: { color: "#e11d48", borderRadius: [4, 4, 0, 0] }, label: { show: true, position: "top", fontSize: 10.5 } },
+                { name: "上一交易日", type: "bar", barMaxWidth: 24, data: pVals, itemStyle: { color: "#94a3b8", borderRadius: [4, 4, 0, 0] }, label: { show: true, position: "top", fontSize: 10.5, color: "#64748b" } },
             ],
         }, true);
     }
 
-    // 3. 全A涨跌分布图
-    const dist = (d.breadth || {}).distribution || [];
+    // 4. 全A涨跌分布图 (若昨日存档可用则双柱叠加对比)
+    const br = d.breadth || {};
+    const dist = br.distribution || [];
+    const prevDist = br.prev_distribution || [];
+    const prevDistMap = Object.fromEntries(prevDist.map(x => [x.range, x.count]));
     const ch3 = ensureIntradayChart("intradayDistChart");
     if (ch3) {
         const th = chartTheme();
+        const hasPrevDist = !!(br.prev_distribution_available && prevDist.length);
+        const subText = hasPrevDist
+            ? `已对比昨日(${d.prev_date || "前一日"}) 11档完整分布（今日上涨占比 ${rptNum(br.up_ratio, 1)}% vs 昨 ${rptNum(br.prev_up_ratio, 1)}%）`
+            : (br.prev_available
+                ? `昨日(${d.prev_date || "前一日"})参照：${br.prev_up ?? "—"}涨 / ${br.prev_down ?? "—"}跌（上涨占比 ${rptNum(br.prev_up_ratio, 1)}% · 完整11档分布待昨日收盘存档后呈现）`
+                : "完整11档分布将于每个交易日收盘自动存档后次日起双柱对照");
+        const distSeries = [{
+            name: "今日家数", type: "bar", data: dist.map(x => x.count), barMaxWidth: 26,
+            label: { show: true, position: "top", fontSize: 10 },
+            itemStyle: {
+                color: (p) => {
+                    const lab = dist[p.dataIndex]?.range || "";
+                    if (lab === "平") return "#94a3b8";
+                    return lab.startsWith("-") || lab.startsWith("跌") ? "#059669" : "#e11d48";
+                },
+            },
+        }];
+        if (hasPrevDist) {
+            distSeries.push({
+                name: "昨日家数", type: "bar", barMaxWidth: 20,
+                data: dist.map(x => prevDistMap[x.range] ?? null),
+                itemStyle: { color: "rgba(100,116,139,0.45)", borderRadius: [3, 3, 0, 0] },
+                label: { show: false },
+            });
+        }
         ch3.setOption({
             ...th,
-            title: { text: "全A实时涨跌幅分布（家数）", left: 0, textStyle: { fontSize: 13, fontWeight: 600 } },
-            grid: { left: 48, right: 20, top: 46, bottom: 32 },
+            title: { text: "全A实时涨跌幅分布（今日 vs 昨日）", subtext: subText, left: 0, top: 0, textStyle: { fontSize: 13, fontWeight: 700 }, subtextStyle: { fontSize: 11, color: "#64748b" } },
+            legend: hasPrevDist ? { data: ["今日家数", "昨日家数"], right: 0, top: 4, itemWidth: 12, itemHeight: 8 } : undefined,
+            grid: { left: 48, right: 20, top: 68, bottom: 32 },
             xAxis: { type: "category", data: dist.map(x => x.range), axisLabel: { fontSize: 11 } },
             yAxis: { type: "value" },
-            series: [{
-                type: "bar", data: dist.map(x => x.count), barMaxWidth: 28,
-                label: { show: true, position: "top", fontSize: 10 },
-                itemStyle: {
-                    color: (p) => {
-                        const lab = dist[p.dataIndex]?.range || "";
-                        if (lab === "平") return "#94a3b8";
-                        return lab.startsWith("-") || lab.startsWith("跌") ? "#059669" : "#e11d48";
-                    },
-                },
-            }],
+            series: distSeries,
         }, true);
     }
 }
+
+let intradayLadderViewMode = "today";
+
+function renderRichThemeCard(th, idx, opts = {}) {
+    const uid = `${opts.prefix || "th"}_${idx}`;
+    const days5 = th.days_5 || [];
+    const roleCards = th.role_cards || [];
+    const moreCards = th.more_cards || [];
+    const tags = th.tags || [];
+    const tierLbl = th.tier_label || (th.attack_score != null ? `主攻 ${rptNum(th.attack_score, 0)}` : "");
+    const d5Pct = th.pct_5d != null ? th.pct_5d : null;
+    const isExpanded = !!opts.expandedSet?.has(String(th.code || th.name || idx));
+    const themeKey = String(th.code || th.name || idx);
+
+    const dayPillsHtml = days5.length ? `
+        <div class="rc-5d-strip">
+            ${days5.map(day => `
+                <div class="rc-day-box${day.is_deep_drop ? " is-deep-drop" : ""}">
+                    <div class="rc-day-top">${escapeHtml(day.md || "")} <b>${escapeHtml(day.env || "")}</b></div>
+                    <div class="rc-day-pct">${rptPct(day.pct)}</div>
+                    <div class="rc-day-ex">超${day.excess_pct != null ? `${day.excess_pct > 0 ? "+" : ""}${Number(day.excess_pct).toFixed(1)}%` : "—"}</div>
+                </div>`).join("")}
+        </div>` : "";
+
+    const amtTxt = th.amount_yi != null ? `${Number(th.amount_yi).toFixed(0)}亿` : "—";
+    const ratioParts = [];
+    if (th.amt_ratio_prev != null) ratioParts.push(`环 ${Number(th.amt_ratio_prev).toFixed(2)}x`);
+    if (th.amt_ratio_ma60 != null) ratioParts.push(`60d ${Number(th.amt_ratio_ma60).toFixed(2)}x`);
+    const netD5Txt = th.net_d5_yi != null ? ` · 5日净${fmtSigned(th.net_d5_yi, 1, "亿")}` : "";
+
+    const evidenceHtml = `
+        <div class="rc-evidence-box">
+            <div>
+                <b>带盘凭证：</b>实涨 ${rptPct(th.pct)}（超额 ${th.excess_today_pct != null ? fmtSigned(th.excess_today_pct, 2, "%") : "—"} · 日内 ${th.intraday_pct != null ? fmtSigned(th.intraday_pct, 2, "%") : "—"}）
+                · 成交 <b>${amtTxt}</b>${ratioParts.length ? `（${ratioParts.join(" / ")}）` : ""}
+                · 主力净 <b class="rpt-pct ${rptTone(th.net_yi)}">${fmtSigned(th.net_yi, 1, "亿")}</b>${netD5Txt}
+                · 早盘 <b>${th.early_zt_count ?? 0}</b>/总<b>${th.zt_count ?? 0}</b>板${th.first_seal_time ? `（首封 ${escapeHtml(th.first_seal_time)}）` : ""}
+            </div>
+            <div>
+                <b>抗跌与承接：</b>${th.pre_drop_excess != null ? `跌前超额 ${fmtSigned(th.pre_drop_excess, 2, "%")} (${th.pre_drop_hits}/${th.pre_drop_total})` : ""}${th.deep_drop_day ? ` · 深跌 ${escapeHtml(th.deep_drop_day.md)} 超额 ${fmtSigned(th.deep_drop_day.excess_pct, 2, "%")}` : ""}${th.rounds_6 ? ` · 近${th.rounds_6}轮胜 ${th.outperform_6}轮` : ""}${th.excess_20d_pct != null ? ` · 20日超额 ${fmtSigned(th.excess_20d_pct, 2, "%")}` : ""}${th.market_share_pct != null ? ` · 占全A成交 <b>${th.market_share_pct}%</b>` : ""}${th.zt_share_pct != null ? ` · 占涨停 ${th.zt_share_pct}%` : ""}
+            </div>
+            ${(th.filtered_noise_count || 0) > 0 ? `<div class="rc-filter-note">🛡️ 已自动屏蔽 <b>${th.filtered_noise_count}</b> 只小微盘(&lt;35亿)或低成交(&lt;3亿)杂毛跟风股</div>` : ""}
+        </div>`;
+
+    const renderStockMini = (st) => `
+        <button type="button" class="rc-stock-mini tone-${escapeHtml(st.tone || "seal")}" data-jump-stock="${escapeHtml(st.code || "")}">
+            <div class="rc-st-top">
+                <span class="rc-st-badge tone-${escapeHtml(st.tone || "seal")}">${escapeHtml(st.badge || "")}</span>
+                <strong class="rc-st-name">${escapeHtml(st.name || "")}</strong>
+                <span class="rc-st-pct">${rptPct(st.pct)}</span>
+            </div>
+            <div class="rc-st-meta">${escapeHtml(st.meta || "")}</div>
+        </button>`;
+
+    let stocksHtml = "";
+    if (roleCards.length) {
+        stocksHtml = `
+            <div class="rc-stocks-grid">${roleCards.map(renderStockMini).join("")}</div>
+            ${moreCards.length ? `
+                <div class="rc-more-wrap">
+                    <button type="button" class="rc-more-toggle" data-toggle-more-theme="${escapeHtml(themeKey)}" aria-expanded="${isExpanded ? "true" : "false"}">
+                        ${isExpanded ? "收起更多核心股 ▴" : `展开更多核心股 (+${moreCards.length}只 · 另含 ${th.more_zt_count ?? 0}只封板 / ${th.more_midcap_count ?? 0}只中军) ▾`}
+                    </button>
+                    <div class="rc-stocks-grid rc-more-grid" style="display:${isExpanded ? "grid" : "none"};">
+                        ${moreCards.map(renderStockMini).join("")}
+                    </div>
+                </div>` : ""}`;
+    } else if ((th.candidates || []).length) {
+        // 兼容回退 (测试或无角色卡数据时展示精简候选股)
+        stocksHtml = `
+            <div class="rb-theme-cands">
+                ${th.candidates.map(c => `
+                    <div class="rb-cand-row">
+                        <button type="button" class="pick-stock-btn" data-jump-stock="${escapeHtml(c.code || "")}">
+                            <b>${escapeHtml(c.name || "")}</b> <small>${escapeHtml(c.code || "")}</small>
+                        </button>
+                        <span class="pick-role-badge role-${escapeHtml(c.role || "capacity_leader")}">${escapeHtml(c.role_label || "")}</span>
+                        ${c.launch_time ? `<span class="rb-cand-launch" title="${escapeHtml(c.sync_label || "")}">⏱ ${escapeHtml(c.launch_time)}</span>` : ""}
+                        <span class="rb-cand-pct">${c.pct != null ? rptPct(c.pct) : "—"}</span>
+                        <span class="rb-cand-amt">${c.amount_yi != null ? rptNum(c.amount_yi, 1, "亿") : "—"}</span>
+                        <span class="pick-status-tag tone-${escapeHtml(c.buy_tone || "buyable")}">${escapeHtml(c.buy_status || "")}</span>
+                    </div>`).join("")}
+            </div>`;
+    } else {
+        stocksHtml = `<div class="muted" style="padding:8px 0;font-size:12px;">暂无符合大资金门槛的核心股</div>`;
+    }
+
+    return `
+        <article class="rich-theme-card" id="${escapeHtml(uid)}">
+            <header class="rc-head">
+                <div class="rc-title-line">
+                    <span class="focus-idx">${idx + 1}</span>
+                    <strong class="rc-name">${escapeHtml(th.name || "")}</strong>
+                    <span class="intraday-tag kind-${th.kind === "行业" ? "ind" : "con"}">${escapeHtml(th.kind || "概念")}</span>
+                    ${d5Pct != null ? `<span class="rc-5d-head">5日 ${rptPct(d5Pct)}</span>` : `<span class="rc-5d-head">今日 ${rptPct(th.pct)}</span>`}
+                    <span class="intraday-cont-tag">${escapeHtml(th.continuity_tag || "活跃")}</span>
+                </div>
+                <div class="rc-badges-row">
+                    ${tierLbl ? `<span class="rc-tier-pill">${escapeHtml(tierLbl)}</span>` : ""}
+                    ${tags.map(t => `<span class="rc-tag-pill">${escapeHtml(t)}</span>`).join("")}
+                </div>
+            </header>
+            ${dayPillsHtml}
+            ${evidenceHtml}
+            ${stocksHtml}
+        </article>`;
+}
+
+const expandedRichThemeKeys = new Set();
 
 function renderIntradayThemes(d) {
     const th = d.themes || {};
@@ -4203,26 +4400,9 @@ function renderIntradayThemes(d) {
     const grid = document.getElementById("intradayMainAttackGrid");
     const attacks = th.main_attack || [];
     if (grid) {
-        grid.innerHTML = attacks.length ? attacks.map((a, i) => `
-            <article class="intraday-attack-card">
-                <header>
-                    <span class="focus-idx">${i + 1}</span>
-                    <strong>${escapeHtml(a.name)}</strong>
-                    <span class="intraday-tag kind-${a.kind === "行业" ? "ind" : "con"}">${escapeHtml(a.kind || "概念")}</span>
-                    <span class="intraday-cont-tag">${escapeHtml(a.continuity_tag || "活跃")}</span>
-                </header>
-                <div class="intraday-attack-metrics">
-                    <span>主攻分 <b>${rptNum(a.attack_score, 1)}</b></span>
-                    <span>涨跌 ${rptPct(a.pct)}</span>
-                    <span>主力净流入 <b class="rpt-pct up">${fmtSigned(a.net_yi, 2, "亿")}</b></span>
-                    <span>涨停共振 <b>${a.zt_count ?? 0}只</b></span>
-                </div>
-                <div class="intraday-attack-foot">
-                    领涨：<b>${escapeHtml(a.leader_name || "—")}</b> ${rptPct(a.leader_pct)}
-                    ${a.prev_net_yi != null ? ` · 昨净流 ${fmtSigned(a.prev_net_yi, 1, "亿")}` : ""}
-                </div>
-            </article>
-        `).join("") : `<div class="report-empty">当前无明显主力净流入与涨幅共振的主攻方向（提示盘面轮动分散或偏弱）</div>`;
+        grid.innerHTML = attacks.length
+            ? attacks.map((a, i) => renderRichThemeCard(a, i, { prefix: "intraday_th", expandedSet: expandedRichThemeKeys })).join("")
+            : `<div class="report-empty">当前无明显主力净流入与大资金放量共振的主攻方向（盘面分散或弱势轮动）</div>`;
     }
 
     const prevTrackEl = document.getElementById("intradayPrevHotTrack");
@@ -4264,17 +4444,18 @@ function renderIntradayThemeTable(d) {
     }
 
     const renderBoardTable = (rows, emptyMsg) => `<table class="report-table">
-        <thead><tr><th>板块/题材</th><th>类别</th><th>涨跌幅</th><th>主力净流入</th><th>净占比</th><th>领涨股</th><th>涨停数</th><th>持续性</th></tr></thead>
+        <thead><tr><th>板块/题材</th><th>类别</th><th>涨跌幅</th><th>主力净流入</th><th>近5日净流入</th><th>净占比</th><th>领涨股</th><th>涨停数</th><th>持续性</th></tr></thead>
         <tbody>${(rows || []).slice(0, 15).map(r => `<tr>
             <td><strong>${escapeHtml(r.name)}</strong></td>
             <td>${escapeHtml(r.kind || "")}</td>
             <td>${rptPct(r.pct)}</td>
             <td><span class="rpt-pct ${rptTone(r.net_yi)}">${fmtSigned(r.net_yi, 2, "亿")}</span></td>
+            <td>${r.net_d5_yi != null ? `<span class="rpt-pct ${rptTone(r.net_d5_yi)}">${fmtSigned(r.net_d5_yi, 1, "亿")}</span>` : "—"}</td>
             <td>${rptPct(r.net_ratio_pct)}</td>
             <td>${escapeHtml(r.leader_name || "—")} ${rptPct(r.leader_pct)}</td>
             <td>${r.zt_count ?? 0}</td>
             <td><span class="intraday-cont-tag">${escapeHtml(r.continuity_tag || "—")}</span></td>
-        </tr>`).join("") || `<tr><td colspan=8>${escapeHtml(emptyMsg)}</td></tr>`}</tbody>
+        </tr>`).join("") || `<tr><td colspan=9>${escapeHtml(emptyMsg)}</td></tr>`}</tbody>
     </table>`;
 
     if (intradayThemeTab === "concept_inflow") {
@@ -4291,12 +4472,35 @@ function renderIntradayThemeTable(d) {
 
 function renderIntradayEcology(d) {
     const lt = (d.limits || {}).today || {};
+    const lp = (d.limits || {}).prev || {};
+    const ladCmp = (d.limits || {}).ladder_compare || [];
     const ladderEl = document.getElementById("intradayLadderPanel");
     if (ladderEl) {
-        const ladders = lt.ladder || [];
-        const maxStocks = (lt.max_board_stocks || []).map(s => `${s.name}(${s.industry})`).join("、");
+        const isPrev = intradayLadderViewMode === "prev";
+        const activeLim = isPrev ? lp : lt;
+        const ladders = activeLim.ladder || [];
+        const maxStocks = (activeLim.max_board_stocks || []).map(s => `${s.name}(${s.industry || ""})`).join("、");
+        const cmpBarHtml = ladCmp.length ? `
+            <div class="ladder-cmp-strip">
+                <span class="ladder-cmp-title">📊 今/昨阶梯数对照：</span>
+                ${ladCmp.slice(0, 6).map(x => `
+                    <span class="ladder-cmp-chip">
+                        <b>${x.board}板</b>
+                        <span class="rpt-pct up">${x.today_count}</span><small class="muted">vs昨${x.prev_count}</small>
+                    </span>`).join("")}
+            </div>` : "";
         ladderEl.innerHTML = `
-            <h3>🪜 今日连板梯队 ${lt.max_board ? `<small>最高 ${lt.max_board}板：${escapeHtml(maxStocks || "—")}</small>` : ""}</h3>
+            <div class="ladder-panel-head">
+                <div>
+                    <h3>🪜 连板梯队（今 ${lt.max_board ?? "—"}板 vs 昨 ${lp.max_board ?? "—"}板）</h3>
+                    <small class="muted">${activeLim.max_board ? `最高 ${activeLim.max_board}板：${escapeHtml(maxStocks || "—")}` : "当前暂无更高连板"} · 今连板 ${lt.continuous ?? "—"}只 / 昨 ${lp.continuous ?? "—"}只</small>
+                </div>
+                <div class="ladder-mode-tabs">
+                    <button type="button" class="ladder-mode-btn${!isPrev ? " active" : ""}" data-ladder-mode="today">今日(${lt.limit_up ?? 0})</button>
+                    <button type="button" class="ladder-mode-btn${isPrev ? " active" : ""}" data-ladder-mode="prev">昨日(${lp.limit_up ?? "—"})</button>
+                </div>
+            </div>
+            ${cmpBarHtml}
             ${ladders.length ? ladders.map(g => `
                 <div class="ladder-group">
                     <div class="ladder-h">${g.board}板 · ${g.count ?? g.stocks.length}只</div>
@@ -4307,7 +4511,7 @@ function renderIntradayEcology(d) {
                         </span>`).join("")}
                     </div>
                 </div>
-            `).join("") : "<p class='report-empty'>当前暂无涨停封板梯队</p>"}
+            `).join("") : `<p class='report-empty'>${isPrev ? "昨日连板梯队明细暂未存档" : "当前暂无涨停封板梯队"}</p>`}
         `;
     }
 
@@ -4317,8 +4521,23 @@ function renderIntradayEcology(d) {
         const losers = lt.yzt_losers || [];
         const dtList = lt.dt_list || [];
         const zbList = lt.zb_list || [];
+        const cmpPairs = [
+            { k: "昨涨停均涨", t: lt.prev_zt_avg_pct != null ? fmtSigned(lt.prev_zt_avg_pct, 2, "%") : "—", p: lp.prev_zt_avg_pct != null ? fmtSigned(lp.prev_zt_avg_pct, 2, "%") : "—" },
+            { k: "红盘率", t: lt.prev_zt_up_ratio != null ? `${rptNum(lt.prev_zt_up_ratio, 1)}%` : "—", p: lp.prev_zt_up_ratio != null ? `${rptNum(lp.prev_zt_up_ratio, 1)}%` : "—" },
+            { k: "昨连板均涨", t: lt.prev_lianban_avg_pct != null ? fmtSigned(lt.prev_lianban_avg_pct, 2, "%") : "—", p: lp.prev_lianban_avg_pct != null ? fmtSigned(lp.prev_lianban_avg_pct, 2, "%") : "—" },
+            { k: "大面率(≤-5%)", t: lt.big_loss_rate != null ? `${rptNum(lt.big_loss_rate, 1)}%` : "—", p: lp.big_loss_rate != null ? `${rptNum(lp.big_loss_rate, 1)}%` : "—" },
+            { k: "跌停家数", t: `${lt.limit_down ?? "—"}只`, p: `${lp.limit_down ?? "—"}只` },
+            { k: "炸板 / 封板率", t: `${lt.broken ?? "—"}炸 (${rptNum(lt.seal_rate, 0)}%)`, p: `${lp.broken ?? "—"}炸 (${rptNum(lp.seal_rate, 0)}%)` },
+        ];
         premEl.innerHTML = `
-            <h3>💰 昨日涨停今日盈亏两极（核查接力赚钱效应）</h3>
+            <h3>💰 昨日涨停今日盈亏两极（今 vs 昨接力对照）</h3>
+            <div class="eco-prev-cmp-grid">
+                ${cmpPairs.map(m => `
+                    <div class="eco-cmp-cell">
+                        <span class="eco-cmp-lbl">${escapeHtml(m.k)}</span>
+                        <div class="eco-cmp-vals"><b>${escapeHtml(m.t)}</b> <small class="muted">昨 ${escapeHtml(m.p)}</small></div>
+                    </div>`).join("")}
+            </div>
             <div class="intraday-polar-grid">
                 <div>
                     <h4>大肉榜 Top 6</h4>
@@ -4333,12 +4552,12 @@ function renderIntradayEcology(d) {
             </div>
             <div class="intraday-polar-grid" style="margin-top:14px">
                 <div>
-                    <h4>跌停风险样本（共 ${lt.limit_down ?? 0} 只）</h4>
+                    <h4>跌停风险样本（今 ${lt.limit_down ?? 0}只 vs 昨 ${lp.limit_down ?? "—"}只）</h4>
                     <ul class="report-mini-list">${dtList.slice(0, 6).map(s =>
                     `<li><span>${escapeHtml(s.name)} <small>${escapeHtml(s.industry || "")}</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无跌停</li>"}</ul>
                 </div>
                 <div>
-                    <h4>炸板样本（共 ${lt.broken ?? 0} 只）</h4>
+                    <h4>炸板样本（今 ${lt.broken ?? 0}只 vs 昨 ${lp.broken ?? "—"}只）</h4>
                     <ul class="report-mini-list">${zbList.slice(0, 6).map(s =>
                         `<li><span>${escapeHtml(s.name)} <small>炸${s.open_times}次</small></span>${rptPct(s.pct)}</li>`).join("") || "<li>今日无炸板</li>"}</ul>
                 </div>
@@ -4352,6 +4571,34 @@ function bindIntradayEvents() {
         const btn = e.currentTarget;
         btn.classList.add("is-loading");
         try { await loadIntradaySentiment({ force: true }); } finally { btn.classList.remove("is-loading"); }
+    });
+
+    document.getElementById("intradayWorkspace")?.addEventListener("click", (e) => {
+        const ladBtn = e.target.closest("[data-ladder-mode]");
+        if (ladBtn) {
+            intradayLadderViewMode = ladBtn.dataset.ladderMode || "today";
+            if (intradayData) renderIntradayEcology(intradayData);
+            return;
+        }
+        const stBtn = e.target.closest("[data-jump-stock]");
+        if (stBtn) {
+            const code = stBtn.dataset.jumpStock;
+            if (code) {
+                document.getElementById("tabStockView")?.click();
+                loadStockAnalysis(code);
+                if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+            }
+            return;
+        }
+        const moreBtn = e.target.closest("[data-toggle-more-theme]");
+        if (moreBtn) {
+            const k = moreBtn.dataset.toggleMoreTheme || "";
+            if (k) {
+                if (expandedRichThemeKeys.has(k)) expandedRichThemeKeys.delete(k);
+                else expandedRichThemeKeys.add(k);
+                if (intradayData) renderIntradayThemes(intradayData);
+            }
+        }
     });
 
     document.getElementById("intradayThemeTabs")?.addEventListener("click", (e) => {
@@ -5220,36 +5467,9 @@ function renderReboundPicks(d) {
     const themesEl = document.getElementById("reboundThemesGrid");
     const themes = d.themes || [];
     if (themesEl) {
-        themesEl.innerHTML = themes.length ? themes.map((th, idx) => `
-            <article class="rebound-theme-card">
-                <header class="rb-theme-head">
-                    <div class="rb-theme-title-row">
-                        <span class="focus-idx">${idx + 1}</span>
-                        <strong>${escapeHtml(th.name || "")}</strong>
-                        <span class="intraday-tag">${escapeHtml(th.kind || "概念")}</span>
-                        <span class="intraday-cont-tag">${escapeHtml(th.continuity_tag || "活跃")}</span>
-                    </div>
-                    <div class="rb-theme-metrics">
-                        <span>涨幅 ${th.pct != null ? rptPct(th.pct) : "—"}</span>
-                        <span>净流入 <b>${th.net_yi != null ? rptNum(th.net_yi, 1, "亿") : "—"}</b></span>
-                        <span>净占比 <b>${th.net_ratio_pct != null ? rptNum(th.net_ratio_pct, 1, "%") : "—"}</b></span>
-                        <span>涨停 <b>${th.zt_count ?? 0}</b>家</span>
-                    </div>
-                </header>
-                <div class="rb-theme-cands">
-                    ${(th.candidates || []).map(c => `
-                        <div class="rb-cand-row">
-                            <button type="button" class="pick-stock-btn" data-jump-stock="${escapeHtml(c.code || "")}">
-                                <b>${escapeHtml(c.name || "")}</b> <small>${escapeHtml(c.code || "")}</small>
-                            </button>
-                            <span class="pick-role-badge role-${escapeHtml(c.role || "capacity_leader")}">${escapeHtml(c.role_label || "")}</span>
-                            ${c.launch_time ? `<span class="rb-cand-launch" title="${escapeHtml(c.sync_label || "")}">⏱ ${escapeHtml(c.launch_time)}</span>` : ""}
-                            <span class="rb-cand-pct">${c.pct != null ? rptPct(c.pct) : "—"}</span>
-                            <span class="rb-cand-amt">${c.amount_yi != null ? rptNum(c.amount_yi, 1, "亿") : "—"}</span>
-                            <span class="pick-status-tag tone-${escapeHtml(c.buy_tone || "buyable")}">${escapeHtml(c.buy_status || "")}</span>
-                        </div>`).join("") || `<div class="muted" style="padding:8px 0;font-size:12px;">暂无符合条件的可买成分股</div>`}
-                </div>
-            </article>`).join("") : `<div class="focus-empty">暂无主攻题材数据</div>`;
+        themesEl.innerHTML = themes.length
+            ? themes.map((th, idx) => renderRichThemeCard(th, idx, { prefix: "rebound_th", expandedSet: expandedRichThemeKeys })).join("")
+            : `<div class="focus-empty">暂无主攻题材数据</div>`;
     }
 
     const list = ((d.top_picks || {})[currentReboundPickRole]) || [];
@@ -5337,6 +5557,16 @@ function bindReboundPicksEvents() {
     });
 
     document.getElementById("reboundPicksSection")?.addEventListener("click", (e) => {
+        const moreBtn = e.target.closest("[data-toggle-more-theme]");
+        if (moreBtn) {
+            const k = moreBtn.dataset.toggleMoreTheme || "";
+            if (k) {
+                if (expandedRichThemeKeys.has(k)) expandedRichThemeKeys.delete(k);
+                else expandedRichThemeKeys.add(k);
+                if (reboundPicksData) renderReboundPicks(reboundPicksData);
+            }
+            return;
+        }
         const stBtn = e.target.closest("[data-jump-stock]");
         if (!stBtn) return;
         const code = stBtn.dataset.jumpStock;

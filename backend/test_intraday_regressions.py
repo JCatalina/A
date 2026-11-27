@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from intraday_engine import (
     _parse_qq_boards,
+    analyze_board_history_and_excess,
+    build_board_leadership_roles,
     qq_multiday_to_trends,
     compute_turnover_comparison,
     parse_zdfenbu,
@@ -276,6 +278,62 @@ class TestSentimentAndRiskGates(unittest.TestCase):
         self.assertEqual(res["prev_same_time_yi"], 3000.0)
         self.assertEqual(res["same_time_diff_yi"], 600.0)
         self.assertGreater(len(res["series"]), 0)
+
+    def test_board_history_excess_and_noise_filter_roles(self):
+        # 1. 测试近 5 日板块超额与放量倍数
+        bk = [
+            ["2026-11-20", "100", "100", "101", "99", "100", {}, "1.0", "1000000"],
+            ["2026-11-23", "100", "104", "105", "100", "100", {}, "1.2", "1100000"],
+            ["2026-11-24", "104", "105", "106", "103", "100", {}, "1.1", "1050000"],
+            ["2026-11-25", "105", "101", "105", "100", "100", {}, "1.0", "980000"],
+            ["2026-11-26", "101", "103", "104", "100", "100", {}, "1.1", "1000000"],
+            ["2026-11-27", "103", "115", "116", "103", "100", {}, "1.8", "1800000"],
+        ]
+        bench = [
+            ["2026-11-20", "100", "100", "100", "100", "100"],
+            ["2026-11-23", "100", "101", "101", "100", "100"],
+            ["2026-11-24", "101", "100.5", "101", "100", "100"],
+            ["2026-11-25", "100.5", "98", "100.5", "97.5", "100"],  # 深跌日 -2.49%
+            ["2026-11-26", "98", "97.5", "98", "97", "100"],
+            ["2026-11-27", "97.5", "101", "101", "97.5", "100"],    # 反弹日 +3.59%
+        ]
+        stats = analyze_board_history_and_excess(
+            bk, bench,
+            {"pct": 11.65, "net_yi": 150.0, "net_d5_yi": 200.0, "amount_yi": 180.0, "zt_count": 10, "attack_score": 85.0, "stock_count": 101},
+            market_turnover_yi=2000.0, total_zt_count=100, early_zt_count=2, first_seal_time="09:37",
+        )
+        self.assertEqual(len(stats["days_5"]), 5)
+        self.assertTrue(any(d["is_deep_drop"] for d in stats["days_5"]))
+        self.assertGreater(stats["amt_ratio_prev"], 1.5)
+        self.assertEqual(stats["market_share_pct"], 9.0)
+        self.assertEqual(stats["zt_share_pct"], 10.0)
+
+        # 2. 测试成分股屏蔽小微盘(<35亿)/低成交(<3亿)并识别资金/权重/先手/连板/弹性龙头
+        raw_stocks = [
+            {"code": "sz001111", "name": "小微垃圾跟风", "zxj": "12.0", "zdf": "10.0", "turnover": "12000", "ltsz": "14.0", "hsl": "12.0"},
+            {"code": "sz001112", "name": "低成交僵尸", "zxj": "10.0", "zdf": "10.0", "turnover": "8000", "ltsz": "50.0", "hsl": "1.2"},
+            {"code": "sz002229", "name": "中贝通信", "zxj": "25.0", "zdf": "10.03", "turnover": "120000", "ltsz": "82.0", "hsl": "5.0"},
+            {"code": "sz002999", "name": "快克智能", "zxj": "30.0", "zdf": "10.02", "turnover": "90000", "ltsz": "111.0", "hsl": "4.0"},
+            {"code": "sz300308", "name": "中际旭创", "zxj": "516.0", "zdf": "19.25", "turnover": "3130000", "ltsz": "5694.0", "hsl": "6.0"},
+            {"code": "sh601138", "name": "工业富联", "zxj": "25.0", "zdf": "9.15", "turnover": "860000", "ltsz": "8880.0", "hsl": "1.0"},
+            {"code": "sz300999", "name": "蘅东光", "zxj": "80.0", "zdf": "20.5", "turnover": "150000", "ltsz": "138.0", "hsl": "12.1"},
+        ]
+        zt_map = {
+            "002229": {"seal_time": "09:37", "fbt_raw": 93700, "fund_yi": 0.9, "open_times": 2, "board": 1},
+            "002999": {"seal_time": "13:29", "fbt_raw": 132900, "fund_yi": 0.2, "open_times": 0, "board": 2},
+        }
+        roles = build_board_leadership_roles(raw_stocks, zt_stock_map=zt_map)
+        self.assertEqual(roles["filtered_small_cap"], 1)
+        self.assertEqual(roles["filtered_low_amt"], 1)
+        names = [c["name"] for c in roles["role_cards"]]
+        self.assertNotIn("小微垃圾跟风", names)
+        self.assertNotIn("低成交僵尸", names)
+        badges = {c["name"]: c["badge"] for c in roles["role_cards"]}
+        self.assertIn("09:37先手封板", badges["中贝通信"])
+        self.assertEqual(badges["快克智能"], "2连板")
+        self.assertEqual(badges["中际旭创"], "资金龙头")
+        self.assertEqual(badges["工业富联"], "权重龙头")
+        self.assertEqual(badges["蘅东光"], "弹性前排")
 
 
 if __name__ == "__main__":

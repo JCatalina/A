@@ -614,8 +614,8 @@ def backtest_rebound_strategies(
 # ---------------------------------------------------------------------------
 # 主攻题材成分股清洗分级 & 四角色 >=20 只精选池构建 (纯函数)
 # ---------------------------------------------------------------------------
-def _parse_board_row(row: Dict[str, Any]) -> Optional[Tuple[str, str, float, Optional[float], Optional[float], Optional[float]]]:
-    """统一兼容腾讯 getBoardRankList 与新浪 getHQNodeData 的单只股票字段"""
+def _parse_board_row(row: Dict[str, Any]) -> Optional[Tuple[str, str, float, Optional[float], Optional[float], Optional[float], Optional[float]]]:
+    """统一兼容腾讯 getBoardRankList 与新浪 getHQNodeData 的单只股票字段 (含流通市值 ltsz)"""
     if not isinstance(row, dict):
         return None
     code = _norm_code(row.get("code") or row.get("symbol"))
@@ -628,15 +628,18 @@ def _parse_board_row(row: Dict[str, Any]) -> Optional[Tuple[str, str, float, Opt
         turn_wan = _f(row.get("turnover"))
         amt_yi = round(turn_wan / 10000.0, 2) if turn_wan is not None else None
         turnover = _r(row.get("hsl"), 2)
+        float_yi = _r(row.get("ltsz"), 1)
     else:
         price = _f(row.get("trade")) or _f(row.get("close")) or _f(row.get("price"))
         pct = _f(row.get("changepercent")) if row.get("changepercent") is not None else _f(row.get("pct"))
         amt_raw = _f(row.get("amount"))
         amt_yi = round(amt_raw / 1e8, 2) if amt_raw is not None else _f(row.get("amount_yi"))
         turnover = _r(row.get("turnoverratio"), 2)
+        nmc_wan = _f(row.get("nmc"))
+        float_yi = _r(nmc_wan / 10000.0, 1) if nmc_wan is not None else _r(_f(row.get("float_yi")), 1)
     if price is None or price <= 0 or (amt_yi is not None and amt_yi < 0.3):
         return None
-    return code, name, price, pct, amt_yi, turnover
+    return code, name, price, pct, amt_yi, turnover, float_yi
 
 
 def classify_board_candidates(
@@ -658,10 +661,16 @@ def classify_board_candidates(
         base = _parse_board_row(row)
         if not base:
             continue
-        code, name, price, pct, amt_yi, turnover = base
+        code, name, price, pct, amt_yi, turnover, float_yi = base
         if code in seen:
             continue
         seen.add(code)
+
+        # 过滤小微盘(<25亿)与极低成交(<1.5亿)跟风股 (仅对真实含流通/成交数据且未明确关闭时生效)
+        if float_yi is not None and float_yi < 25.0:
+            continue
+        if amt_yi is not None and amt_yi < 1.5:
+            continue
 
         is_20cm = code.startswith(("30", "68"))
         is_limit_up = pct is not None and pct >= (19.2 if is_20cm else 9.5)
@@ -734,6 +743,7 @@ def classify_board_candidates(
             "board_kind": board.get("kind", "概念"),
             "price": round(price, 2),
             "pct": _r(pct, 2),
+            "float_yi": float_yi,
             "amount_yi": amt_yi,
             "turnover": turnover,
             "is_20cm": is_20cm,
@@ -1019,7 +1029,7 @@ class ReboundPicksEngine:
         codes_to_fetch = [b.get("code") for b in boards if b.get("code")]
         if codes_to_fetch:
             with ThreadPoolExecutor(max_workers=min(6, len(codes_to_fetch))) as ex:
-                futs = {c: ex.submit(self._fetch_board_stocks, c, 45) for c in codes_to_fetch}
+                futs = {c: ex.submit(self._fetch_board_stocks, c, 120) for c in codes_to_fetch}
                 for c, fut in futs.items():
                     raw_by_code[c] = fut.result()
 
@@ -1083,20 +1093,57 @@ class ReboundPicksEngine:
                 if len(card_cands) >= 6:
                     break
 
-            themes_out.append({
+            zt_stock_map = (((intraday or {}).get("limits") or {}).get("today") or {}).get("zt_stock_map") or {}
+            th_item = {
                 "name": b.get("name", ""),
                 "kind": b.get("kind", "概念"),
                 "code": node,
                 "pct": b.get("pct"),
                 "net_yi": b.get("net_yi"),
+                "net_d5_yi": b.get("net_d5_yi"),
                 "net_ratio_pct": b.get("net_ratio_pct"),
+                "amount_yi": b.get("amount_yi"),
+                "float_cap_yi": b.get("float_cap_yi"),
+                "stock_count": b.get("stock_count"),
                 "zt_count": b.get("zt_count", 0),
                 "continuity_tag": b.get("continuity_tag", "盘中活跃"),
                 "attack_score": b.get("attack_score"),
                 "leader_name": b.get("leader_name", ""),
                 "leader_pct": b.get("leader_pct"),
+                "mainline_score": b.get("mainline_score"),
+                "tier_label": b.get("tier_label"),
+                "tags": b.get("tags") or [],
+                "pct_5d": b.get("pct_5d"),
+                "excess_5d_pct": b.get("excess_5d_pct"),
+                "excess_20d_pct": b.get("excess_20d_pct"),
+                "excess_today_pct": b.get("excess_today_pct"),
+                "intraday_pct": b.get("intraday_pct"),
+                "amt_ratio_prev": b.get("amt_ratio_prev"),
+                "amt_ratio_ma60": b.get("amt_ratio_ma60"),
+                "market_share_pct": b.get("market_share_pct"),
+                "zt_share_pct": b.get("zt_share_pct"),
+                "early_zt_count": b.get("early_zt_count", 0),
+                "first_seal_time": b.get("first_seal_time"),
+                "days_5": b.get("days_5") or [],
+                "outperform_6": b.get("outperform_6"),
+                "rounds_6": b.get("rounds_6"),
+                "deep_drop_day": b.get("deep_drop_day"),
+                "pre_drop_excess": b.get("pre_drop_excess"),
+                "pre_drop_hits": b.get("pre_drop_hits"),
+                "pre_drop_total": b.get("pre_drop_total"),
+                "prev_round_excess": b.get("prev_round_excess"),
+                "role_cards": b.get("role_cards"),
+                "more_cards": b.get("more_cards"),
+                "more_zt_count": b.get("more_zt_count", 0),
+                "more_midcap_count": b.get("more_midcap_count", 0),
+                "filtered_noise_count": b.get("filtered_noise_count", 0),
                 "candidates": card_cands,
-            })
+            }
+            if th_item["role_cards"] is None:
+                from intraday_engine import build_board_leadership_roles
+                roles = build_board_leadership_roles(raw_list, zt_stock_map=zt_stock_map)
+                th_item.update(roles)
+            themes_out.append(th_item)
 
         top_picks, role_counts = build_role_pools(all_enriched, per_role=PER_ROLE_POOL_SIZE, all_limit=ALL_POOL_SIZE)
 

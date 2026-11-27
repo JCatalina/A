@@ -594,6 +594,22 @@ def summarize_limit_pools(
             {"board": k, "count": len(v), "stocks": sorted(v, key=lambda x: -(x["fund_yi"] or 0))[:12]}
             for k, v in sorted(ladder.items(), reverse=True)
         ]
+        out["zt_stock_map"] = {
+            str(s.get("c") or ""): {
+                "code": str(s.get("c") or ""),
+                "name": s.get("n") or "",
+                "industry": s.get("hybk") or "其他",
+                "pct": _r(_f(s.get("zdp")), 2),
+                "seal_time": _fmt_hhmm(s.get("fbt")),
+                "fbt_raw": int(s.get("fbt") or 0),
+                "fund_yi": _r((_f(s.get("fund")) or 0) / 1e8, 2),
+                "open_times": int(s.get("zbc") or 0),
+                "days": (s.get("zttj") or {}).get("days"),
+                "board": int(s.get("lbc") or 1),
+            }
+            for s in zt_pool
+            if s.get("c")
+        }
         out["yzt_winners"] = sorted(yzt_rows, key=lambda x: -x["pct"])[:8]
         out["yzt_losers"] = sorted(yzt_rows, key=lambda x: x["pct"])[:8]
         out["dt_list"] = [
@@ -683,31 +699,489 @@ def _parse_qq_boards(rows: List[Dict[str, Any]], kind: str) -> List[Dict[str, An
         if kind == "概念" and x.get("stock_type") != "BK-GN":
             continue
         net_wan = _f(x.get("zljlr"))
+        net_d5_wan = _f(x.get("zljlr_d5"))
+        net_d20_wan = _f(x.get("zljlr_d20"))
         in_wan = _f(x.get("zllr"))
         out_wan = _f(x.get("zllc"))
         turn_wan = _f(x.get("turnover"))
         net_yi = _r(net_wan / 10000.0, 2) if net_wan is not None else None
+        net_d5_yi = _r(net_d5_wan / 10000.0, 2) if net_d5_wan is not None else None
+        net_d20_yi = _r(net_d20_wan / 10000.0, 2) if net_d20_wan is not None else None
         turn_yi = (turn_wan / 10000.0) if (turn_wan is not None and turn_wan > 0) else None
         net_ratio = _r((net_yi / turn_yi) * 100.0, 2) if (net_yi is not None and turn_yi) else None
+        zgb = str(x.get("zgb") or "")
+        up_cnt, total_cnt = None, None
+        if "/" in zgb:
+            p_a, p_b = zgb.split("/", 1)
+            up_cnt = int(_f(p_a) or 0)
+            total_cnt = int(_f(p_b) or 0)
         lzg = x.get("lzg") if isinstance(x.get("lzg"), dict) else {}
         out.append({
             "kind": kind,
             "code": str(x.get("code") or ""),
             "name": str(x.get("name") or ""),
             "pct": _r(_f(x.get("zdf")), 2),
+            "pct_d5": _r(_f(x.get("zdf_d5")), 2),
+            "pct_d20": _r(_f(x.get("zdf_d20")), 2),
             "net_yi": net_yi,
+            "net_d5_yi": net_d5_yi,
+            "net_d20_yi": net_d20_yi,
             "in_yi": _r(in_wan / 10000.0, 2) if in_wan is not None else None,
             "out_yi": _r(out_wan / 10000.0, 2) if out_wan is not None else None,
             "amount_yi": _r(turn_yi, 2) if turn_yi is not None else None,
+            "float_cap_yi": _r(_f(x.get("ltsz")), 1),
             "net_ratio_pct": net_ratio,
             "turnover": _r(_f(x.get("hsl")), 2),
-            "up_down_str": str(x.get("zgb") or ""),
+            "up_down_str": zgb,
+            "up_count": up_cnt,
+            "stock_count": total_cnt,
             "leader_code": str(lzg.get("code") or ""),
             "leader_name": str(lzg.get("name") or ""),
             "leader_pct": _r(_f(lzg.get("zdf")), 2),
             "source": "qq",
         })
     return out
+
+
+def analyze_board_history_and_excess(
+    board_klines: List[List[Any]],
+    bench_klines: List[List[Any]],
+    board_meta: Dict[str, Any],
+    market_turnover_yi: Optional[float] = None,
+    total_zt_count: int = 0,
+    early_zt_count: int = 0,
+    first_seal_time: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    基于板块 65 日K线与基准指数日K线计算:
+    - 近 5 日逐日实涨/相对基准超额/环境标签 (涨/跌/深跌/反弹)
+    - 带盘凭证 (实涨/超额/日内涨幅/成交额环比与60d均量比/早盘先手封板数)
+    - 抗跌与承接 (20日超额/近6轮胜出轮次/深跌日超额/占全A成交占比/占涨停占比)
+    - 主线定级 (核心主线 / 主攻轮动 / 资金异动)
+    """
+    def _parse_klines(raw: List[List[Any]]) -> Dict[str, Dict[str, float]]:
+        mp: Dict[str, Dict[str, float]] = {}
+        prev_c: Optional[float] = None
+        for r in raw or []:
+            if not isinstance(r, list) or len(r) < 3:
+                continue
+            d = str(r[0])[:10]
+            o = _f(r[1])
+            c = _f(r[2])
+            amt_w = _f(r[8]) if len(r) > 8 else None
+            if c is None or c <= 0:
+                continue
+            pct = ((c / prev_c - 1.0) * 100.0) if (prev_c and prev_c > 0) else 0.0
+            intraday = ((c / o - 1.0) * 100.0) if (o and o > 0) else pct
+            mp[d] = {
+                "open": o or c,
+                "close": c,
+                "pct": pct,
+                "intraday": intraday,
+                "amt_yi": (amt_w / 10000.0) if (amt_w is not None and amt_w >= 0) else None,
+            }
+            prev_c = c
+        return mp
+
+    b_map = _parse_klines(board_klines)
+    idx_map = _parse_klines(bench_klines)
+    common_dates = sorted(set(b_map) & set(idx_map))
+
+    days_5: List[Dict[str, Any]] = []
+    pct_5d = board_meta.get("pct_d5")
+    excess_5d = None
+    excess_20d = None
+    outperform_6 = 0
+    rounds_6 = 0
+    deep_drop_day = None
+    prev_round_excess = None
+    pre_drop_excess = None
+    pre_drop_hits = 0
+    pre_drop_total = 0
+    amt_ratio_prev = None
+    amt_ratio_ma60 = None
+    intraday_pct = board_meta.get("pct")
+    excess_today = None
+
+    if len(common_dates) >= 2:
+        last_d = common_dates[-1]
+        today_bar = b_map[last_d]
+        today_bench = idx_map[last_d]
+        intraday_pct = _r(today_bar["intraday"], 2)
+        excess_today = _r(today_bar["pct"] - today_bench["pct"], 2)
+
+        # 成交额环比与 60 日均量比
+        cur_amt = board_meta.get("amount_yi") or today_bar.get("amt_yi")
+        hist_amts = [b_map[d]["amt_yi"] for d in common_dates[:-1] if b_map[d].get("amt_yi") and b_map[d]["amt_yi"] > 0]
+        if cur_amt and hist_amts:
+            amt_ratio_prev = _r(cur_amt / hist_amts[-1], 2)
+            base_60 = statistics.mean(hist_amts[-60:])
+            if base_60 > 0:
+                amt_ratio_ma60 = _r(cur_amt / base_60, 2)
+
+        # 近 5 个交易日逐日卡
+        recent6 = common_dates[-6:]
+        recent5 = common_dates[-5:]
+        prev_b_pct = None
+        for d in recent6:
+            bp = b_map[d]["pct"]
+            ip = idx_map[d]["pct"]
+            ex = bp - ip
+            if ip <= -1.2:
+                env = "深跌"
+            elif ip < -0.25:
+                env = "跌"
+            elif ip >= 1.5 or (prev_b_pct is not None and prev_b_pct <= -0.8 and ip >= 0.4):
+                env = "反弹"
+            elif ip > 0.25:
+                env = "涨"
+            else:
+                env = "平"
+            prev_b_pct = ip
+            if d in recent5:
+                days_5.append({
+                    "date": d,
+                    "md": d[5:],
+                    "env": env,
+                    "is_deep_drop": env == "深跌",
+                    "pct": _r(bp, 2),
+                    "bench_pct": _r(ip, 2),
+                    "excess_pct": _r(ex, 1),
+                })
+
+        rounds_6 = len(recent6)
+        outperform_6 = sum(1 for d in recent6 if (b_map[d]["pct"] - idx_map[d]["pct"]) > 0)
+        # 最近深跌日与上轮超额
+        for pos in range(len(recent6) - 2, -1, -1):
+            d = recent6[pos]
+            ip = idx_map[d]["pct"]
+            ex = b_map[d]["pct"] - ip
+            if ip <= -1.2 and deep_drop_day is None:
+                deep_drop_day = {"md": d[5:], "excess_pct": _r(ex, 2)}
+                pre_slice = recent6[:pos]
+                if pre_slice:
+                    pre_drop_total = len(pre_slice)
+                    pre_drop_hits = sum(1 for pd_ in pre_slice if b_map[pd_]["pct"] > idx_map[pd_]["pct"])
+                    pre_drop_excess = _r(statistics.mean(b_map[pd_]["pct"] - idx_map[pd_]["pct"] for pd_ in pre_slice), 2)
+                if pos > 0:
+                    prev_round_excess = _r(b_map[recent6[pos - 1]]["pct"] - idx_map[recent6[pos - 1]]["pct"], 2)
+                break
+        if prev_round_excess is None and len(recent6) >= 2:
+            d_prev = recent6[-2]
+            prev_round_excess = _r(b_map[d_prev]["pct"] - idx_map[d_prev]["pct"], 2)
+
+        if len(common_dates) >= 6:
+            c0 = b_map[common_dates[-6]]["close"]
+            i0 = idx_map[common_dates[-6]]["close"]
+            c1 = today_bar["close"]
+            i1 = today_bench["close"]
+            if c0 > 0 and i0 > 0:
+                p5 = (c1 / c0 - 1.0) * 100.0
+                ip5 = (i1 / i0 - 1.0) * 100.0
+                pct_5d = _r(p5, 2)
+                excess_5d = _r(p5 - ip5, 2)
+
+        idx20 = max(0, len(common_dates) - 21)
+        c20_0 = b_map[common_dates[idx20]]["close"]
+        i20_0 = idx_map[common_dates[idx20]]["close"]
+        if c20_0 > 0 and i20_0 > 0:
+            excess_20d = _r(((today_bar["close"] / c20_0 - 1.0) - (today_bench["close"] / i20_0 - 1.0)) * 100.0, 2)
+
+    cur_amt_yi = board_meta.get("amount_yi")
+    market_share_pct = _r((cur_amt_yi / market_turnover_yi) * 100.0, 1) if (cur_amt_yi and market_turnover_yi and market_turnover_yi > 0) else None
+    zt_cnt = int(board_meta.get("zt_count") or 0)
+    zt_share_pct = _r((zt_cnt / total_zt_count) * 100.0, 1) if (total_zt_count > 0 and zt_cnt > 0) else None
+
+    net_today = board_meta.get("net_yi") or 0.0
+    net_d5 = board_meta.get("net_d5_yi")
+    net_ratio = board_meta.get("net_ratio_pct") or 0.0
+    score_val = float(board_meta.get("attack_score") or 50.0)
+    # 主线评分融合: 5日资金扭转/超额抗跌/放量真金白银强度
+    bonus = 0.0
+    if net_d5 is not None and net_d5 > 0:
+        bonus += 6.0
+    elif net_today > 0 and (net_d5 is None or net_today > abs(net_d5) * 0.4):
+        bonus += 3.0  # 当日净流入强扭转前期小幅流出
+    if amt_ratio_prev and amt_ratio_prev >= 1.35:
+        bonus += 4.0
+    if outperform_6 >= 4:
+        bonus += 5.0
+    if excess_today is not None and excess_today >= 2.0:
+        bonus += 4.0
+    mainline_score = min(99, max(40, int(round(score_val * 0.80 + bonus))))
+
+    tier_label = f"核心主线 {mainline_score}" if mainline_score >= 76 else (f"主攻轮动 {mainline_score}" if mainline_score >= 62 else f"资金异动 {mainline_score}")
+    tags: List[str] = []
+    if outperform_6 >= 4 and (excess_today or 0) > 0:
+        tags.append("全程抗跌共振")
+    elif excess_today is not None and excess_today >= 1.5:
+        tags.append("今日主动领涨")
+    if net_d5 is not None and net_d5 > 0 and net_today > 0:
+        tags.append("5日主力净流入")
+    elif net_today >= 15.0 and net_ratio >= 3.0:
+        tags.append("大资金扭转介入")
+    if amt_ratio_prev and amt_ratio_prev >= 1.4:
+        tags.append(f"放量{amt_ratio_prev:.1f}x")
+    if early_zt_count > 0:
+        tags.append(f"早盘{early_zt_count}板")
+    if board_meta.get("stock_count"):
+        tags.append(f"{board_meta['stock_count']}只")
+
+    return {
+        "mainline_score": mainline_score,
+        "tier_label": tier_label,
+        "tags": tags,
+        "pct_5d": pct_5d,
+        "excess_5d_pct": excess_5d,
+        "excess_20d_pct": excess_20d,
+        "excess_today_pct": excess_today,
+        "intraday_pct": intraday_pct,
+        "amt_ratio_prev": amt_ratio_prev,
+        "amt_ratio_ma60": amt_ratio_ma60,
+        "market_share_pct": market_share_pct,
+        "zt_share_pct": zt_share_pct,
+        "early_zt_count": early_zt_count,
+        "first_seal_time": first_seal_time,
+        "days_5": days_5,
+        "outperform_6": outperform_6,
+        "rounds_6": rounds_6,
+        "deep_drop_day": deep_drop_day,
+        "pre_drop_excess": pre_drop_excess,
+        "pre_drop_hits": pre_drop_hits,
+        "pre_drop_total": pre_drop_total,
+        "prev_round_excess": prev_round_excess,
+    }
+
+
+def build_board_leadership_roles(
+    raw_stocks: List[Dict[str, Any]],
+    zt_stock_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    min_float_yi: float = 35.0,
+    min_amt_yi: float = 3.0,
+) -> Dict[str, Any]:
+    """
+    参考机构主线生态分解, 从板块成分股中严格屏蔽小微盘(<35亿)与低成交跟风(<3亿)杂毛,
+    按大资金真实角色分级筛选 (绝非仅按涨幅排序):
+      1. 早盘先手封板 (<=10:30, 有真实封单与流通市值门槛)
+      2. 连板空间龙 (board >= 2)
+      3. 资金龙头 (全板块成交额第 1 且流通>=100亿/收红, 金框高亮)
+      4. 权重龙头 (全板块流通市值第 1 且成交>=15亿/收涨, 蓝框高亮)
+      5. 弹性前排 (20cm/30cm 大资金高成交强弹性先锋)
+      + 可展开更多核心股: 容量中军(·封板)、20cm封板、盘中封板
+    """
+    zt_stock_map = zt_stock_map or {}
+    filtered_small_cap = 0
+    filtered_low_amt = 0
+    filtered_weak = 0
+    clean: List[Dict[str, Any]] = []
+    seen = set()
+
+    for row in raw_stocks or []:
+        if not isinstance(row, dict):
+            continue
+        raw_code = str(row.get("code") or row.get("symbol") or "").strip()
+        code = raw_code[2:] if raw_code[:2].lower() in ("sh", "sz", "bj") else raw_code
+        if not code or len(code) != 6 or not code.isdigit() or code in seen:
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name or "ST" in name.upper() or "退" in name:
+            continue
+        seen.add(code)
+
+        price = _f(row.get("zxj")) or _f(row.get("trade")) or _f(row.get("price"))
+        pct = _f(row.get("zdf")) if row.get("zdf") is not None else _f(row.get("changepercent"))
+        turn_wan = _f(row.get("turnover"))
+        amt_yi = round(turn_wan / 10000.0, 2) if turn_wan is not None else _f(row.get("amount_yi"))
+        float_yi = _f(row.get("ltsz"))
+        hsl = _f(row.get("hsl"))
+        if price is None or price <= 0:
+            continue
+
+        zt_info = zt_stock_map.get(code) or {}
+        board_cnt = int(zt_info.get("board") or 0)
+        fbt_raw = int(zt_info.get("fbt_raw") or 0)
+        seal_time = zt_info.get("seal_time")
+        fund_yi = zt_info.get("fund_yi")
+        open_times = int(zt_info.get("open_times") or 0)
+        is_20cm = code.startswith(("30", "68"))
+        is_zt = bool(zt_info) or (pct is not None and pct >= (19.2 if is_20cm else 9.5))
+
+        # 严格过滤垃圾小微盘与无大资金跟风标的
+        req_float = 25.0 if board_cnt >= 2 else min_float_yi
+        if float_yi is not None and float_yi < req_float:
+            filtered_small_cap += 1
+            continue
+        is_early_yizi = is_zt and 0 < fbt_raw <= 100000 and (fund_yi or 0) >= 0.5
+        req_amt = 1.0 if is_early_yizi else min_amt_yi
+        if amt_yi is not None and amt_yi < req_amt:
+            filtered_low_amt += 1
+            continue
+        if pct is None or pct < 1.5:
+            filtered_weak += 1
+            continue
+
+        clean.append({
+            "code": code,
+            "name": name,
+            "price": round(price, 2),
+            "pct": _r(pct, 2),
+            "float_yi": int(round(float_yi)) if float_yi is not None else None,
+            "amount_yi": round(amt_yi, 1) if amt_yi is not None else None,
+            "hsl": _r(hsl, 1),
+            "is_20cm": is_20cm,
+            "is_zt": is_zt,
+            "board": board_cnt,
+            "fbt_raw": fbt_raw,
+            "seal_time": seal_time if seal_time and seal_time != "--" else None,
+            "fund_yi": fund_yi,
+            "open_times": open_times,
+        })
+
+    def _fmt_meta(st: Dict[str, Any], prefer_seal: bool = True) -> str:
+        parts: List[str] = []
+        if st.get("float_yi") is not None:
+            parts.append(f"流{st['float_yi']}亿")
+        if prefer_seal and st.get("seal_time"):
+            parts.append(f"{st['seal_time']}封")
+            if st.get("fund_yi") is not None:
+                parts.append(f"封{st['fund_yi']:.1f}亿")
+            if st.get("open_times", 0) > 0:
+                parts.append(f"{st['open_times']}炸")
+        else:
+            if st.get("amount_yi") is not None:
+                parts.append(f"额{st['amount_yi']:.0f}亿" if st["amount_yi"] >= 10 else f"额{st['amount_yi']:.1f}亿")
+            if st.get("hsl") is not None:
+                parts.append(f"换{st['hsl']:.1f}%")
+        return " · ".join(parts)
+
+    def _make_card(st: Dict[str, Any], badge: str, tone: str, prefer_seal: bool = True) -> Dict[str, Any]:
+        return {
+            "code": st["code"],
+            "name": st["name"],
+            "badge": badge,
+            "tone": tone,
+            "pct": st["pct"],
+            "float_yi": st["float_yi"],
+            "amount_yi": st["amount_yi"],
+            "hsl": st["hsl"],
+            "seal_time": st.get("seal_time"),
+            "fund_yi": st.get("fund_yi"),
+            "open_times": st.get("open_times"),
+            "board": st.get("board"),
+            "is_zt": st["is_zt"],
+            "meta": _fmt_meta(st, prefer_seal=prefer_seal),
+        }
+
+    role_cards: List[Dict[str, Any]] = []
+    more_cards: List[Dict[str, Any]] = []
+    used = set()
+
+    # 1. 早盘先手封板 (<= 10:30, 按首封时间升序, 最多 2 只)
+    early_cands = sorted(
+        [s for s in clean if s["is_zt"] and 0 < s["fbt_raw"] <= 103000],
+        key=lambda x: (x["fbt_raw"], x["open_times"], -(x["fund_yi"] or 0.0)),
+    )
+    for st in early_cands[:2]:
+        used.add(st["code"])
+        role_cards.append(_make_card(st, f"{st['seal_time']}先手封板", "seal", prefer_seal=True))
+
+    # 2. 连板高度龙 (board >= 2, 最多 1 只)
+    lb_cands = sorted(
+        [s for s in clean if s["code"] not in used and s["board"] >= 2],
+        key=lambda x: (-x["board"], -(x["fund_yi"] or 0.0), x["fbt_raw"] or 999999),
+    )
+    for st in lb_cands[:1]:
+        used.add(st["code"])
+        role_cards.append(_make_card(st, f"{st['board']}连板", "seal", prefer_seal=True))
+
+    # 3. 资金龙头 (板块成交额最大 + 流通>=100亿, 金框高亮)
+    cap_cands = sorted(
+        [s for s in clean if s["code"] not in used and (s["float_yi"] is None or s["float_yi"] >= 100) and (s["pct"] or 0) >= 2.0],
+        key=lambda x: (-(x["amount_yi"] or 0.0), -(x["pct"] or 0.0)),
+    )
+    if not cap_cands:
+        cap_cands = sorted([s for s in clean if s["code"] not in used], key=lambda x: -(x["amount_yi"] or 0.0))
+    if cap_cands:
+        st = cap_cands[0]
+        used.add(st["code"])
+        role_cards.append(_make_card(st, "资金龙头", "gold", prefer_seal=False))
+
+    # 4. 权重龙头 (板块流通市值最大 + 成交>=15亿, 蓝框高亮)
+    wt_cands = sorted(
+        [s for s in clean if s["code"] not in used and (s["amount_yi"] or 0.0) >= 15.0 and (s["float_yi"] or 0) >= 200],
+        key=lambda x: (-(x["float_yi"] or 0), -(x["amount_yi"] or 0.0)),
+    )
+    if wt_cands:
+        st = wt_cands[0]
+        used.add(st["code"])
+        role_cards.append(_make_card(st, "权重龙头", "blue", prefer_seal=False))
+
+    # 5. 弹性前排 (20cm/30cm 大资金 >=8亿 & 流通 >=50亿 强弹性)
+    el_cands = sorted(
+        [s for s in clean if s["code"] not in used and s["is_20cm"] and (s["amount_yi"] or 0.0) >= 8.0 and (s["float_yi"] is None or s["float_yi"] >= 50)],
+        key=lambda x: (-(x["pct"] or 0.0), -(x["amount_yi"] or 0.0)),
+    )
+    if el_cands:
+        st = el_cands[0]
+        used.add(st["code"])
+        role_cards.append(_make_card(st, "弹性前排", "elastic", prefer_seal=False))
+
+    # 若主卡不足 6 张, 从剩余核心封板/容量中军补足至 6 张
+    rest = [s for s in clean if s["code"] not in used]
+    rest.sort(key=lambda x: (
+        0 if (x["float_yi"] or 0) >= 300 and (x["amount_yi"] or 0) >= 20 else (1 if x["is_zt"] else 2),
+        -(x["amount_yi"] or 0.0),
+        -(x["pct"] or 0.0),
+    ))
+    for st in rest:
+        is_zhongjun = (st["float_yi"] or 0) >= 300 and (st["amount_yi"] or 0) >= 15.0
+        if st["is_zt"] and st.get("seal_time"):
+            if st["fbt_raw"] <= 103000:
+                badge, tone = f"{st['seal_time']}先手封板", "seal"
+            elif is_zhongjun:
+                badge, tone = "容量中军·封板", "midcap"
+            elif st["is_20cm"]:
+                badge, tone = "20cm封板", "midcap"
+            else:
+                badge, tone = "盘中封板", "seal"
+            prefer_seal = True
+        elif is_zhongjun:
+            badge, tone = "容量中军", "midcap"
+            prefer_seal = False
+        elif st["is_zt"]:
+            badge, tone = ("20cm封板" if st["is_20cm"] else "涨停核心"), ("midcap" if st["is_20cm"] else "seal")
+            prefer_seal = bool(st.get("seal_time"))
+        elif (st["amount_yi"] or 0) >= 10.0 and (st["pct"] or 0) >= 5.0:
+            badge, tone = "大资金活跃", "elastic"
+            prefer_seal = False
+        else:
+            continue
+
+        card = _make_card(st, badge, tone, prefer_seal=prefer_seal)
+        if len(role_cards) < 6:
+            used.add(st["code"])
+            role_cards.append(card)
+        else:
+            more_cards.append(card)
+            if len(more_cards) >= 12:
+                break
+
+    zt_in_clean = [s for s in clean if s["is_zt"]]
+    early_zt_cnt = sum(1 for s in zt_in_clean if 0 < s["fbt_raw"] <= 103000)
+    first_seal_t = min((s["seal_time"] for s in zt_in_clean if s.get("seal_time")), default=None)
+
+    return {
+        "role_cards": role_cards,
+        "more_cards": more_cards,
+        "more_zt_count": sum(1 for c in more_cards if c.get("is_zt")),
+        "more_midcap_count": sum(1 for c in more_cards if "中军" in (c.get("badge") or "")),
+        "early_zt_count": early_zt_cnt,
+        "first_seal_time": first_seal_t,
+        "filtered_noise_count": filtered_small_cap + filtered_low_amt,
+        "filtered_small_cap": filtered_small_cap,
+        "filtered_low_amt": filtered_low_amt,
+        "core_pool_count": len(clean),
+    }
 
 
 def identify_main_attack(
@@ -796,12 +1270,27 @@ def identify_main_attack(
     i_in = _enrich(i_in_clean)
     i_hot = _enrich(i_hot_clean)
 
-    # 筛选净流入 > 0 且 涨幅 > 0 的方向参与主攻排序
-    candidates = [
-        _enrich([v])[0]
-        for v in merged.values()
-        if (v.get("net_yi") or 0) > 0 and (v.get("pct") or 0) > 0
-    ]
+    # 筛选真金白银净流入 > 0 且 涨幅 > 0 的方向参与主攻排序, 屏蔽宽基(>350只)/超小成交/小票题材
+    candidates = []
+    for v in merged.values():
+        net_v = v.get("net_yi")
+        pct_v = v.get("pct")
+        amt_v = v.get("amount_yi")
+        sc_cnt = v.get("stock_count")
+        if net_v is None or net_v <= 0 or pct_v is None or pct_v <= 0:
+            continue
+        if sc_cnt is not None and (sc_cnt < 8 or sc_cnt > 350):
+            continue
+        if amt_v is not None and amt_v < 40.0:
+            continue
+        candidates.append(_enrich([v])[0])
+
+    if not candidates:
+        candidates = [
+            _enrich([v])[0]
+            for v in merged.values()
+            if (v.get("net_yi") or 0) > 0 and (v.get("pct") or 0) > 0
+        ]
     if not candidates:
         return {
             "main_attack": [],
@@ -824,7 +1313,6 @@ def identify_main_attack(
         return sum(1 for x in sorted_vals if x <= v) / len(sorted_vals)
 
     for c in candidates:
-        # 行业板块股票数通常远少于泛概念, 净流入规模组内对比才不会被"TMT/芯片概念"类泛概念碾压
         if c.get("kind") == "行业" and len(nets_ind) >= 3:
             p_net = _pctile(nets_ind, c["net_yi"])
         elif c.get("kind") != "行业" and len(nets_con) >= 3:
@@ -836,9 +1324,11 @@ def identify_main_attack(
         if (c.get("leader_pct") or 0) >= 9.5:
             zt_bonus = max(zt_bonus, 0.5)
         cont_bonus = 0.08 if c["continuity_tag"] == "主线延续" else 0.0
-        # 申万二级真实细分行业优先权: 避免宽泛概念挤占真实行业主线
+        # 5日主力净流入转正/持续流入加成 & 申万二级真实行业优先权
+        d5_net = c.get("net_d5_yi")
+        d5_bonus = 0.08 if (d5_net is not None and d5_net > 0) else (0.04 if (d5_net is not None and c["net_yi"] > abs(d5_net) * 0.4) else 0.0)
         kind_bonus = 0.08 if c.get("kind") == "行业" else 0.0
-        c["attack_score"] = round((0.45 * p_net + 0.30 * p_pct + 0.25 * zt_bonus + cont_bonus + kind_bonus) * 100, 1)
+        c["attack_score"] = round((0.42 * p_net + 0.28 * p_pct + 0.22 * zt_bonus + cont_bonus + d5_bonus + kind_bonus) * 100, 1)
 
     candidates.sort(key=lambda x: (-x["attack_score"], -(x["net_yi"] or 0)))
 
@@ -1589,12 +2079,43 @@ class IntradaySentimentEngine:
         res = self._cached(f"pool:{kind}:{d}", ttl, _load)
         return res if res is not None else (0, [])
 
+    def _normalize_report_ladder(self, raw_ladder: Any) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for g in raw_ladder or []:
+            if not isinstance(g, dict):
+                continue
+            b = int(g.get("board") or 0)
+            sts = g.get("stocks") or []
+            norm_sts = []
+            for s in sts:
+                if not isinstance(s, dict):
+                    continue
+                st_str = str(s.get("seal_time") or "")
+                if ":" not in st_str:
+                    st_str = _fmt_hhmm(st_str)
+                norm_sts.append({
+                    "code": str(s.get("code") or ""),
+                    "name": s.get("name") or "",
+                    "industry": s.get("industry") or "其他",
+                    "pct": _r(_f(s.get("pct")), 2),
+                    "seal_time": st_str,
+                    "fund_yi": _r(_f(s.get("fund_yi")), 2),
+                    "open_times": int(s.get("open_times") or 0),
+                    "days": s.get("days"),
+                    "board": b,
+                })
+            if b > 0:
+                out.append({"board": b, "count": int(g.get("count") or len(norm_sts)), "stocks": norm_sts})
+        out.sort(key=lambda x: -x["board"])
+        return out
+
     def fetch_limit_comparison(self, today: str, prev: Optional[str]) -> Dict[str, Any]:
         def _day_summary(d: str, is_hist: bool, detail: bool) -> Dict[str, Any]:
             if is_hist:
                 disk = self._disk_load(self._disk_path(f"pools_{d}.json"))
                 if disk and disk.get("available"):
-                    return disk
+                    if not detail or disk.get("ladder"):
+                        return disk
             with ThreadPoolExecutor(5) as ex:
                 f_zt = ex.submit(self._fetch_pool, "getTopicZTPool", d, "fbt%3Aasc", is_hist)
                 f_zb = ex.submit(self._fetch_pool, "getTopicZBPool", d, "fbt%3Aasc", is_hist)
@@ -1608,18 +2129,72 @@ class IntradaySentimentEngine:
                 qs_tc, qs_p = f_qs.result()
             res = summarize_limit_pools(zt_tc, zt_p, zb_tc, zb_p, dt_tc, dt_p, y_tc, y_p, qs_tc, qs_p, detail=detail)
             res["date"] = d
-            if is_hist and res.get("available"):
-                self._disk_save(self._disk_path(f"pools_{d}.json"), res)
+            # 若东财历史接口返回空, 回退融合本地已有日报/盘中存档中的完整梯队数据
+            if is_hist:
+                old_disk = self._disk_load(self._disk_path(f"pools_{d}.json")) or {}
+                rep_disk = self._disk_load(os.path.join(REPORT_DIR, f"pools_{d}.json")) or {}
+                prev_arc = self._disk_load(self._disk_path(f"prev_close_{d}.json")) or {}
+                arc_lim = prev_arc.get("limits_today") or {}
+                if not res.get("available"):
+                    base = old_disk if old_disk.get("available") else (arc_lim if arc_lim.get("available") else {})
+                    if base:
+                        res = dict(base)
+                        res["date"] = d
+                if not res.get("ladder"):
+                    if arc_lim.get("ladder"):
+                        res["ladder"] = arc_lim["ladder"]
+                    elif rep_disk.get("ladder"):
+                        res["ladder"] = self._normalize_report_ladder(rep_disk["ladder"])
+                if not res.get("dt_list"):
+                    if arc_lim.get("dt_list"):
+                        res["dt_list"] = arc_lim["dt_list"]
+                    elif rep_disk.get("limit_down_list"):
+                        res["dt_list"] = rep_disk["limit_down_list"]
+                for k in ("yzt_winners", "yzt_losers", "zb_list"):
+                    if not res.get(k) and arc_lim.get(k):
+                        res[k] = arc_lim[k]
+                if not res.get("available") and rep_disk.get("limit_up") is not None:
+                    res["available"] = True
+                    for k in ("limit_up", "limit_down", "broken", "seal_rate", "max_board", "continuous",
+                              "first_board", "prev_limit_up", "promotion_rate", "prev_zt_avg_pct",
+                              "prev_zt_up_ratio", "prev_lianban_avg_pct", "industries"):
+                        if res.get(k) is None and rep_disk.get(k) is not None:
+                            res[k] = rep_disk[k]
+                if res.get("available"):
+                    self._disk_save(self._disk_path(f"pools_{d}.json"), res)
             return res
 
         with ThreadPoolExecutor(2) as ex:
             ft = ex.submit(_day_summary, today, False, True)
-            fp = ex.submit(_day_summary, prev, True, False) if prev else None
+            fp = ex.submit(_day_summary, prev, True, True) if prev else None
             lim_today = ft.result()
             lim_prev = fp.result() if fp else {"available": False}
 
+        t_lad = {int(g["board"]): g for g in (lim_today.get("ladder") or []) if g.get("board")}
+        p_lad = {int(g["board"]): g for g in (lim_prev.get("ladder") or []) if g.get("board")}
+        all_boards = sorted(set(t_lad) | set(p_lad), reverse=True)
+        ladder_compare = []
+        for b in all_boards:
+            tg = t_lad.get(b) or {}
+            pg = p_lad.get(b) or {}
+            tc = int(tg.get("count") or 0)
+            pc = int(pg.get("count") or 0)
+            ladder_compare.append({
+                "board": b,
+                "today_count": tc,
+                "prev_count": pc,
+                "delta": tc - pc,
+                "today_top": [s.get("name") for s in (tg.get("stocks") or [])[:3] if s.get("name")],
+                "prev_top": [s.get("name") for s in (pg.get("stocks") or [])[:3] if s.get("name")],
+            })
+
         zt_theme_compare = compare_zt_themes(lim_today.get("industries") or [], lim_prev.get("industries") or [])
-        return {"today": lim_today, "prev": lim_prev, "zt_theme_compare": zt_theme_compare}
+        return {
+            "today": lim_today,
+            "prev": lim_prev,
+            "zt_theme_compare": zt_theme_compare,
+            "ladder_compare": ladder_compare,
+        }
 
     # ---------- 3. 全A实时涨跌分布 + 昨日存档 ----------
     def fetch_breadth(self, today: str, prev: Optional[str]) -> Dict[str, Any]:
@@ -1632,6 +2207,11 @@ class IntradaySentimentEngine:
         prev_up_ratio = None
         prev_up = None
         prev_down = None
+        prev_flat = None
+        prev_gt5 = None
+        prev_lt5 = None
+        prev_median = None
+        prev_dist = None
         if prev:
             prev_arc = self._disk_load(self._disk_path(f"prev_close_{prev}.json")) or {}
             prev_br = prev_arc.get("breadth") or {}
@@ -1639,17 +2219,36 @@ class IntradaySentimentEngine:
                 prev_up_ratio = prev_br.get("up_ratio")
                 prev_up = prev_br.get("up")
                 prev_down = prev_br.get("down")
+                prev_flat = prev_br.get("flat")
+                prev_gt5 = prev_br.get("gt5")
+                prev_lt5 = prev_br.get("lt5")
+                prev_median = prev_br.get("median_pct_est")
+                if prev_br.get("distribution"):
+                    prev_dist = prev_br.get("distribution")
             else:
                 snap = self._disk_load(os.path.join(REPORT_DIR, f"snapshot_{prev}.json")) or {}
                 if snap.get("available"):
                     prev_up_ratio = snap.get("up_ratio")
                     prev_up = snap.get("up")
                     prev_down = snap.get("down")
+                else:
+                    rev = self._disk_load(os.path.join(REPORT_DIR, f"review_{prev}.json")) or {}
+                    r_br = rev.get("breadth") or {}
+                    if r_br.get("available"):
+                        prev_up_ratio = r_br.get("up_ratio")
+                        prev_up = r_br.get("up")
+                        prev_down = r_br.get("down")
 
         cur["prev_available"] = prev_up_ratio is not None
         cur["prev_up_ratio"] = prev_up_ratio
         cur["prev_up"] = prev_up
         cur["prev_down"] = prev_down
+        cur["prev_flat"] = prev_flat
+        cur["prev_gt5"] = prev_gt5
+        cur["prev_lt5"] = prev_lt5
+        cur["prev_median_pct_est"] = prev_median
+        cur["prev_distribution"] = prev_dist
+        cur["prev_distribution_available"] = bool(prev_dist)
         return cur
 
     # ---------- 4. 大盘主力资金分时 & 昨日对比 ----------
@@ -1726,12 +2325,44 @@ class IntradaySentimentEngine:
             "series": series,
         }
 
-    # ---------- 5. 热点题材 / 资金净流入 / 主力主攻方向 (v3.8.2: 优先腾讯申万二级hy2+gn, 失败回退新浪) ----------
+    def _fetch_board_kline_65(self, sym: str) -> List[List[Any]]:
+        if not sym:
+            return []
+        def _load():
+            qjs = self._get_json(
+                f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={sym},day,,,66,qfq",
+                timeout=6.0, attempts=2, headers={"Referer": "https://gu.qq.com/"},
+            )
+            return (((qjs or {}).get("data") or {}).get(sym) or {}).get("day") or None
+        return self._cached(f"bk_kline:{sym}", 180, _load) or []
+
+    def _fetch_board_members(self, board_code: str, stock_count: Optional[int] = None) -> List[Dict[str, Any]]:
+        if not board_code or not str(board_code).startswith("pt"):
+            return []
+        def _load():
+            qq_headers = {"Referer": "https://gu.qq.com/"}
+            u_turn = f"https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList?board_code={board_code}&sort_type=turnover&direct=down&offset=0&count=120"
+            r1 = self._get_json(u_turn, timeout=6.0, attempts=2, headers=qq_headers)
+            rows = list(((r1 or {}).get("data") or {}).get("rank_list") or [])
+            if stock_count and stock_count > 120:
+                u_pct = f"https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList?board_code={board_code}&sort_type=priceRatio&direct=down&offset=0&count=40"
+                r2 = self._get_json(u_pct, timeout=5.0, attempts=1, headers=qq_headers)
+                seen_c = {str(x.get("code") or "") for x in rows if isinstance(x, dict)}
+                for item in ((r2 or {}).get("data") or {}).get("rank_list") or []:
+                    if isinstance(item, dict) and str(item.get("code") or "") not in seen_c:
+                        rows.append(item)
+            return rows or None
+        return self._cached(f"bk_members:{board_code}", 90, _load) or []
+
+    # ---------- 5. 热点题材 / 资金净流入 / 主力主攻方向 (v3.8.5: 腾讯hy2+gn+5日超额+防杂毛角色分化) ----------
     def fetch_themes_and_main_attack(
         self,
         prev: Optional[str],
         zt_ind_today: List[Dict[str, Any]],
         zt_stocks_today: Optional[List[str]] = None,
+        zt_stock_map: Optional[Dict[str, Dict[str, Any]]] = None,
+        market_turnover_yi: Optional[float] = None,
+        total_zt_count: int = 0,
     ) -> Dict[str, Any]:
         raw: Dict[str, List[Dict[str, Any]]] = {
             "concept_inflow": [], "concept_hot": [], "concept_outflow": [],
@@ -1739,15 +2370,27 @@ class IntradaySentimentEngine:
         }
         qq_base = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/pt/getRank"
         qq_headers = {"Referer": "https://gu.qq.com/"}
-        with ThreadPoolExecutor(2) as ex:
-            f_hy2 = ex.submit(self._get_json, f"{qq_base}?board_type=hy2&sort_type=priceRatio&direct=down&offset=0&count=150", 6.0, 2, qq_headers)
-            f_gn = ex.submit(self._get_json, f"{qq_base}?board_type=gn&sort_type=turnover&direct=down&offset=0&count=150", 6.0, 2, qq_headers)
+        with ThreadPoolExecutor(3) as ex:
+            f_hy2 = ex.submit(self._get_json, f"{qq_base}?board_type=hy2&sort_type=turnover&direct=down&offset=0&count=150", 6.0, 2, qq_headers)
+            f_gn_t = ex.submit(self._get_json, f"{qq_base}?board_type=gn&sort_type=turnover&direct=down&offset=0&count=220", 6.0, 2, qq_headers)
+            f_gn_p = ex.submit(self._get_json, f"{qq_base}?board_type=gn&sort_type=priceRatio&direct=down&offset=0&count=120", 6.0, 2, qq_headers)
             hy2_js = f_hy2.result()
-            gn_js = f_gn.result()
+            gn_t_js = f_gn_t.result()
+            gn_p_js = f_gn_p.result()
 
         hy2_rows = _parse_qq_boards(((hy2_js or {}).get("data") or {}).get("rank_list") or [], "行业")
-        gn_rows = _parse_qq_boards(((gn_js or {}).get("data") or {}).get("rank_list") or [], "概念")
-        gn_rows = [x for x in gn_rows if not _is_noise_concept(x.get("name", ""))]
+        gn_seen = set()
+        gn_rows: List[Dict[str, Any]] = []
+        for src in (gn_t_js, gn_p_js):
+            for x in _parse_qq_boards(((src or {}).get("data") or {}).get("rank_list") or [], "概念"):
+                c = x.get("code") or x.get("name")
+                if c in gn_seen or _is_noise_concept(x.get("name", "")):
+                    continue
+                sc = x.get("stock_count")
+                if sc is not None and (sc < 8 or sc > 350):
+                    continue
+                gn_seen.add(c)
+                gn_rows.append(x)
 
         if hy2_rows or gn_rows:
             raw["industry_inflow"] = sorted(hy2_rows, key=lambda x: -(x.get("net_yi") if x.get("net_yi") is not None else -1e9))[:25]
@@ -1783,13 +2426,49 @@ class IntradaySentimentEngine:
             prev_archive=prev_archive,
             zt_stocks_today=zt_stocks_today,
         )
+
+        # 为精选 Top6 主攻板块并发拉取 65 日板块日K + 成分股大资金角色分层 (过滤小票跟风)
+        ma_list = out.get("main_attack") or []
+        qq_boards = [b for b in ma_list if str(b.get("code") or "").startswith("pt")]
+        if qq_boards:
+            bench_klines: List[List[Any]] = []
+            bk_klines: Dict[str, List[List[Any]]] = {}
+            bk_members: Dict[str, List[Dict[str, Any]]] = {}
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                f_bench = ex.submit(self._fetch_board_kline_65, "sh000001")
+                f_kl = {b["code"]: ex.submit(self._fetch_board_kline_65, b["code"]) for b in qq_boards}
+                f_mb = {b["code"]: ex.submit(self._fetch_board_members, b["code"], b.get("stock_count")) for b in qq_boards}
+                bench_klines = f_bench.result()
+                for c, fut in f_kl.items():
+                    bk_klines[c] = fut.result()
+                for c, fut in f_mb.items():
+                    bk_members[c] = fut.result()
+
+            enriched_ma: List[Dict[str, Any]] = []
+            for b in ma_list:
+                c = b.get("code") or ""
+                roles = build_board_leadership_roles(bk_members.get(c, []), zt_stock_map=zt_stock_map)
+                hist_stats = analyze_board_history_and_excess(
+                    bk_klines.get(c, []),
+                    bench_klines,
+                    b,
+                    market_turnover_yi=market_turnover_yi,
+                    total_zt_count=total_zt_count,
+                    early_zt_count=roles.get("early_zt_count", 0),
+                    first_seal_time=roles.get("first_seal_time"),
+                )
+                merged_b = {**b, **hist_stats, **roles}
+                # 兜底过滤无真大资金主体的纯小票题材 (若有其他候选可替换)
+                enriched_ma.append(merged_b)
+            out["main_attack"] = enriched_ma
+
         out["concept_outflow"] = [x for x in raw["concept_outflow"] if not _is_noise_concept(x.get("name", ""))][:12]
         out["industry_outflow"] = raw["industry_outflow"]
         out["available"] = any(len(raw[k]) > 0 for k in raw)
         if not out["prev_theme_archive_available"]:
-            out["prev_theme_note"] = "板块资金昨日对比将在每日收盘自动存档后于次日起呈现；当前已用可回溯的「昨日涨停行业分布」对比题材持续性。"
+            out["prev_theme_note"] = "板块昨日对比将在每日收盘自动存档后次日呈现；已实时加载近5日板块超额、放量环比与大资金龙头角色（过滤小微盘跟风）。"
         else:
-            out["prev_theme_note"] = f"已加载昨日（{prev}）收盘板块与资金基线进行持续性对照。"
+            out["prev_theme_note"] = f"已加载昨日（{prev}）收盘板块基线，并实时结合近5日板块超额与大资金龙头角色（已屏蔽小票跟风）。"
         return out
 
     # ---------- 6. 核心指数与风格剪刀差 ----------
@@ -1947,12 +2626,20 @@ class IntradaySentimentEngine:
             lim_today = limits.get("today") or {}
             lim_prev = limits.get("prev") or {}
             zt_names = [s.get("name") for g in (lim_today.get("ladder") or []) for s in (g.get("stocks") or []) if s.get("name")]
-            themes = self.fetch_themes_and_main_attack(prev, lim_today.get("industries") or [], zt_stocks_today=zt_names)
+            themes = self.fetch_themes_and_main_attack(
+                prev,
+                lim_today.get("industries") or [],
+                zt_stocks_today=zt_names,
+                zt_stock_map=lim_today.get("zt_stock_map"),
+                market_turnover_yi=turnover.get("today_cum_yi"),
+                total_zt_count=int(lim_today.get("limit_up") or 0),
+            )
 
             score_today = compute_sentiment_score(lim_today, breadth, turnover, capital_flow, themes, is_prev=False)
             score_prev = compute_sentiment_score(lim_prev, breadth, turnover, capital_flow, themes, is_prev=True)
 
             timeline = self.load_timeline(today)
+            prev_timeline = self.load_timeline(prev) if prev else []
             # 先构建基础负载以便采样落盘
             prelim = {
                 "phase": phase,
@@ -1975,7 +2662,7 @@ class IntradaySentimentEngine:
 
             return {
                 "type": "intraday",
-                "version": "3.5",
+                "version": "3.8.5",
                 "date": today,
                 "weekday": _weekday(today),
                 "prev_date": prev,
@@ -2000,6 +2687,7 @@ class IntradaySentimentEngine:
                 "themes": themes,
                 "indices_style": indices_style,
                 "timeline": timeline,
+                "prev_timeline": prev_timeline,
                 "elapsed_sec": round(time.time() - t0, 2),
                 "disclaimer": "本页面所有情绪温度分、风控闸门与参与建议均为盘面客观指标规则评估，不构成未来涨跌概率预测或投资建议。",
             }
