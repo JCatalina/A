@@ -6,6 +6,7 @@
 
 | 版本 | 日期 | 核心主题 | 关键模块 | 详情文档 |
 | :--- | :--- | :--- | :--- | :--- |
+| **v3.9.0** | 2026-11-27 | **五指数分时量价脉搏 · 去U型同时段带量诊断（含中证1000）**：新增 `volume_pulse_engine.py` 并发分析上证/深成/创指/科创50/中证1000 近6日去U型5分钟同时段中位量比（腾讯 `mkline` 主源+新浪回退、盘中未收盘折算防爆表），输出拉砸均量比、涨跌量质比、6级诊断、连续波段卡片及 ECharts 双轨联动图表（含波段高亮与移动端自适应） | `backend/volume_pulse_engine.py`, `backend/app.py`, `backend/scheduler.py`, `frontend/*` | — |
 | **v3.8.4** | 2026-11-27 | **盘中成交额分时高可用修复 + ECharts防重叠 + 标的池桌面防裁切**：`fetch_turnover_comparison` 切换腾讯 `day/query` 多日 1 分钟差分主源(`qq_multiday_to_trends`)修复左图空白；两张盘中图标题/图例分层增大 `grid.top` 消除重叠；标的池改紧凑双行、桌面全宽自适应与 `padding-right` 防右栏滚动条裁切 | `backend/intraday_engine.py`, `backend/test_intraday_regressions.py`, `frontend/app.js`, `frontend/style.css`, `frontend/index.html` | — |
 | **v3.8.3** | 2026-11-27 | **标的池固定标题/吸顶滚动、回测卡防溢出与移动端全面适配**：回测卡片单列全宽与表内横滑防溢出；标的池改为固定角色头部+表头吸顶独立滚动窗；新增 `≤1199px`/`≤768px` 单行可滑角色栏、滑动提示与第 2 列标的左冻结 | `frontend/index.html`, `frontend/style.css`, `frontend/app.js`, `frontend/test_display_regressions.cjs` | — |
 | **v3.8.2** | 2026-11-27 | **申万二级真实主攻方向 + 每角色 ≥20 只池 + 个股分时拉升与指数共振时间对比**：主攻方向改用腾讯 `hy2` 申万二级行业(半导体/通信设备/元件等)并消除「华为海思+华为概念」同族重复；新增腾讯 1 分钟分时拉升起点识别与指数共振基准差值(`🚀 领涨先手`/`⚡ 同步共振`)；修复角色 Tab CSS 类名冲突并扩大四角色至各 20 只 | `backend/intraday_engine.py`, `backend/rebound_picks_engine.py`, `frontend/*` | — |

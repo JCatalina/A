@@ -143,13 +143,15 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(() => {
         loadResonanceData({ silent: true });
         loadReboundPicks({ silent: true });
+        loadVolumePulseData({ silent: true });
     }, 60000);
     setInterval(() => loadScreenerResults(currentScreenerStrategy, { silent: true }), 60000);
 
-    // v3.6.7 / v3.8.1: 页面启动即后台预加载 六指数共振 / 反抽选股 / 盘中情绪 / 复盘日报 / 明日重点 / 预判台账
+    // v3.6.7 / v3.8.1 / v3.9.0: 页面启动即后台预加载 六指数共振 / 五指数量价脉搏 / 反抽选股 / 盘中情绪 / 复盘日报 / 明日重点 / 预判台账
     setTimeout(() => {
         loadResonanceData({ silent: true });
         loadReboundPicks({ silent: true });
+        loadVolumePulseData({ silent: true });
         loadIntradaySentiment({ silent: true });
         loadReviewReport(false, { silent: true });
         loadFocusReport(false, { silent: true });
@@ -169,6 +171,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loadMacroIndexAnalysis(currentMacroSymbol);
         loadResonanceData({ silent: true });
         loadReboundPicks({ silent: true });
+        loadVolumePulseData({ silent: true });
         loadIceRebound(currentMacroSymbol);
         loadScreenerResults(currentScreenerStrategy);
         loadStockAnalysis(currentStockCode, currentPeriod, false);
@@ -328,6 +331,7 @@ function initCharts() {
         probGaugeInst?.resize();
         radarChartInst?.resize();
         macroKlineChartInst?.resize();
+        volumePulseChartInst?.resize();
     });
 }
 
@@ -1888,7 +1892,10 @@ function bindMrdiEvents() {
     tabIndex?.addEventListener("click", () => {
         switchWorkspaceView("tabIndexView", "indexWorkspace");
         loadMacroIndexAnalysis(currentMacroSymbol);
-        setTimeout(() => macroKlineChartInst?.resize(), 150);
+        setTimeout(() => {
+            macroKlineChartInst?.resize();
+            if (currentMacroSubView === "volume_pulse") volumePulseChartInst?.resize();
+        }, 150);
     });
 
     tabMrdi?.addEventListener("click", () => {
@@ -4984,22 +4991,37 @@ let resonanceRequestId = 0;
 let currentMacroSubView = "single";
 
 function switchMacroSubView(view) {
-    currentMacroSubView = view === "resonance" ? "resonance" : "single";
+    if (view === "resonance") currentMacroSubView = "resonance";
+    else if (view === "volume_pulse") currentMacroSubView = "volume_pulse";
+    else currentMacroSubView = "single";
+
     const singleEl = document.getElementById("macroSingleView");
     const resEl = document.getElementById("macroResonanceView");
+    const pulseEl = document.getElementById("macroPulseView");
     const btnSingle = document.getElementById("subTabSingleMacro");
     const btnRes = document.getElementById("subTabResonance");
+    const btnPulse = document.getElementById("subTabVolumePulse");
 
     if (singleEl) singleEl.style.display = currentMacroSubView === "single" ? "block" : "none";
     if (resEl) resEl.style.display = currentMacroSubView === "resonance" ? "flex" : "none";
+    if (pulseEl) pulseEl.style.display = currentMacroSubView === "volume_pulse" ? "flex" : "none";
+
     btnSingle?.classList?.toggle?.("active", currentMacroSubView === "single");
     btnRes?.classList?.toggle?.("active", currentMacroSubView === "resonance");
+    btnPulse?.classList?.toggle?.("active", currentMacroSubView === "volume_pulse");
 
     if (currentMacroSubView === "single") {
         setTimeout(() => { try { macroKlineChartInst?.resize?.(); } catch (_) { } }, 60);
-    } else {
+    } else if (currentMacroSubView === "resonance") {
         if (!resonanceData) loadResonanceData();
         if (!reboundPicksData) loadReboundPicks();
+    } else {
+        if (volumePulseData) {
+            renderVolumePulsePanel(volumePulseData);
+        } else {
+            loadVolumePulseData();
+        }
+        setTimeout(() => { try { volumePulseChartInst?.resize?.(); } catch (_) { } }, 60);
     }
 }
 
@@ -5350,6 +5372,8 @@ function bindResonanceEvents() {
             if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
         }
     });
+
+    bindVolumePulseEvents();
 }
 
 /* =====================================================================
@@ -5575,5 +5599,451 @@ function bindReboundPicksEvents() {
             loadStockAnalysis(code);
             if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
         }
+    });
+}
+
+/* =====================================================================
+ * 五指数分时量价脉搏 · 去U型同时段带量诊断 (v3.9.0)
+ * ===================================================================== */
+let volumePulseData = null;
+let volumePulseRequestId = 0;
+let currentPulseSymbol = "sh000001";
+let selectedPulseSegId = null;
+let volumePulseChartInst = null;
+
+const PULSE_BAR_COLORS = {
+    expand_up: "#e11d48",
+    flat_up: "#fda4af",
+    expand_down: "#059669",
+    flat_down: "#86efac",
+    flat: "#94a3b8",
+    nodata: "#cbd5e1",
+};
+
+function _fmtRatio(val) {
+    return val != null && Number.isFinite(Number(val)) ? `${Number(val).toFixed(2)}x` : "—";
+}
+
+function _formatBarReadout(bar) {
+    if (!bar) return "—";
+    const br = bar.bar_ret_pct != null ? `${bar.bar_ret_pct >= 0 ? "+" : ""}${Number(bar.bar_ret_pct).toFixed(2)}%` : "—";
+    const cr = bar.cum_pct != null ? `${bar.cum_pct >= 0 ? "+" : ""}${Number(bar.cum_pct).toFixed(2)}%` : "—";
+    const vr = bar.vol_ratio != null ? `${Number(bar.vol_ratio).toFixed(2)}x` : "—";
+    const capTxt = bar.capped ? "(图表封顶3.5x)" : "";
+    const formTxt = bar.forming_note ? ` · ${bar.forming_note}` : "";
+    return `${bar.time} · ${Number(bar.close).toFixed(2)} (本根 ${br} / 较昨收 ${cr}) · 同时段量比 ${vr}${capTxt} · ${bar.style_label || ""}${formTxt}`;
+}
+
+async function loadVolumePulseData(opts = {}) {
+    const force = !!opts.force;
+    const silent = !!opts.silent;
+    const reqId = ++volumePulseRequestId;
+    const metaEl = document.getElementById("pulseMetaInfo");
+    if (!silent && metaEl) metaEl.textContent = "拉取五指数 5m 分时…";
+    try {
+        const res = await fetch(`/api/index/volume-pulse${force ? "?force=true" : ""}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const js = await res.json();
+        if (reqId !== volumePulseRequestId) return;
+        if (js.status !== "success" || !js.data) throw new Error(js.message || "分时量价数据拉取失败");
+        volumePulseData = js.data;
+        if (!volumePulseData.indices?.[currentPulseSymbol]) {
+            currentPulseSymbol = volumePulseData.default_symbol || "sh000001";
+        }
+        renderVolumePulsePanel(volumePulseData);
+    } catch (e) {
+        if (reqId !== volumePulseRequestId) return;
+        if (metaEl) metaEl.textContent = `拉取失败: ${e.message || e}`;
+        if (!volumePulseData) {
+            const banner = document.getElementById("pulseDiagnosisBanner");
+            if (banner) {
+                banner.className = "pulse-diag-banner tone-neutral";
+                banner.innerHTML = `<div class="pulse-diag-top"><span class="pulse-verdict-pill tone-neutral">数据暂不可用</span></div><p class="pulse-diag-desc">${escapeHtml(e.message || String(e))}</p>`;
+            }
+        }
+    }
+}
+
+function renderVolumePulsePanel(data) {
+    if (!data) return;
+    const indicesMap = data.indices || {};
+    const cross = data.cross_summary || {};
+    const overview = cross.overview || [];
+
+    // 更新子视图胶囊徽标
+    const badge = document.getElementById("subTabVolumePulseBadge");
+    if (badge) {
+        const hc = Number(cross.healthy_count || 0);
+        const bc = Number(cross.bleed_count || 0);
+        let cls = "phase-none";
+        let txt = "分化";
+        if (hc >= 4) { cls = "phase-confirm"; txt = `${hc}/5偏强`; }
+        else if (bc >= 4) { cls = "phase-warn"; txt = `${bc}/5承压`; }
+        else if (hc >= 2) { cls = "phase-mild"; txt = `${hc}/5偏强`; }
+        badge.className = `subview-phase-pill ${cls}`;
+        badge.textContent = txt;
+    }
+
+    // 1. 渲染 5 指数横向概览卡片
+    const headEl = document.getElementById("pulseCrossHeadline");
+    if (headEl) headEl.textContent = cross.headline || "五指数横向对比";
+    const ovGrid = document.getElementById("pulseIndexOverview");
+    if (ovGrid) {
+        ovGrid.innerHTML = overview.map(ov => {
+            const isActive = ov.symbol === currentPulseSymbol;
+            const verd = ov.verdict || {};
+            const pctStr = ov.today_cum_pct != null ? `${ov.today_cum_pct >= 0 ? "+" : ""}${Number(ov.today_cum_pct).toFixed(2)}%` : "—";
+            const pctColor = ov.today_cum_pct == null ? "#64748b" : (ov.today_cum_pct >= 0 ? "#e11d48" : "#059669");
+            return `
+                <button type="button" class="pulse-ov-card ${isActive ? "active" : ""}" data-pulse-sym="${escapeHtml(ov.symbol)}">
+                    <div class="pulse-ov-top">
+                        <span class="pulse-ov-name">${escapeHtml(ov.name || ov.symbol)}</span>
+                        <span class="pulse-ov-pct" style="color:${pctColor}">${pctStr}</span>
+                    </div>
+                    <div class="pulse-ov-role">${escapeHtml(ov.role || "")}${ov.symbol === cross.lead_symbol ? " · 质比领跑" : ""}</div>
+                    <div class="pulse-ov-metrics">
+                        <span>涨 ${_fmtRatio(ov.up_avg_ratio)}</span>
+                        <span>跌 ${_fmtRatio(ov.down_avg_ratio)}</span>
+                        <span>质比 <b>${_fmtRatio(ov.quality_ratio)}</b></span>
+                    </div>
+                    <span class="pulse-ov-verdict tone-${escapeHtml(verd.tone || "neutral")}">${escapeHtml(verd.label || "待诊断")}</span>
+                </button>`;
+        }).join("") || `<div class="report-empty">暂无五指数概览数据</div>`;
+    }
+
+    // 同步胶囊按钮高亮
+    document.querySelectorAll("#pulseIndexTabs [data-pulse-sym]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.pulseSym === currentPulseSymbol);
+    });
+
+    const item = indicesMap[currentPulseSymbol];
+    if (!item || item.status !== "ok") {
+        const banner = document.getElementById("pulseDiagnosisBanner");
+        if (banner) {
+            banner.className = "pulse-diag-banner tone-neutral";
+            banner.innerHTML = `<div class="pulse-diag-top"><span class="pulse-verdict-pill tone-neutral">该指数数据暂缺</span></div><p class="pulse-diag-desc">未能获取到 ${escapeHtml(currentPulseSymbol)} 的 5 分钟历史序列。</p>`;
+        }
+        const segGrid = document.getElementById("pulseSegmentsGrid");
+        if (segGrid) segGrid.innerHTML = `<div class="report-empty">暂无波段数据</div>`;
+        renderPulseDualChart(null);
+        return;
+    }
+
+    // 2. 元信息与诊断横幅
+    const liveEl = document.getElementById("pulseLiveText");
+    if (liveEl) liveEl.textContent = `5m分时实时 · ${item.asof_time || "--"}`;
+    const metaEl = document.getElementById("pulseMetaInfo");
+    if (metaEl) {
+        const srcTag = item.source === "sina_5m" ? "新浪兜底" : "腾讯直连";
+        const staleTag = data.stale ? " · 缓存兜底" : "";
+        metaEl.textContent = `${item.trade_date || "--"} · 截至 ${item.asof_time || "--"} · 基准近${item.base_day_count || 0}日同时段中位量 (${srcTag}${staleTag})`;
+    }
+
+    const summ = item.summary || {};
+    const verd = item.verdict || {};
+    const curSeg = item.current_segment || null;
+    const bannerEl = document.getElementById("pulseDiagnosisBanner");
+    if (bannerEl) {
+        const curSegHtml = curSeg ? `
+            <div class="pulse-current-seg-strip">
+                <span><strong>当前最近波段</strong>：${escapeHtml(curSeg.time_range)}</span>
+                <span>·</span>
+                <span>${escapeHtml(curSeg.tag)} <b style="color:${curSeg.ret_pct >= 0 ? "#e11d48" : "#059669"}">${curSeg.ret_pct >= 0 ? "+" : ""}${Number(curSeg.ret_pct).toFixed(2)}%</b></span>
+                <span>·</span>
+                <span>同时段均量 <b>${_fmtRatio(curSeg.avg_ratio)}</b>（峰值 ${_fmtRatio(curSeg.peak_ratio)} · ${curSeg.bar_count}根）</span>
+            </div>` : "";
+        bannerEl.className = `pulse-diag-banner tone-${escapeHtml(verd.tone || "neutral")}`;
+        bannerEl.innerHTML = `
+            <div class="pulse-diag-top">
+                <span class="pulse-verdict-pill tone-${escapeHtml(verd.tone || "neutral")}">${escapeHtml(verd.label || "量能均衡")}</span>
+                <span class="pulse-kpi-chip bull">拉升均量比 ${_fmtRatio(summ.up_avg_ratio)}</span>
+                <span class="pulse-kpi-chip bear">下跌均量比 ${_fmtRatio(summ.down_avg_ratio)}</span>
+                <span class="pulse-kpi-chip">涨跌量质比 ${_fmtRatio(summ.quality_ratio)}</span>
+                <span class="pulse-kpi-chip">放量拉升 ${summ.expand_up_count ?? 0}根 · 放量下杀 ${summ.expand_down_count ?? 0}根</span>
+            </div>
+            <p class="pulse-diag-desc">${escapeHtml(verd.desc || "")}</p>
+            ${curSegHtml}`;
+    }
+
+    // 默认选中当前最后一段，若切换了指数或超出范围则重置为当前段
+    const segments = item.segments || [];
+    if (selectedPulseSegId == null || !segments.some(s => s.seg_id === selectedPulseSegId)) {
+        selectedPulseSegId = segments.length ? segments[segments.length - 1].seg_id : null;
+    }
+
+    // 3. 悬停读数默认展示最后一根
+    const bars = item.bars || [];
+    const readoutEl = document.getElementById("pulseHoverReadout");
+    if (readoutEl) {
+        readoutEl.textContent = bars.length ? _formatBarReadout(bars[bars.length - 1]) : "—";
+    }
+
+    // 4. 渲染波段卡片网格
+    const cntEl = document.getElementById("pulseSegmentCountMeta");
+    if (cntEl) cntEl.textContent = `共切分 ${segments.length} 个波段 / ${bars.length} 根5m K线`;
+    const segGrid = document.getElementById("pulseSegmentsGrid");
+    if (segGrid) {
+        segGrid.innerHTML = segments.map(seg => {
+            const isSel = seg.seg_id === selectedPulseSegId;
+            const retStr = `${seg.ret_pct >= 0 ? "+" : ""}${Number(seg.ret_pct).toFixed(2)}%`;
+            const retColor = seg.ret_pct >= 0 ? "#e11d48" : "#059669";
+            return `
+                <button type="button" class="pulse-seg-card ${seg.is_current ? "is-current" : ""} ${isSel ? "is-selected" : ""}" data-pulse-seg="${seg.seg_id}">
+                    <div class="pulse-seg-top">
+                        <span class="pulse-seg-time">${escapeHtml(seg.time_range)}${seg.is_current ? " (当前)" : ""}</span>
+                        <span class="pulse-seg-badge tone-${escapeHtml(seg.tag_tone || "neutral")}">${escapeHtml(seg.tag || "")}</span>
+                    </div>
+                    <div class="pulse-seg-mid">
+                        <span class="pulse-seg-ret" style="color:${retColor}">${retStr}</span>
+                        <span class="pulse-seg-ratio">均量 ${_fmtRatio(seg.avg_ratio)}</span>
+                    </div>
+                    <div class="pulse-seg-foot">峰值 ${_fmtRatio(seg.peak_ratio)} · ${seg.bar_count}根5m · ${Number(seg.start_price).toFixed(2)}→${Number(seg.end_price).toFixed(2)}</div>
+                </button>`;
+        }).join("") || `<div class="report-empty">暂无波段统计</div>`;
+    }
+
+    // 5. 渲染 ECharts 双轨联动图表
+    renderPulseDualChart(item);
+}
+
+function renderPulseDualChart(item) {
+    const dom = document.getElementById("volumePulseChart");
+    if (!dom || typeof echarts === "undefined") return;
+    if (!volumePulseChartInst) {
+        volumePulseChartInst = echarts.init(dom);
+        volumePulseChartInst.on("updateAxisPointer", (evt) => {
+            const info = evt?.axesInfo?.[0];
+            if (!info || !volumePulseData) return;
+            const curItem = volumePulseData.indices?.[currentPulseSymbol];
+            const bar = curItem?.bars?.[info.value];
+            const el = document.getElementById("pulseHoverReadout");
+            if (el && bar) el.textContent = _formatBarReadout(bar);
+        });
+    }
+
+    const bars = item?.bars || [];
+    if (!bars.length) {
+        volumePulseChartInst.setOption({
+            xAxis: [{ type: "category", data: [] }, { type: "category", data: [], gridIndex: 1 }],
+            yAxis: [{ type: "value" }, { type: "value", gridIndex: 1 }],
+            series: [],
+            graphic: [{
+                type: "text", left: "center", top: "middle",
+                style: { text: "暂无 5 分钟分时量价数据", fill: "#94a3b8", fontSize: 13, fontWeight: 600 },
+            }],
+        }, true);
+        return;
+    }
+
+    const times = bars.map(b => b.time);
+    const closes = bars.map(b => b.close);
+    const prevClose = Number(item.prev_close || closes[0] || 1);
+    const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+
+    const segments = item.segments || [];
+    const selSeg = segments.find(s => s.seg_id === selectedPulseSegId);
+    const markAreaData = selSeg ? [[
+        {
+            xAxis: selSeg.start_idx,
+            itemStyle: { color: selSeg.direction === "up" ? "rgba(225, 29, 72, 0.08)" : "rgba(5, 150, 105, 0.08)" },
+        },
+        { xAxis: selSeg.end_idx },
+    ]] : [];
+
+    const barSeriesData = bars.map(b => ({
+        value: b.display_ratio,
+        itemStyle: {
+            color: PULSE_BAR_COLORS[b.style] || "#cbd5e1",
+            borderRadius: [2, 2, 0, 0],
+        },
+    }));
+
+    const option = {
+        backgroundColor: "transparent",
+        animation: false,
+        axisPointer: { link: [{ xAxisIndex: "all" }] },
+        tooltip: {
+            trigger: "axis",
+            axisPointer: { type: "line", lineStyle: { color: "#64748b", width: 1, type: "dashed" } },
+            backgroundColor: "rgba(255, 255, 255, 0.98)",
+            borderColor: "#cbd5e1",
+            borderWidth: 1,
+            textStyle: { color: "#0f172a", fontSize: 12 },
+            formatter: (params) => {
+                const idx = params?.[0]?.dataIndex;
+                const b = bars[idx];
+                if (!b) return "";
+                const br = `${b.bar_ret_pct >= 0 ? "+" : ""}${Number(b.bar_ret_pct).toFixed(2)}%`;
+                const cr = `${b.cum_pct >= 0 ? "+" : ""}${Number(b.cum_pct).toFixed(2)}%`;
+                const brCol = b.bar_ret_pct >= 0 ? "#e11d48" : "#059669";
+                const crCol = b.cum_pct >= 0 ? "#e11d48" : "#059669";
+                const vrTxt = b.vol_ratio != null
+                    ? `<b>${Number(b.vol_ratio).toFixed(2)}x</b>${b.capped ? " <span style='color:#d97706'>(柱图封顶3.5x)</span>" : ""}`
+                    : "基线缺失";
+                return `
+                    <div style="font-weight:800;margin-bottom:4px;">${escapeHtml(item.name)} · ${b.time}</div>
+                    <div>点位：<b>${Number(b.close).toFixed(2)}</b></div>
+                    <div>本根涨跌：<b style="color:${brCol}">${br}</b> · 较昨收：<b style="color:${crCol}">${cr}</b></div>
+                    <div>同时段量比：${vrTxt}</div>
+                    <div>量价分类：<b>${escapeHtml(b.style_label || "")}</b></div>
+                    ${b.forming_note ? `<div style="color:#1d4ed8;font-size:11px;margin-top:3px;">${escapeHtml(b.forming_note)}</div>` : ""}`;
+            },
+        },
+        grid: [
+            { left: isMobile ? 42 : 48, right: isMobile ? 52 : 62, top: 18, height: "42%" },
+            { left: isMobile ? 42 : 48, right: isMobile ? 52 : 62, top: "64%", height: "27%", bottom: 26 },
+        ],
+        xAxis: [
+            {
+                type: "category",
+                gridIndex: 0,
+                data: times,
+                boundaryGap: true,
+                axisLine: { lineStyle: { color: "#e2e8f0" } },
+                axisTick: { show: false },
+                axisLabel: { show: false },
+            },
+            {
+                type: "category",
+                gridIndex: 1,
+                data: times,
+                boundaryGap: true,
+                axisLine: { lineStyle: { color: "#cbd5e1" } },
+                axisTick: { show: false },
+                axisLabel: {
+                    fontSize: 10.5,
+                    color: "#64748b",
+                    interval: (index, value) => value === "09:35" || value === "10:30" || value === "11:30" || value === "14:00" || value === "15:00",
+                },
+            },
+        ],
+        yAxis: [
+            {
+                type: "value",
+                gridIndex: 0,
+                position: "right",
+                scale: true,
+                splitNumber: 3,
+                splitLine: { lineStyle: { color: "#f1f5f9" } },
+                axisLabel: {
+                    fontSize: 11,
+                    color: (val) => val >= prevClose ? "#e11d48" : "#059669",
+                    formatter: (val) => {
+                        const p = prevClose > 0 ? (val - prevClose) / prevClose * 100 : 0;
+                        return `${p >= 0 ? "+" : ""}${p.toFixed(2)}%`;
+                    },
+                },
+            },
+            {
+                type: "value",
+                gridIndex: 1,
+                position: "right",
+                min: 0,
+                max: item.ratio_cap || 3.5,
+                interval: 1.0,
+                splitLine: { lineStyle: { color: "#f1f5f9" } },
+                axisLabel: {
+                    fontSize: 10.5,
+                    color: "#64748b",
+                    formatter: (v) => (v === 1 || v === 3 ? `${v.toFixed(1)}x` : ""),
+                },
+            },
+        ],
+        series: [
+            {
+                name: "5m收盘",
+                type: "line",
+                xAxisIndex: 0,
+                yAxisIndex: 0,
+                showSymbol: false,
+                smooth: false,
+                data: closes,
+                lineStyle: { width: 2, color: (item.today_cum_pct ?? 0) >= 0 ? "#be123c" : "#059669" },
+                markLine: {
+                    symbol: ["none", "none"],
+                    silent: true,
+                    lineStyle: { color: "#94a3b8", type: "dashed", width: 1 },
+                    label: {
+                        position: "start",
+                        formatter: "昨收",
+                        color: "#64748b",
+                        fontSize: 10.5,
+                    },
+                    data: [{ yAxis: prevClose }],
+                },
+                markArea: { silent: true, data: markAreaData },
+            },
+            {
+                name: "同时段量比",
+                type: "bar",
+                xAxisIndex: 1,
+                yAxisIndex: 1,
+                barWidth: "68%",
+                data: barSeriesData,
+                markLine: {
+                    symbol: ["none", "none"],
+                    silent: true,
+                    lineStyle: { color: "#10b981", type: "dashed", width: 1.2 },
+                    label: {
+                        position: "start",
+                        formatter: "1.0x",
+                        color: "#047857",
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                    },
+                    data: [{ yAxis: 1.0 }],
+                },
+                markArea: { silent: true, data: markAreaData },
+            },
+        ],
+    };
+
+    volumePulseChartInst.setOption(option, true);
+}
+
+function bindVolumePulseEvents() {
+    const selectSym = (sym) => {
+        if (!sym || sym === currentPulseSymbol) return;
+        currentPulseSymbol = sym;
+        selectedPulseSegId = null;
+        if (volumePulseData) renderVolumePulsePanel(volumePulseData);
+    };
+
+    document.getElementById("pulseIndexOverview")?.addEventListener("click", (e) => {
+        const card = e.target.closest("[data-pulse-sym]");
+        if (card) selectSym(card.dataset.pulseSym);
+    });
+
+    document.getElementById("pulseIndexTabs")?.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-pulse-sym]");
+        if (btn) selectSym(btn.dataset.pulseSym);
+    });
+
+    document.getElementById("pulseRefreshBtn")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = "↻ 刷新中…";
+        try {
+            await loadVolumePulseData({ force: true });
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "↻ 刷新";
+        }
+    });
+
+    document.getElementById("pulseSegmentsGrid")?.addEventListener("click", (e) => {
+        const card = e.target.closest("[data-pulse-seg]");
+        if (!card || !volumePulseData) return;
+        const sid = Number(card.dataset.pulseSeg);
+        selectedPulseSegId = selectedPulseSegId === sid ? null : sid;
+        renderVolumePulsePanel(volumePulseData);
+    });
+
+    document.querySelectorAll("[data-goto-volume-pulse]").forEach(btn => {
+        btn.addEventListener("click", () => {
+            document.getElementById("tabIndexView")?.click();
+            switchMacroSubView("volume_pulse");
+            if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        });
     });
 }

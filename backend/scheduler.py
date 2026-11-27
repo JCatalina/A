@@ -46,7 +46,8 @@ class RefreshScheduler(threading.Thread):
 
     def __init__(self, data_fetcher, scanner_engine, index_engine, ice_engine,
                  factor_engine=None, news_engine=None, market_report=None, intraday_engine=None,
-                 prediction_journal=None, resonance_engine=None, rebound_picks_engine=None):
+                 prediction_journal=None, resonance_engine=None, rebound_picks_engine=None,
+                 volume_pulse_engine=None):
         super().__init__(daemon=True, name="refresh-scheduler")
         self.fetcher = data_fetcher
         self.scanner = scanner_engine
@@ -59,6 +60,7 @@ class RefreshScheduler(threading.Thread):
         self.journal = prediction_journal
         self.resonance = resonance_engine
         self.rebound_picks = rebound_picks_engine
+        self.volume_pulse = volume_pulse_engine
         self._last_intraday_ts = 0.0
         self._last_offhours_ts = 0.0
         self._last_news_ts = 0.0
@@ -197,6 +199,11 @@ class RefreshScheduler(threading.Thread):
                 self.rebound_picks.build()
             except Exception as e:
                 logger.warning(f"Scheduler warm rebound picks failed: {e}")
+        if self.volume_pulse is not None:
+            try:
+                self.volume_pulse.build()
+            except Exception as e:
+                logger.warning(f"Scheduler warm volume pulse failed: {e}")
 
     def warm_offhours(self) -> None:
         """非交易时段低频保活: 日/周K + 快照 + 研判/冰点结果, 保证打开页面即新鲜"""
@@ -239,6 +246,11 @@ class RefreshScheduler(threading.Thread):
                 self.rebound_picks.build()
             except Exception as e:
                 logger.warning(f"Scheduler warm rebound picks failed: {e}")
+        if self.volume_pulse is not None:
+            try:
+                self.volume_pulse.build()
+            except Exception as e:
+                logger.warning(f"Scheduler warm volume pulse failed: {e}")
 
     def _warm_headline(self) -> None:
         """大盘指数条快照 (fetcher 内部 15s TTL, 前端 30s 轮询秒回)"""

@@ -21,7 +21,7 @@
     <noscript>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     </noscript>
-    <link rel="stylesheet" href="/static/style.css?v=3.8.5">
+    <link rel="stylesheet" href="/static/style.css?v=3.9.0">
 </head>
 
 <body>
@@ -303,7 +303,7 @@
 
         <!-- 主内容工作区 2: 大盘多周期指数研判 (Macro Index Workspace) -->
         <main class="index-macro-workspace" id="indexWorkspace">
-            <!-- 二级子视图切换栏 (v3.8.0) -->
+            <!-- 二级子视图切换栏 (v3.8.0 / v3.9.0) -->
             <div class="macro-subview-bar" id="macroSubviewBar">
                 <div class="macro-subview-tabs">
                     <button type="button" class="macro-subview-btn active" id="subTabSingleMacro"
@@ -312,8 +312,13 @@
                         ⚡ 六指数小周期共振
                         <span class="subview-phase-pill phase-none" id="subTabResonanceBadge">同步中</span>
                     </button>
+                    <button type="button" class="macro-subview-btn" id="subTabVolumePulse"
+                        data-macro-subview="volume_pulse">
+                        🫀 五指数分时量价脉搏
+                        <span class="subview-phase-pill phase-none" id="subTabVolumePulseBadge">同步中</span>
+                    </button>
                 </div>
-                <span class="macro-subview-tip">上证/深成/创指/科创50/中证1000/国证2000 × 15m/30m/60m 熊市超短反抽共振雷达</span>
+                <span class="macro-subview-tip">单指数多周期 · 六指数共振雷达 · 五指数(含中证1000)去U型分时量价脉搏</span>
             </div>
 
             <div id="macroSingleView" class="macro-single-view">
@@ -539,6 +544,74 @@
                     <div class="resonance-backtest-grid" id="resonanceBacktest"></div>
                 </section>
                 <p class="resonance-disclaimer" id="resonanceDisclaimer"></p>
+            </div>
+
+            <!-- 子视图 3: 五指数分时量价脉搏 (去U型同时段量比诊断, v3.9.0) -->
+            <div id="macroPulseView" class="macro-pulse-view" style="display: none;">
+                <!-- 1. 五指数横向量价强弱雷达 -->
+                <section class="pulse-cross-card">
+                    <div class="pulse-cross-head">
+                        <span class="pulse-cross-title">🌐 五指数分时量价强弱总览（点击卡片切换下方详图）</span>
+                        <span class="pulse-cross-headline" id="pulseCrossHeadline">正在并发拉取五指数 5 分钟分时数据…</span>
+                    </div>
+                    <div class="pulse-overview-grid" id="pulseIndexOverview"></div>
+                </section>
+
+                <!-- 2. 主体分时量价脉搏诊断大卡 -->
+                <section class="pulse-main-card">
+                    <div class="pulse-main-header">
+                        <div class="pulse-title-group">
+                            <h3>分时量价脉搏 · 拉升与下跌带量诊断</h3>
+                            <span class="pulse-live-chip" id="pulseLiveChip">
+                                <span class="pulse-live-dot"></span>
+                                <span id="pulseLiveText">5m分时 · --</span>
+                            </span>
+                        </div>
+                        <div class="pulse-index-pills" id="pulseIndexTabs">
+                            <button type="button" class="pulse-idx-btn active" data-pulse-sym="sh000001">上证指数</button>
+                            <button type="button" class="pulse-idx-btn" data-pulse-sym="sz399001">深证成指</button>
+                            <button type="button" class="pulse-idx-btn" data-pulse-sym="sz399006">创业板指</button>
+                            <button type="button" class="pulse-idx-btn" data-pulse-sym="sh000688">科创50</button>
+                            <button type="button" class="pulse-idx-btn" data-pulse-sym="sh000852">中证1000</button>
+                        </div>
+                        <div class="pulse-meta-group">
+                            <span id="pulseMetaInfo">基准近6日同时段中位量</span>
+                            <button type="button" class="pulse-refresh-btn" id="pulseRefreshBtn">↻ 刷新</button>
+                        </div>
+                    </div>
+
+                    <div class="pulse-diag-banner tone-neutral" id="pulseDiagnosisBanner">
+                        <div class="pulse-diag-top">
+                            <span class="pulse-verdict-pill tone-neutral">正在诊断…</span>
+                        </div>
+                        <p class="pulse-diag-desc">正在对齐最近 6 个完整交易日同时段成交量中位数…</p>
+                    </div>
+
+                    <div class="pulse-chart-bar">
+                        <span>上轨：5分钟价格走势（虚线为昨收） · 下轨：去U型同时段量比柱（1.0x为近6日同时段中位量）</span>
+                        <span class="pulse-hover-readout" id="pulseHoverReadout">--</span>
+                    </div>
+                    <div class="pulse-chart-box" id="volumePulseChart"></div>
+
+                    <div class="pulse-legend-row">
+                        <span class="pulse-lg-item"><i class="pulse-lg-dot" style="background:#e11d48"></i>放量拉升 (≥1.15x)</span>
+                        <span class="pulse-lg-item"><i class="pulse-lg-dot" style="background:#fda4af"></i>平/缩量上涨</span>
+                        <span class="pulse-lg-item"><i class="pulse-lg-dot" style="background:#059669"></i>放量下杀 (≥1.15x)</span>
+                        <span class="pulse-lg-item"><i class="pulse-lg-dot" style="background:#86efac"></i>缩量回调</span>
+                        <span class="pulse-lg-item"><i class="pulse-lg-dot" style="background:#94a3b8"></i>平盘整固</span>
+                        <span class="pulse-lg-item">--- 1.0x 同时段基准线（柱高封顶 3.5x防压缩，悬停见真实值）</span>
+                    </div>
+
+                    <div class="pulse-segments-head">
+                        <span><strong>连续波段拆解</strong>（自动平滑单根微幅毛刺，点击任意波段卡片可在上图高亮锁定对应区间）</span>
+                        <span id="pulseSegmentCountMeta">--</span>
+                    </div>
+                    <div class="pulse-segments-grid" id="pulseSegmentsGrid"></div>
+
+                    <p class="pulse-method-note" id="pulseMethodNote">
+                        口径说明：对每个 5 分钟时间槽（09:35~15:00 共 48 槽）独立计算最近 6 个完整交易日同槽位成交量中位数，剔除日内天然“开盘高、盘中低、尾盘高”的 U 型量能干扰；盘中未收盘最后 1 根按已走秒数等比推算（不足 60 秒样本过短不放大）。
+                    </p>
+                </section>
             </div>
 
         </main>
@@ -1154,9 +1227,15 @@
             </section>
 
             <!-- 4. ECharts 分时量能对比 & 主力资金情绪轨迹 -->
-            <section class="intraday-charts-grid">
-                <div class="report-chart intraday-chart" id="intradayTurnoverChart"></div>
-                <div class="report-chart intraday-chart" id="intradayFlowMoodChart"></div>
+            <section class="intraday-section">
+                <div class="intraday-sec-head">
+                    <h2>📈 分时量能与主力资金情绪轨迹</h2>
+                    <button type="button" class="pulse-jump-btn" data-goto-volume-pulse>🫀 查看五指数(含中证1000)去U型分时量价脉搏 →</button>
+                </div>
+                <div class="intraday-charts-grid">
+                    <div class="report-chart intraday-chart" id="intradayTurnoverChart"></div>
+                    <div class="report-chart intraday-chart" id="intradayFlowMoodChart"></div>
+                </div>
             </section>
 
             <!-- 5. 热点题材 / 资金净流入 / 主力主攻方向 -->
@@ -1374,8 +1453,8 @@
     </div>
 
     <!-- 前端业务脚本 -->
-    <script src="/static/guide_data.js?v=3.8.5"></script>
-    <script src="/static/app.js?v=3.8.5"></script>
+    <script src="/static/guide_data.js?v=3.9.0"></script>
+    <script src="/static/app.js?v=3.9.0"></script>
 </body>
 
 </html>

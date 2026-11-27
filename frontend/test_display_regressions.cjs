@@ -459,6 +459,48 @@ async function main() {
     assert.match(element('reboundThemesGrid').innerHTML, /展开更多核心股/);
     assert.doesNotMatch(element('reboundThemesGrid').innerHTML, /undefined|NaN/);
 
-    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal, guide tab, resonance, rebound picks and markup contracts');
+    // v3.9.0 五指数分时量价脉搏契约校验 (含中证1000, 去U型同时段量比, 无禁词/undefined/NaN)
+    assert.ok(html.includes('id="subTabVolumePulse"'));
+    assert.ok(html.includes('id="macroPulseView"'));
+    assert.ok(html.includes('id="volumePulseChart"'));
+    assert.ok(html.includes('data-goto-volume-pulse'));
+    context.switchMacroSubView('volume_pulse');
+    assert.equal(element('macroPulseView').style.display, 'flex');
+    assert.equal(element('macroSingleView').style.display, 'none');
+    context.renderVolumePulsePanel({
+        default_symbol: 'sh000001',
+        stale: false,
+        cross_summary: {
+            headline: '高弹性成长与中小盘带量领涨',
+            lead_symbol: 'sz399006',
+            healthy_count: 4,
+            bleed_count: 0,
+            overview: [
+                { symbol: 'sh000001', name: '上证指数', role: '大盘权重基准', today_cum_pct: 1.5, up_avg_ratio: 1.32, down_avg_ratio: 0.91, quality_ratio: 1.45, verdict: { tone: 'bull', label: '放量拉升 · 缩量回踩' } },
+                { symbol: 'sh000852', name: '中证1000', role: '中小盘弹性代表', today_cum_pct: 4.82, up_avg_ratio: 1.68, down_avg_ratio: 0.85, quality_ratio: 1.98, verdict: { tone: 'bull', label: '放量拉升 · 缩量回踩' } },
+            ],
+        },
+        indices: {
+            sh000001: {
+                symbol: 'sh000001', name: '上证指数', status: 'ok', source: 'qq_mkline',
+                trade_date: '2026-11-27', asof_time: '15:00', prev_close: 3300.0, latest_price: 3349.5, today_cum_pct: 1.5, base_day_count: 6, ratio_cap: 3.5,
+                summary: { up_avg_ratio: 1.32, down_avg_ratio: 0.91, quality_ratio: 1.45, expand_up_count: 14, expand_down_count: 3 },
+                verdict: { code: 'healthy_rally', tone: 'bull', label: '放量拉升 · 缩量回踩', desc: '测试健康结构说明' },
+                current_segment: { seg_id: 0, time_range: '09:30–15:00', tag: '带量拉升', ret_pct: 1.5, avg_ratio: 1.32, peak_ratio: 2.1, bar_count: 48 },
+                segments: [{ seg_id: 0, start_idx: 0, end_idx: 0, time_range: '09:30–15:00', direction: 'up', tag: '带量拉升', tag_tone: 'up_expand', ret_pct: 1.5, avg_ratio: 1.32, peak_ratio: 2.1, bar_count: 48, start_price: 3300.0, end_price: 3349.5, is_current: true }],
+                bars: [{ idx: 0, time: '15:00', close: 3349.5, vol_ratio: 1.32, display_ratio: 1.32, capped: false, bar_ret_pct: 0.25, cum_pct: 1.5, style: 'expand_up', style_label: '放量拉升' }],
+            },
+        },
+    });
+    assert.match(element('pulseIndexOverview').innerHTML, /中证1000/);
+    assert.match(element('pulseDiagnosisBanner').innerHTML, /放量拉升 · 缩量回踩/);
+    assert.match(element('pulseSegmentsGrid').innerHTML, /09:30–15:00/);
+    assert.doesNotMatch(element('pulseIndexOverview').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('pulseDiagnosisBanner').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    assert.doesNotMatch(element('pulseSegmentsGrid').innerHTML, /高胜率|多头期望|undefined|NaN/);
+    context.renderVolumePulsePanel({ indices: {} });
+    assert.doesNotMatch(element('pulseDiagnosisBanner').innerHTML, /undefined|NaN/);
+
+    console.log('PASS: score display, missing values, legacy fallback, ICE validation, error clearing, screener, news tab, intraday sentiment, prediction journal, guide tab, resonance, rebound picks, volume pulse and markup contracts');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

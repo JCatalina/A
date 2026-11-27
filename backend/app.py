@@ -20,6 +20,7 @@ from intraday_engine import IntradaySentimentEngine
 from prediction_journal import PredictionJournalEngine
 from resonance_engine import ResonanceEngine
 from rebound_picks_engine import ReboundPicksEngine
+from volume_pulse_engine import VolumePulseEngine
 from scheduler import RefreshScheduler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("A-Stock-Quant-Server")
@@ -49,11 +50,14 @@ async def lifespan(_app: FastAPI):
     threading.Thread(target=_warm_resonance, daemon=True, name="resonance-prewarm").start()
     # v3.8.1: 反抽主攻题材、核心标的池与 10 年历史选股回测预热
     threading.Thread(target=_warm_rebound_picks, daemon=True, name="rebound-picks-prewarm").start()
+    # v3.9.0: 五指数分时量价脉搏预热
+    threading.Thread(target=_warm_volume_pulse, daemon=True, name="volume-pulse-prewarm").start()
     # v2.8: 常驻后台调度器 — 盘中分钟级保活 + 盘后自动扫描/校准, 服务不重启数据也常新
     _scheduler = RefreshScheduler(
         data_fetcher, scanner_engine, index_engine, ice_engine, factor_engine, news_engine, market_report,
         intraday_engine=intraday_engine, prediction_journal=prediction_journal,
         resonance_engine=resonance_engine, rebound_picks_engine=rebound_picks_engine,
+        volume_pulse_engine=volume_pulse_engine,
     )
     _scheduler.start()
     yield
@@ -62,7 +66,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="A股规则筛选技术指标与多维支撑压力位量化分析系统",
-    version="3.8.1",
+    version="3.9.0",
     lifespan=lifespan
 )
 
@@ -88,6 +92,7 @@ resonance_engine = ResonanceEngine(index_engine=index_engine, intraday_engine=in
 rebound_picks_engine = ReboundPicksEngine(
     intraday_engine=intraday_engine, resonance_engine=resonance_engine, data_fetcher=data_fetcher
 )
+volume_pulse_engine = VolumePulseEngine()
 
 
 def _warm_factor_model() -> None:
@@ -139,6 +144,14 @@ def _warm_rebound_picks() -> None:
     except Exception as e:
         logger.warning(f"rebound picks prewarm failed: {e}")
 
+
+def _warm_volume_pulse() -> None:
+    try:
+        volume_pulse_engine.build()
+        logger.info("volume pulse 5-index prewarm finished")
+    except Exception as e:
+        logger.warning(f"volume pulse prewarm failed: {e}")
+
 @app.get("/api/index/analysis")
 def get_index_macro_analysis(
     symbol: str = Query("sh000001", description="指数代码: sh000001, sz399001, sz399006, sh000688"),
@@ -178,6 +191,17 @@ def get_rebound_picks(force: bool = Query(False, description="是否跳过短TTL
         return {"status": "success", "data": data}
     except Exception as e:
         logger.exception("rebound picks failed")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.get("/api/index/volume-pulse")
+def get_index_volume_pulse(force: bool = Query(False, description="是否跳过短TTL缓存强制重算五指数分时量价脉搏")):
+    """五指数分时量价脉搏: 去U型同时段中位基线、拉升/下跌带量比与连续波段诊断（上证/深成/创指/科创50/中证1000）"""
+    try:
+        data = volume_pulse_engine.build(force=force)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        logger.exception("volume pulse failed")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
